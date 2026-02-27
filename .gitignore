@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Env
+.env
+*.pem
+
+# Build
+.next/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+
+# Data (large datasets - clone separately)
+data/SecLists/
+data/PayloadsAllTheThings/
+data/uploads/

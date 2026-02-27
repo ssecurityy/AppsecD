@@ -1,0 +1,21 @@
+---
+description: Never interfere with existing server processes
+alwaysApply: true
+---
+
+# Process Protection Rule
+
+## CRITICAL - Do NOT Touch Existing Processes
+
+This project (Navigator) runs alongside other applications on this server. **NEVER**:
+
+- Stop, kill, or shutdown ANY existing process
+- Restart nginx, redis, mongod, docker, PM2, or any node processes
+- Modify ports used by: dedsec-training, CyberSentinal, serve (3001), PM2 (5000)
+- Change Redis (6379), MongoDB (27017), or system services
+
+## Safe Operations
+
+- Only start/stop processes that belong to **this** Navigator application
+- Use unique ports for Navigator (e.g., 5001) that don't conflict
+- Navigator uses: Redis (existing), PostgreSQL (Navigator DB only), its own app process
