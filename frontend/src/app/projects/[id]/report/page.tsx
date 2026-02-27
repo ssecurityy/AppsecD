@@ -241,7 +241,7 @@ export default function LiveReportPage() {
                         <Cell key={i} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v: number) => [v, "Count"]} />
+                    <Tooltip formatter={(v) => [v ?? 0, "Count"]} />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
