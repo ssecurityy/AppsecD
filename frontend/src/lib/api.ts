@@ -48,6 +48,10 @@ export const api = {
   assignableUsers: () => request("/auth/users/assignable"),
   createUser: (data: { email: string; username: string; full_name: string; password: string; role?: string }) =>
     request("/auth/users", { method: "POST", body: JSON.stringify(data) }),
+  updateUser: (userId: string, data: { email?: string; username?: string; full_name?: string; role?: string; is_active?: boolean; xp_points?: number; level?: number }) =>
+    request(`/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateUserPassword: (userId: string, password: string) =>
+    request(`/auth/users/${userId}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
   // Projects
   createProject: (data: object) =>
@@ -119,9 +123,14 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
-  // Test Cases
-  getProjectTestCases: (projectId: string, phase?: string) =>
-    request(`/testcases/project/${projectId}${phase ? `?phase=${phase}` : ""}`),
+  // Test Cases (paginated for 1000+ tests)
+  getProjectTestCases: (projectId: string, phase?: string, limit?: number, offset?: number) => {
+    const params = new URLSearchParams();
+    if (phase) params.set("phase", phase);
+    if (limit != null) params.set("limit", String(limit));
+    if (offset != null) params.set("offset", String(offset));
+    return request(`/testcases/project/${projectId}${params.toString() ? `?${params}` : ""}`);
+  },
   updateResult: (resultId: string, data: object) =>
     request(`/testcases/results/${resultId}`, { method: "PATCH", body: JSON.stringify(data) }),
   getPhases: () => request("/testcases/phases"),
@@ -144,8 +153,10 @@ export const api = {
   suggestFinding: (data: { title: string; description?: string; severity?: string }) =>
     request("/ai-assist/suggest", { method: "POST", body: JSON.stringify(data) }),
 
-  // Admin settings (integration status)
+  // Admin settings (integration status, LLM config)
   getSettingsStatus: () => request("/admin/settings"),
+  updateLlmSettings: (data: { model: string; api_key?: string }) =>
+    request("/admin/settings/llm", { method: "PUT", body: JSON.stringify(data) }),
 
   // Audit (admin)
   auditLogs: (params?: { limit?: number; offset?: number; action?: string }) => {
@@ -166,4 +177,11 @@ export const api = {
   },
   seclistsPreview: (path: string, lines?: number) =>
     request(`/payloads/seclists/preview?path=${encodeURIComponent(path)}&lines=${lines ?? 50}`),
+  seclistsDownload: (fileId: string) =>
+    `${getApiBase()}/payloads/seclists/download/${fileId}`,
+  seclistsContent: (fileId: string) =>
+    request(`/payloads/seclists/content/${fileId}`),
+  payloadSources: () => request("/payloads/sources"),
+  sourceFiles: (sourceSlug: string) =>
+    request(`/payloads/sources/${encodeURIComponent(sourceSlug)}/files`),
 };

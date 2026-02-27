@@ -66,14 +66,22 @@ def _suggest_rule_based(title: str, description: str, severity: str = "medium") 
     }
 
 
-def _suggest_llm(title: str, description: str, severity: str = "medium") -> dict | None:
-    """LLM-based suggestion when OPENAI_API_KEY is set. Returns None on failure."""
+def _suggest_llm(
+    title: str,
+    description: str,
+    severity: str = "medium",
+    *,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> dict | None:
+    """LLM-based suggestion when API key is set. Returns None on failure."""
     try:
         from openai import OpenAI
         s = get_settings()
-        if not s.openai_api_key:
+        key = api_key if api_key is not None else s.openai_api_key
+        if not key:
             return None
-        client = OpenAI(api_key=s.openai_api_key)
+        client = OpenAI(api_key=key)
         prompt = f"""Given this security finding, suggest CWE ID, CVSS score, severity, impact, and remediation.
 Title: {title}
 Description: {description}
@@ -82,7 +90,7 @@ Current severity: {severity}
 Respond in JSON only, no markdown:
 {{"cwe_id": "CWE-XXX", "cvss_score": "X.X", "severity": "critical|high|medium|low|info", "impact": "...", "recommendation": "..."}}"""
         r = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model or "gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
@@ -104,11 +112,18 @@ Respond in JSON only, no markdown:
         return None
 
 
-def suggest_finding(title: str, description: str, severity: str = "medium") -> dict:
+def suggest_finding(
+    title: str,
+    description: str,
+    severity: str = "medium",
+    *,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> dict:
     """
-    Suggest CWE, CVSS, impact, remediation. Uses LLM when OPENAI_API_KEY is set, else rule-based.
+    Suggest CWE, CVSS, impact, remediation. Uses LLM when api_key (or env) is set, else rule-based.
     """
-    result = _suggest_llm(title, description, severity)
+    result = _suggest_llm(title, description, severity, model=model, api_key=api_key)
     if result:
         return result
     return _suggest_rule_based(title, description, severity)
