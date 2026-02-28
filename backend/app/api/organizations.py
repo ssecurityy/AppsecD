@@ -3,10 +3,11 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
-from app.api.auth import get_current_user, require_admin
+from app.api.auth import get_current_user, require_admin, require_super_admin
 from app.models.user import User
 from app.models.organization import Organization
 from app.models.project import Project
+from app.services.audit_service import log_audit
 from pydantic import BaseModel
 import re
 
@@ -32,10 +33,10 @@ class OrgOut(BaseModel):
 @router.post("", response_model=dict)
 async def create_organization(
     payload: OrgCreate,
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new organization (admin only)."""
+    """Create a new organization (super_admin only)."""
     slug = payload.slug or slugify(payload.name)
     if not slug:
         raise HTTPException(400, "Invalid name or slug")
@@ -44,6 +45,8 @@ async def create_organization(
         raise HTTPException(409, f"Organization with slug '{slug}' already exists")
     org = Organization(name=payload.name, slug=slug)
     db.add(org)
+    await db.flush()
+    await log_audit(db, "create_organization", user_id=str(current_user.id), resource_type="organization", resource_id=str(org.id), details={"name": org.name, "slug": slug})
     await db.commit()
     await db.refresh(org)
     return {"id": str(org.id), "name": org.name, "slug": org.slug}
@@ -54,9 +57,19 @@ async def list_organizations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all organizations (admin sees all; others see only their org)."""
-    if current_user.role == "admin":
+    """List organizations. Super_admin sees all; admin sees only their org; others see only their org."""
+    if current_user.role == "super_admin":
         result = await db.execute(select(Organization).where(Organization.is_active == True))
+        orgs = result.scalars().all()
+    elif current_user.role == "admin":
+        if not getattr(current_user, "organization_id", None):
+            return []
+        result = await db.execute(
+            select(Organization).where(
+                Organization.id == current_user.organization_id,
+                Organization.is_active == True,
+            )
+        )
         orgs = result.scalars().all()
     else:
         if not getattr(current_user, "organization_id", None):
@@ -82,7 +95,7 @@ async def get_organization(
     org = result.scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Organization not found")
-    if current_user.role != "admin" and getattr(current_user, "organization_id") != org.id:
+    if current_user.role not in ("admin", "super_admin") and getattr(current_user, "organization_id") != org.id:
         raise HTTPException(403, "Access denied")
     return {"id": str(org.id), "name": org.name, "slug": org.slug}
 
@@ -94,11 +107,13 @@ async def assign_user_to_org(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Assign a user to an organization (admin only)."""
+    """Assign a user to an organization. Super_admin: any org. Admin: only their org."""
     org_result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = org_result.scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Organization not found")
+    if current_user.role == "admin" and current_user.organization_id != org.id:
+        raise HTTPException(403, "Admin can only assign users to their organization")
     user_result = await db.execute(select(User).where(User.id == user_id))
     user = user_result.scalar_one_or_none()
     if not user:
@@ -115,11 +130,13 @@ async def assign_project_to_org(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Assign a project to an organization (admin only)."""
+    """Assign a project to an organization. Admin: only their org."""
     org_result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = org_result.scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Organization not found")
+    if current_user.role == "admin" and current_user.organization_id != org.id:
+        raise HTTPException(403, "Admin can only assign projects to their organization")
     proj_result = await db.execute(select(Project).where(Project.id == project_id))
     project = proj_result.scalar_one_or_none()
     if not project:

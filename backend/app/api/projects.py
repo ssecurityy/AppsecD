@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
-from app.api.auth import get_current_user, require_admin
+from app.api.auth import get_current_user
 from app.core.rbac import require_roles
 from app.services.project_permissions import (
     get_visible_project_ids,
@@ -23,13 +23,15 @@ from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, Projec
 from datetime import datetime, date
 import uuid
 
-require_tester_plus = require_roles(get_current_user, "admin", "lead", "tester")
+require_tester_plus = require_roles(get_current_user, "super_admin", "admin", "lead", "tester")
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-def project_to_dict(p: Project) -> dict:
+def project_to_dict(p: Project, organization_name: str | None = None) -> dict:
     return {
         "id": str(p.id),
+        "organization_id": str(p.organization_id) if p.organization_id else None,
+        "organization_name": organization_name,
         "name": p.name,
         "application_name": p.application_name,
         "application_version": p.application_version,
@@ -71,6 +73,7 @@ async def create_project(
         except (ValueError, TypeError):
             pass
 
+    org_id = getattr(current_user, "organization_id", None)
     project = Project(
         name=payload.name,
         application_name=payload.application_name,
@@ -88,6 +91,7 @@ async def create_project(
         stack_profile=payload.stack_profile,
         tester_id=current_user.id,
         created_by=current_user.id,
+        organization_id=org_id,
         status="in_progress",
         started_at=datetime.utcnow(),
     )
@@ -168,12 +172,22 @@ async def list_projects(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.models.organization import Organization
     visible = await get_visible_project_ids(db, current_user)
     query = select(Project).order_by(Project.created_at.desc())
     if visible is not None:
         query = query.where(Project.id.in_(visible))
     result = await db.execute(query)
-    return [project_to_dict(p) for p in result.scalars().all()]
+    projects = result.scalars().all()
+    org_ids = {p.organization_id for p in projects if p.organization_id}
+    orgs = {}
+    if org_ids:
+        r = await db.execute(select(Organization).where(Organization.id.in_(org_ids)))
+        orgs = {str(o.id): o.name for o in r.scalars().all()}
+    return [
+        project_to_dict(p, orgs.get(str(p.organization_id)) if p.organization_id else None)
+        for p in projects
+    ]
 
 
 @router.get("/{project_id}", response_model=dict)
@@ -290,7 +304,7 @@ async def get_available_users_for_project(
     """Users not yet in project — for add-member dropdown. Admin or can_manage_members."""
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
-    if not (current_user.role == "admin" or await user_can_manage_members(db, current_user, project_id)):
+    if not await user_can_manage_members(db, current_user, project_id):
         raise HTTPException(403, "Manage members permission required")
     # Get user IDs already in project
     r = await db.execute(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id))
@@ -313,7 +327,7 @@ async def list_project_members(
     """List project members — admin or users with can_manage_members."""
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
-    if not (current_user.role == "admin" or await user_can_manage_members(db, current_user, project_id)):
+    if not await user_can_manage_members(db, current_user, project_id):
         raise HTTPException(403, "Manage members permission required")
     r = await db.execute(
         select(ProjectMember, User).join(User, ProjectMember.user_id == User.id).where(ProjectMember.project_id == project_id)
@@ -345,7 +359,7 @@ async def add_project_member(
     """Add project member — admin or users with can_manage_members."""
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
-    if not (current_user.role == "admin" or await user_can_manage_members(db, current_user, project_id)):
+    if not await user_can_manage_members(db, current_user, project_id):
         raise HTTPException(403, "Manage members permission required")
     if payload.role not in PROJECT_ROLES:
         raise HTTPException(400, f"Invalid role. Use: {PROJECT_ROLES}")
@@ -392,7 +406,7 @@ async def update_project_member(
     db: AsyncSession = Depends(get_db),
 ):
     """Update project member — admin or users with can_manage_members."""
-    if not (current_user.role == "admin" or await user_can_manage_members(db, current_user, project_id)):
+    if not await user_can_manage_members(db, current_user, project_id):
         raise HTTPException(403, "Manage members permission required")
     r = await db.execute(
         select(ProjectMember).where(
@@ -442,7 +456,7 @@ async def remove_project_member(
     db: AsyncSession = Depends(get_db),
 ):
     """Remove project member — admin or users with can_manage_members."""
-    if not (current_user.role == "admin" or await user_can_manage_members(db, current_user, project_id)):
+    if not await user_can_manage_members(db, current_user, project_id):
         raise HTTPException(403, "Manage members permission required")
     r = await db.execute(
         select(ProjectMember).where(

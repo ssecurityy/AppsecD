@@ -66,50 +66,91 @@ def _suggest_rule_based(title: str, description: str, severity: str = "medium") 
     }
 
 
-def _suggest_llm(
-    title: str,
-    description: str,
-    severity: str = "medium",
-    *,
-    model: str | None = None,
-    api_key: str | None = None,
-) -> dict | None:
-    """LLM-based suggestion when API key is set. Returns None on failure."""
-    try:
-        from openai import OpenAI
-        s = get_settings()
-        key = api_key if api_key is not None else s.openai_api_key
-        if not key:
-            return None
-        client = OpenAI(api_key=key)
-        prompt = f"""Given this security finding, suggest CWE ID, CVSS score, severity, impact, and remediation.
+PROMPT_TEMPLATE = """Given this security finding, suggest CWE ID, CVSS score, severity, impact, and remediation.
 Title: {title}
 Description: {description}
 Current severity: {severity}
 
 Respond in JSON only, no markdown:
 {{"cwe_id": "CWE-XXX", "cvss_score": "X.X", "severity": "critical|high|medium|low|info", "impact": "...", "recommendation": "..."}}"""
+
+
+def _parse_llm_json(text: str, severity: str) -> dict:
+    import json
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    data = json.loads(text)
+    return {
+        "cwe_id": data.get("cwe_id", "CWE-Unknown"),
+        "cvss_score": str(data.get("cvss_score", "5.0")),
+        "severity": data.get("severity", severity),
+        "impact": data.get("impact", ""),
+        "recommendation": data.get("recommendation", ""),
+    }
+
+
+def _call_openai(model: str, api_key: str, prompt: str, severity: str) -> dict | None:
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
         r = client.chat.completions.create(
-            model=model or "gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
-        import json
         text = (r.choices[0].message.content or "").strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        data = json.loads(text)
-        return {
-            "cwe_id": data.get("cwe_id", "CWE-Unknown"),
-            "cvss_score": str(data.get("cvss_score", "5.0")),
-            "severity": data.get("severity", severity),
-            "impact": data.get("impact", ""),
-            "recommendation": data.get("recommendation", ""),
-        }
+        return _parse_llm_json(text, severity)
     except Exception:
         return None
+
+
+def _call_anthropic(model: str, api_key: str, prompt: str, severity: str) -> dict | None:
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=api_key)
+        r = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = (r.content[0].text if r.content else "").strip()
+        return _parse_llm_json(text, severity)
+    except Exception:
+        return None
+
+
+def _call_google(model: str, api_key: str, prompt: str, severity: str) -> dict | None:
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        m = genai.GenerativeModel(model)
+        r = m.generate_content(prompt)
+        text = (r.text or "").strip()
+        return _parse_llm_json(text, severity)
+    except Exception:
+        return None
+
+
+def _suggest_llm(
+    provider: str,
+    model: str,
+    api_key: str,
+    title: str,
+    description: str,
+    severity: str = "medium",
+) -> dict | None:
+    """LLM-based suggestion. Returns None on failure."""
+    prompt = PROMPT_TEMPLATE.format(title=title, description=description, severity=severity)
+    if provider == "openai":
+        return _call_openai(model, api_key, prompt, severity)
+    if provider == "anthropic":
+        return _call_anthropic(model, api_key, prompt, severity)
+    if provider == "google":
+        return _call_google(model, api_key, prompt, severity)
+    return None
 
 
 def suggest_finding(
@@ -117,13 +158,16 @@ def suggest_finding(
     description: str,
     severity: str = "medium",
     *,
+    provider: str | None = None,
     model: str | None = None,
     api_key: str | None = None,
 ) -> dict:
     """
-    Suggest CWE, CVSS, impact, remediation. Uses LLM when api_key (or env) is set, else rule-based.
+    Suggest CWE, CVSS, impact, remediation. Uses LLM when api_key is set, else rule-based.
     """
-    result = _suggest_llm(title, description, severity, model=model, api_key=api_key)
-    if result:
-        return result
+    if api_key and model:
+        prov = provider or "openai"
+        result = _suggest_llm(prov, model, api_key, title, description, severity)
+        if result:
+            return result
     return _suggest_rule_based(title, description, severity)

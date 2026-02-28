@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select, text
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.models.user import User
+from app.models.organization import Organization
 from app.models.category import Category
 from app.models.test_case import TestCase
 from app.core.security import hash_password
@@ -1187,7 +1188,32 @@ async def seed():
     print("Tables created.")
 
     async with AsyncSessionLocal() as db:
-        # Create default admin user
+        # Create super_admin (platform owner) — distinct from org admin
+        existing_super = await db.execute(select(User).where(User.username == "superadmin"))
+        if not existing_super.scalar_one_or_none():
+            super_admin = User(
+                email="superadmin@vapt.local",
+                username="superadmin",
+                full_name="Platform Super Admin",
+                hashed_password=hash_password("SuperAdmin@2026!"),
+                role="super_admin",
+                xp_points=0,
+                level=1,
+            )
+            db.add(super_admin)
+            await db.flush()
+            print("Created super_admin user: superadmin / SuperAdmin@2026!")
+
+        # Create default organization
+        existing_org = await db.execute(select(Organization).where(Organization.slug == "default"))
+        default_org = existing_org.scalar_one_or_none()
+        if not default_org:
+            default_org = Organization(name="Default Organization", slug="default")
+            db.add(default_org)
+            await db.flush()
+            print("Created default organization: Default Organization")
+
+        # Create default org admin user
         existing_admin = await db.execute(select(User).where(User.username == "admin"))
         if not existing_admin.scalar_one_or_none():
             admin = User(
@@ -1198,10 +1224,11 @@ async def seed():
                 role="admin",
                 xp_points=0,
                 level=1,
+                organization_id=default_org.id,
             )
             db.add(admin)
             await db.flush()
-            print(f"Created admin user: admin / Admin@2026!")
+            print("Created org admin user: admin / Admin@2026!")
 
         # Create default tester user
         existing_tester = await db.execute(select(User).where(User.username == "tester"))
@@ -1274,8 +1301,9 @@ async def seed():
         await db.commit()
         print("\nDatabase seeding complete!")
         print("\nDefault credentials:")
-        print("  Admin:  admin / Admin@2026!")
-        print("  Tester: tester / Tester@2026!")
+        print("  Super Admin (platform): superadmin / SuperAdmin@2026!")
+        print("  Org Admin:             admin / Admin@2026!")
+        print("  Tester:                tester / Tester@2026!")
 
 
 if __name__ == "__main__":

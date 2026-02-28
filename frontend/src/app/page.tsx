@@ -21,7 +21,7 @@ export default function RootPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center">
-      <div className="text-[#9CA3AF]">Loading VAPT Navigator...</div>
+      <div className="text-[#94a3b8]">Loading AppSecD...</div>
     </div>
   );
 }

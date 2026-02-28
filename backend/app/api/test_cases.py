@@ -74,15 +74,17 @@ async def get_test_library(
     return out
 
 
-@router.get("/project/{project_id}", response_model=list)
+@router.get("/project/{project_id}", response_model=dict)
 async def get_project_test_cases(
     project_id: str,
     phase: str = Query(None),
     status: str = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get test cases for a project with their current status."""
+    """Get test cases for a project with their current status. Paginated for performance (1000+ tests)."""
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
     query = (
@@ -96,6 +98,18 @@ async def get_project_test_cases(
     if status:
         query = query.where(ProjectTestResult.status == status)
     query = query.order_by(Category.order_index, TestCase.phase)
+    # Count total (same filters)
+    count_stmt = (
+        select(func.count(ProjectTestResult.id))
+        .join(TestCase, ProjectTestResult.test_case_id == TestCase.id)
+        .where(ProjectTestResult.project_id == project_id)
+    )
+    if phase:
+        count_stmt = count_stmt.where(TestCase.phase == phase)
+    if status:
+        count_stmt = count_stmt.where(ProjectTestResult.status == status)
+    total = (await db.execute(count_stmt)).scalar() or 0
+    query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     rows = result.all()
     # Get project stack for payload intelligence
@@ -117,7 +131,7 @@ async def get_project_test_cases(
         d["payload_used"] = ptr.payload_used
         d["time_spent_seconds"] = ptr.time_spent_seconds or 0
         out.append(d)
-    return out
+    return {"items": out, "total": total, "limit": limit, "offset": offset}
 
 
 @router.patch("/results/{result_id}", response_model=dict)

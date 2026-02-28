@@ -22,7 +22,7 @@ export default function SecListsPage() {
           ← Back
         </Link>
         <h1 className="text-2xl font-bold text-[#06B6D4]">SecLists</h1>
-        <p className="text-[#9CA3AF] mt-1">
+        <p className="text-[#94a3b8] mt-1">
           Security wordlists: usernames, passwords, URLs, fuzzing payloads
         </p>
       </header>
@@ -35,7 +35,7 @@ export default function SecListsPage() {
             <Link
               key={c.id}
               href={`/seclists/${encodeURIComponent(c.id)}`}
-              className="p-4 rounded bg-[#111827] border border-[#1F2937] hover:border-[#3B82F6] transition-colors"
+              className="p-4 rounded bg-[#111827] border border-[#1e2330] hover:border-[#3B82F6] transition-colors"
             >
               <span className="text-[#F9FAFB]">{c.name}</span>
             </Link>

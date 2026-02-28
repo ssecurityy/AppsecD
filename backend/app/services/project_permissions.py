@@ -16,9 +16,13 @@ ROLE_DEFAULTS = {
 
 
 async def user_can_see_project(db: AsyncSession, user: User, project_id: str) -> bool:
-    """Admin sees all; others only if they are project members."""
-    if user.role == "admin":
+    """Super_admin sees all; admin sees only their org's projects; others need project membership."""
+    if user.role == "super_admin":
         return True
+    if user.role == "admin":
+        r = await db.execute(select(Project).where(Project.id == project_id))
+        p = r.scalar_one_or_none()
+        return p is not None and p.organization_id == getattr(user, "organization_id", None)
     r = await db.execute(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
@@ -29,8 +33,14 @@ async def user_can_see_project(db: AsyncSession, user: User, project_id: str) ->
 
 
 async def get_project_member(db: AsyncSession, user: User, project_id: str) -> ProjectMember | None:
+    if user.role == "super_admin":
+        return None  # super_admin bypasses project-level checks
     if user.role == "admin":
-        return None  # admin bypasses project-level checks
+        r = await db.execute(select(Project).where(Project.id == project_id))
+        p = r.scalar_one_or_none()
+        if p and p.organization_id == getattr(user, "organization_id", None):
+            return None  # admin bypasses for their org's projects
+        return None  # will fail read check
     r = await db.execute(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
@@ -41,38 +51,60 @@ async def get_project_member(db: AsyncSession, user: User, project_id: str) -> P
 
 
 async def user_can_read_project(db: AsyncSession, user: User, project_id: str) -> bool:
-    if user.role == "admin":
+    if user.role == "super_admin":
         return True
+    if user.role == "admin":
+        r = await db.execute(select(Project).where(Project.id == project_id))
+        p = r.scalar_one_or_none()
+        return p is not None and p.organization_id == getattr(user, "organization_id", None)
     pm = await get_project_member(db, user, project_id)
     return pm is not None and pm.can_read
 
 
 async def user_can_write_project(db: AsyncSession, user: User, project_id: str) -> bool:
     """Write = mark status, add/edit findings."""
-    if user.role == "admin":
+    if user.role == "super_admin":
         return True
+    if user.role == "admin":
+        r = await db.execute(select(Project).where(Project.id == project_id))
+        p = r.scalar_one_or_none()
+        return p is not None and p.organization_id == getattr(user, "organization_id", None)
     pm = await get_project_member(db, user, project_id)
     return pm is not None and pm.can_read and pm.can_write
 
 
 async def user_can_download_report(db: AsyncSession, user: User, project_id: str) -> bool:
-    if user.role == "admin":
+    if user.role == "super_admin":
         return True
+    if user.role == "admin":
+        r = await db.execute(select(Project).where(Project.id == project_id))
+        p = r.scalar_one_or_none()
+        return p is not None and p.organization_id == getattr(user, "organization_id", None)
     pm = await get_project_member(db, user, project_id)
     return pm is not None and pm.can_download_report
 
 
 async def user_can_manage_members(db: AsyncSession, user: User, project_id: str) -> bool:
-    if user.role == "admin":
+    if user.role == "super_admin":
         return True
+    if user.role == "admin":
+        r = await db.execute(select(Project).where(Project.id == project_id))
+        p = r.scalar_one_or_none()
+        return p is not None and p.organization_id == getattr(user, "organization_id", None)
     pm = await get_project_member(db, user, project_id)
     return pm is not None and pm.can_manage_members
 
 
 async def get_visible_project_ids(db: AsyncSession, user: User) -> list | None:
-    """Returns list of project UUIDs user can see, or None if admin (sees all)."""
-    if user.role == "admin":
+    """Returns list of project UUIDs user can see, or None if super_admin (sees all)."""
+    if user.role == "super_admin":
         return None
+    if user.role == "admin":
+        org_id = getattr(user, "organization_id", None)
+        if not org_id:
+            return []
+        r = await db.execute(select(Project.id).where(Project.organization_id == org_id))
+        return [row[0] for row in r.all()]
     r = await db.execute(
         select(ProjectMember.project_id).where(ProjectMember.user_id == user.id)
     )

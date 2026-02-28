@@ -45,15 +45,15 @@ This document audits what is implemented vs. the Feature Gap Plan, with frontend
 
 **Current:** Rule-based mode works without any API key. Keyword matching → CWE, CVSS, impact, remediation.
 
-**Optional LLM mode:** When `OPENAI_API_KEY` is set in `backend/.env`, AI Assist uses OpenAI (gpt-4o-mini) for richer suggestions. Falls back to rule-based if key is missing or API fails.
+**Optional LLM mode:** Admin can configure model and API key from `/admin/settings` (stored encrypted in DB). Falls back to `OPENAI_API_KEY` in `.env` if not set in Admin Settings. Falls back to rule-based if no key available.
 
 | Where to Add | File | Variable |
 |--------------|------|----------|
-| **Environment** | `backend/.env` | `OPENAI_API_KEY=sk-...` |
-| **Admin UI** | `/admin/settings` | Shows status; docs where to add key |
+| **Admin UI** | `/admin/settings` | Select model, set/replace API key (recommended) |
+| **Environment** | `backend/.env` | `OPENAI_API_KEY=sk-...` (fallback) |
 
 **No API key:** Rule-based mode (always works).  
-**With API key:** LLM mode when configured.
+**With API key (Admin or env):** LLM mode with selected model (gpt-4o-mini, gpt-4o, etc.).
 
 ---
 
@@ -106,7 +106,7 @@ celery -A app.celery_app worker -l info
 | Feature | Status | Notes |
 |---------|--------|-------|
 | **Skill Tree** | Not | Phase-based unlock UI; optional progression tree |
-| **AI Assist (LLM)** | Partial | Rule-based only; LLM mode when `OPENAI_API_KEY` set |
+| **AI Assist (LLM)** | Done | Admin configures model + API key in Settings; env fallback |
 | **Severity Recommendation (AI)** | Partial | Same as AI Assist |
 | **CI/CD Integration** | Not | Webhook for scan completion; API key for automated runs |
 | **Burp XML Import** | Not | Import findings from Burp Suite XML |

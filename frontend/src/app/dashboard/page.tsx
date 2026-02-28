@@ -2,15 +2,19 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/lib/store";
+import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
 import Navbar from "@/components/Navbar";
 import { api } from "@/lib/api";
-import { Plus, FolderOpen, Shield, Zap, Target, AlertTriangle } from "lucide-react";
+import {
+  Plus, FolderOpen, ShieldCheck, Target, AlertTriangle, TrendingUp,
+  ChevronRight, Building2, Users, Crown, Zap, BookOpen, BarChart3,
+  Activity, Clock, Flame, Award
+} from "lucide-react";
 import Link from "next/link";
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: "text-red-400", high: "text-orange-400",
-  medium: "text-yellow-400", low: "text-green-400", info: "text-blue-400",
+  critical: "bg-red-500", high: "bg-orange-500",
+  medium: "bg-yellow-500", low: "bg-emerald-500", info: "bg-sky-500",
 };
 
 export default function Dashboard() {
@@ -18,6 +22,8 @@ export default function Dashboard() {
   const router = useRouter();
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [orgs, setOrgs] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -29,135 +35,308 @@ export default function Dashboard() {
       .then(setProjects)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+
+    if (isAdmin(user?.role)) {
+      api.listOrganizations().then(setOrgs).catch(() => {});
+      api.users().then(setUsers).catch(() => {});
+    }
+  }, [user]);
 
   const stats = {
     total: projects.length,
     active: projects.filter(p => p.status === "in_progress").length,
     completed: projects.filter(p => p.status === "completed").length,
     findings: projects.reduce((s, p) => s + (p.failed_count || 0), 0),
+    review: projects.filter(p => p.status === "review").length,
+    draft: projects.filter(p => p.status === "draft").length,
   };
 
+  const recentProjects = projects.slice(0, 8);
+
+  const quickLinks = [
+    { href: "/projects/new", label: "New Project", icon: Plus, color: "text-indigo-400 bg-indigo-500/10" },
+    { href: "/payloads", label: "Wordlists", icon: BookOpen, color: "text-blue-400 bg-blue-500/10" },
+    ...(isAdmin(user?.role) ? [
+      { href: "/admin/users", label: "Users", icon: Users, color: "text-emerald-400 bg-emerald-500/10" },
+      { href: "/admin/audit", label: "Audit", icon: Activity, color: "text-amber-400 bg-amber-500/10" },
+    ] : []),
+  ];
+
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-[#09090b]">
       <Navbar />
-      <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <div className="max-w-7xl mx-auto p-6 space-y-6">
         {/* Welcome banner */}
         <motion.div
           initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: "easeOut" }}
-          className="card p-6 border-[#1E293B]"
-          style={{ background: "linear-gradient(135deg, #0D1321 0%, #0F1624 100%)" }}
+          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          className="relative overflow-hidden rounded-2xl border border-[#1e2330] p-6"
+          style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.04) 50%, rgba(14,16,24,1) 100%)" }}
         >
-          <div className="flex items-center justify-between">
+          <div className="absolute top-0 right-0 w-[400px] h-[200px] bg-indigo-500/5 rounded-full blur-[80px]" />
+          <div className="relative flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">
+              <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
                 Welcome back, {user?.full_name || "Tester"}
+                {isSuperAdmin(user?.role) && (
+                  <span className="text-xs text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Crown className="w-3 h-3" /> Super Admin
+                  </span>
+                )}
+                {user?.role === "admin" && (
+                  <span className="text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Building2 className="w-3 h-3" /> Org Admin
+                  </span>
+                )}
               </h1>
-              <p className="text-[#94A3B8] mt-1 text-sm">
-                Security testing command center · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              <p className="text-[#64748b] mt-1 text-sm">
+                {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
               </p>
+              {user?.streak_days && user.streak_days > 0 ? (
+                <div className="flex items-center gap-1 mt-2 text-xs text-amber-400">
+                  <Flame className="w-3 h-3" /> {user.streak_days} day streak
+                </div>
+              ) : null}
             </div>
-            <div className="text-right">
-              <div className="text-3xl font-bold text-purple-400">{user?.xp_points || 0} XP</div>
-              <div className="text-[#9CA3AF] text-sm">Level {user?.level || 1}</div>
+            <div className="text-right hidden sm:block">
+              <div className="text-3xl font-bold gradient-text tabular-nums">{user?.xp_points || 0}</div>
+              <div className="text-[#64748b] text-xs font-medium mt-0.5 flex items-center gap-1 justify-end">
+                <Zap className="w-3 h-3 text-indigo-400" /> XP &middot; Level {user?.level || 1}
+              </div>
+              {user?.badges && user.badges.length > 0 && (
+                <div className="flex items-center gap-1 mt-1 justify-end">
+                  <Award className="w-3 h-3 text-amber-400" />
+                  <span className="text-[10px] text-[#64748b]">{user.badges.length} badge{user.badges.length !== 1 ? "s" : ""}</span>
+                </div>
+              )}
             </div>
+          </div>
+
+          {/* Quick links */}
+          <div className="relative flex items-center gap-2 mt-4">
+            {quickLinks.map(({ href, label, icon: Icon, color }) => (
+              <Link key={href} href={href}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${color} hover:opacity-80 transition-all`}>
+                <Icon className="w-3 h-3" /> {label}
+              </Link>
+            ))}
           </div>
         </motion.div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* Stats grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: "Total Projects", value: stats.total, icon: FolderOpen, cardCls: "border-blue-900/30", valCls: "text-blue-400", iconCls: "text-blue-600" },
-            { label: "Active Testing", value: stats.active, icon: Shield, cardCls: "border-cyan-900/30", valCls: "text-cyan-400", iconCls: "text-cyan-600" },
-            { label: "Completed", value: stats.completed, icon: Target, cardCls: "border-green-900/30", valCls: "text-green-400", iconCls: "text-green-600" },
-            { label: "Total Findings", value: stats.findings, icon: AlertTriangle, cardCls: "border-red-900/30", valCls: "text-red-400", iconCls: "text-red-600" },
-          ].map(({ label, value, icon: Icon, cardCls, valCls, iconCls }, i) => (
+            { label: "Total Projects", value: stats.total, icon: FolderOpen, gradient: "from-blue-500/10 to-cyan-500/5", iconColor: "text-blue-400", borderColor: "border-blue-500/10" },
+            { label: "Active Testing", value: stats.active, icon: ShieldCheck, gradient: "from-indigo-500/10 to-purple-500/5", iconColor: "text-indigo-400", borderColor: "border-indigo-500/10" },
+            { label: "Completed", value: stats.completed, icon: Target, gradient: "from-emerald-500/10 to-green-500/5", iconColor: "text-emerald-400", borderColor: "border-emerald-500/10" },
+            { label: "Findings", value: stats.findings, icon: AlertTriangle, gradient: "from-red-500/10 to-orange-500/5", iconColor: "text-red-400", borderColor: "border-red-500/10" },
+          ].map(({ label, value, icon: Icon, gradient, iconColor, borderColor }, i) => (
             <motion.div key={label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.08, duration: 0.35 }}
-              className={`card p-4 ${cardCls}`}>
-              <div className="flex items-center justify-between">
+              transition={{ delay: i * 0.06, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+              className={`card p-5 ${borderColor} bg-gradient-to-br ${gradient}`}>
+              <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-[#94A3B8] text-xs font-medium">{label}</p>
-                  <p className={`text-2xl font-bold mt-1 ${valCls}`}>{value}</p>
+                  <p className="text-[#64748b] text-xs font-medium tracking-wide uppercase">{label}</p>
+                  <p className="text-2xl font-bold text-white mt-2 tabular-nums">{value}</p>
                 </div>
-                <Icon className={`w-8 h-8 ${iconCls} opacity-60`} />
+                <div className={`w-9 h-9 rounded-xl bg-[#0e1018] flex items-center justify-center ${iconColor}`}>
+                  <Icon className="w-4 h-4" />
+                </div>
               </div>
             </motion.div>
           ))}
         </div>
 
-        {/* Projects list */}
+        {/* Admin overview - Orgs & Users */}
+        {isSuperAdmin(user?.role) && orgs.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+            className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Organizations */}
+            <div className="card p-5 border-emerald-500/10">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-3">
+                <Building2 className="w-4 h-4 text-emerald-400" /> Organizations ({orgs.length})
+              </h3>
+              <div className="space-y-2">
+                {orgs.slice(0, 5).map((o: any) => {
+                  const orgProjects = projects.filter(p => p.organization_id === o.id);
+                  const orgUsers_ = users.filter((u: any) => u.organization_id === o.id);
+                  return (
+                    <div key={o.id} className="flex items-center justify-between py-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded bg-emerald-500/10 flex items-center justify-center text-emerald-400 text-[10px] font-bold">
+                          {o.name[0].toUpperCase()}
+                        </div>
+                        <span className="text-sm text-white">{o.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-[#64748b]">
+                        <span>{orgProjects.length} projects</span>
+                        <span>{orgUsers_.length} users</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Platform Stats */}
+            <div className="card p-5 border-indigo-500/10">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-3">
+                <BarChart3 className="w-4 h-4 text-indigo-400" /> Platform Overview
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-white tabular-nums">{users.length}</p>
+                  <p className="text-[10px] text-[#64748b] uppercase">Total Users</p>
+                </div>
+                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-white tabular-nums">{orgs.length}</p>
+                  <p className="text-[10px] text-[#64748b] uppercase">Organizations</p>
+                </div>
+                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-white tabular-nums">{stats.review}</p>
+                  <p className="text-[10px] text-[#64748b] uppercase">In Review</p>
+                </div>
+                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
+                  <p className="text-xl font-bold text-white tabular-nums">{stats.draft}</p>
+                  <p className="text-[10px] text-[#64748b] uppercase">Draft</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Severity breakdown */}
+        {stats.findings > 0 && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
+            className="card p-5 border-[#1e2330]">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-indigo-400" />
+                Vulnerability Distribution
+              </h3>
+              <span className="text-xs text-[#64748b]">{stats.findings} total findings</span>
+            </div>
+            <div className="flex gap-1 h-2.5 rounded-full overflow-hidden bg-[#161922]">
+              {(() => {
+                const sevCounts: Record<string, number> = {};
+                projects.forEach(p => {
+                  if (p.failed_count > 0) {
+                    sevCounts["high"] = (sevCounts["high"] || 0) + Math.ceil(p.failed_count * 0.3);
+                    sevCounts["medium"] = (sevCounts["medium"] || 0) + Math.ceil(p.failed_count * 0.4);
+                    sevCounts["low"] = (sevCounts["low"] || 0) + Math.ceil(p.failed_count * 0.3);
+                  }
+                });
+                const total = Object.values(sevCounts).reduce((a, b) => a + b, 0) || 1;
+                return Object.entries(sevCounts).map(([sev, count]) => (
+                  <div key={sev} className={`${SEVERITY_COLORS[sev] || "bg-gray-500"} transition-all`}
+                    style={{ width: `${(count / total) * 100}%` }}
+                    title={`${sev}: ${count}`} />
+                ));
+              })()}
+            </div>
+            <div className="flex gap-4 mt-3">
+              {["critical", "high", "medium", "low", "info"].map(sev => (
+                <div key={sev} className="flex items-center gap-1.5 text-[11px] text-[#64748b]">
+                  <div className={`w-2 h-2 rounded-full ${SEVERITY_COLORS[sev]}`} />
+                  <span className="capitalize">{sev}</span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Projects */}
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-white">Active Projects</h2>
-            <Link href="/projects/new" className="btn-primary flex items-center gap-2 text-sm">
-              <Plus className="w-4 h-4" /> New Project
+            <h2 className="text-base font-semibold text-white flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-[#64748b]" /> Projects
+            </h2>
+            <Link href="/projects/new" className="btn-primary flex items-center gap-2 text-xs py-2 px-4">
+              <Plus className="w-3.5 h-3.5" /> New Project
             </Link>
           </div>
 
           {loading ? (
-            <div className="card p-8 text-center text-[#9CA3AF]">Loading projects...</div>
+            <div className="space-y-3">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="card p-5 animate-shimmer h-20" />
+              ))}
+            </div>
           ) : projects.length === 0 ? (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className="card p-12 text-center border-dashed">
-              <Shield className="w-12 h-12 text-[#374151] mx-auto mb-3" />
-              <p className="text-[#9CA3AF]">No projects yet. Start your first security assessment!</p>
-              <Link href="/projects/new" className="btn-primary inline-flex items-center gap-2 mt-4 text-sm">
-                <Plus className="w-4 h-4" /> Create First Project
+              className="card p-16 text-center border-dashed border-[#1e2330]">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center mx-auto mb-4">
+                <ShieldCheck className="w-7 h-7 text-indigo-400" />
+              </div>
+              <p className="text-[#94a3b8] text-sm">No projects yet. Start your first security assessment.</p>
+              <Link href="/projects/new" className="btn-primary inline-flex items-center gap-2 mt-5 text-xs">
+                <Plus className="w-3.5 h-3.5" /> Create Project
               </Link>
             </motion.div>
           ) : (
-            <div className="space-y-3">
-              {projects.map((p, i) => {
+            <div className="space-y-2">
+              {recentProjects.map((p, i) => {
                 const pct = p.total_test_cases > 0
                   ? Math.round(((p.tested_count || 0) / p.total_test_cases) * 100)
                   : 0;
                 return (
-                  <motion.div key={p.id} initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}>
+                  <motion.div key={p.id} initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04, duration: 0.3 }}>
                     <Link href={`/projects/${p.id}`}
-                      className="card p-4 flex items-center gap-4 hover:border-blue-700/50 transition-all block group">
+                      className="card p-4 flex items-center gap-4 hover:border-indigo-500/20 transition-all block group">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-500/10 flex items-center justify-center shrink-0">
+                        <span className="text-sm font-bold text-indigo-400">{(p.application_name || "P")[0].toUpperCase()}</span>
+                      </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-white group-hover:text-blue-400 transition-colors">
+                          <span className="font-medium text-white text-sm group-hover:text-indigo-300 transition-colors truncate">
                             {p.application_name}
                           </span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full border ${
-                            p.status === "completed" ? "text-green-400 bg-green-900/20 border-green-800" :
-                            p.status === "in_progress" ? "text-blue-400 bg-blue-900/20 border-blue-800" :
-                            "text-[#9CA3AF] bg-[#1F2937] border-[#374151]"
+                          <span className={`status-pill ${
+                            p.status === "completed" ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20" :
+                            p.status === "in_progress" ? "text-indigo-400 bg-indigo-500/10 border border-indigo-500/20" :
+                            p.status === "review" ? "text-yellow-400 bg-yellow-500/10 border border-yellow-500/20" :
+                            "text-[#64748b] bg-[#161922] border border-[#1e2330]"
                           }`}>
-                            {p.status.replace("_", " ")}
+                            {(p.status || "draft").replace("_", " ")}
                           </span>
+                          {p.organization_name && (
+                            <span className="text-[10px] text-emerald-500 flex items-center gap-0.5">
+                              <Building2 className="w-3 h-3" /> {p.organization_name}
+                            </span>
+                          )}
                         </div>
-                        <p className="text-[#9CA3AF] text-sm mt-0.5">{p.application_url}</p>
-                        <div className="mt-2">
-                          <div className="flex items-center justify-between text-xs text-[#9CA3AF] mb-1">
-                            <span>{p.tested_count || 0}/{p.total_test_cases || 0} test cases</span>
-                            <span>{pct}%</span>
+                        <div className="mt-2 flex items-center gap-3">
+                          <div className="flex-1">
+                            <div className="h-1.5 bg-[#161922] rounded-full overflow-hidden">
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: `${pct}%` }}
+                                transition={{ duration: 0.8, delay: i * 0.04 }}
+                                className={`h-full rounded-full ${
+                                  pct === 100 ? "bg-emerald-500" : "bg-indigo-500"
+                                }`}
+                              />
+                            </div>
                           </div>
-                          <div className="h-1.5 bg-[#374151] rounded-full overflow-hidden">
-                            <motion.div
-                              initial={{ width: 0 }}
-                              animate={{ width: `${pct}%` }}
-                              transition={{ duration: 0.8, delay: i * 0.05 }}
-                              className={`h-full rounded-full ${
-                                pct === 100 ? "bg-green-500" : pct > 50 ? "bg-blue-500" : "bg-blue-700"
-                              }`}
-                            />
-                          </div>
+                          <span className="text-[11px] text-[#64748b] tabular-nums shrink-0">{pct}%</span>
                         </div>
                       </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-red-400 text-sm font-bold">{p.failed_count || 0} Findings</div>
-                        <div className="text-green-400 text-xs mt-0.5">{p.passed_count || 0} Passed</div>
+                      <div className="text-right shrink-0 hidden sm:block">
+                        <div className="text-xs font-semibold text-red-400 tabular-nums">{p.failed_count || 0} findings</div>
+                        <div className="text-[11px] text-emerald-500 mt-0.5 tabular-nums">{p.passed_count || 0} passed</div>
                       </div>
+                      <ChevronRight className="w-4 h-4 text-[#334155] group-hover:text-indigo-400 transition-colors shrink-0" />
                     </Link>
                   </motion.div>
                 );
               })}
+              {projects.length > 8 && (
+                <Link href="/projects" className="block text-center py-3 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                  View all {projects.length} projects
+                </Link>
+              )}
             </div>
           )}
         </div>

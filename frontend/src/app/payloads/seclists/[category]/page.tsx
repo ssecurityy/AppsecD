@@ -34,17 +34,17 @@ export default function SecListsCategoryPage() {
     <div className="min-h-screen">
       <Navbar />
       <div className="max-w-5xl mx-auto p-6">
-        <Link href="/payloads" className="flex items-center gap-1 text-blue-400 hover:text-blue-300 text-sm mb-4">
+        <Link href="/payloads" className="flex items-center gap-1 text-indigo-400 hover:text-blue-300 text-sm mb-4">
           <ChevronLeft className="w-4 h-4" /> Back to Library
         </Link>
         <h1 className="text-2xl font-bold text-white mb-2">SecLists — {catName}</h1>
-        <p className="text-[#9CA3AF] text-sm mb-6">
+        <p className="text-[#94a3b8] text-sm mb-6">
           Wordlist files for security testing. Use with ffuf, gobuster, sqlmap, etc.
         </p>
         {loading ? (
-          <div className="text-center text-[#9CA3AF] py-16">Loading wordlists...</div>
+          <div className="text-center text-[#94a3b8] py-16">Loading wordlists...</div>
         ) : files.length === 0 ? (
-          <div className="card p-8 text-center text-[#9CA3AF]">No wordlist files in this category</div>
+          <div className="card p-8 text-center text-[#94a3b8]">No wordlist files in this category</div>
         ) : (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="card p-4">
@@ -55,21 +55,21 @@ export default function SecListsCategoryPage() {
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: i * 0.01 }}
-                  className="flex items-center justify-between gap-3 py-2 px-3 rounded hover:bg-[#1F2937] group"
+                  className="flex items-center justify-between gap-3 py-2 px-3 rounded hover:bg-[#161922] group"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-4 h-4 text-[#6B7280] shrink-0" />
+                    <FileText className="w-4 h-4 text-[#64748b] shrink-0" />
                     <code className="text-sm text-[#A5F3FC] truncate font-mono">{f.path}</code>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-[#6B7280]">{formatSize(f.size)}</span>
+                    <span className="text-xs text-[#64748b]">{formatSize(f.size)}</span>
                     <button
                       onClick={() => {
                         const fullPath = `${category}/${f.path}`;
                         navigator.clipboard.writeText(`/opt/navigator/data/SecLists/${fullPath}`);
                         toast.success("Path copied! Use in terminal.");
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded bg-[#374151] hover:bg-[#4B5563] text-[#9CA3AF] transition-opacity"
+                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded bg-[#374151] hover:bg-[#4B5563] text-[#94a3b8] transition-opacity"
                       title="Copy full path"
                     >
                       <Copy className="w-3.5 h-3.5" />
@@ -78,8 +78,8 @@ export default function SecListsCategoryPage() {
                 </motion.div>
               ))}
             </div>
-            <p className="text-xs text-[#6B7280] mt-4 pt-4 border-t border-[#1F2937]">
-              Path on server: <code className="text-[#9CA3AF]">/opt/navigator/data/SecLists/{decodeURIComponent(category)}/</code>
+            <p className="text-xs text-[#64748b] mt-4 pt-4 border-t border-[#1e2330]">
+              Path on server: <code className="text-[#94a3b8]">/opt/navigator/data/SecLists/{decodeURIComponent(category)}/</code>
             </p>
           </motion.div>
         )}

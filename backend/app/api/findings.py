@@ -1,5 +1,5 @@
-"""Findings API."""
-from fastapi import APIRouter, HTTPException, Depends
+"""Findings API with Vulnerability Management."""
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
@@ -9,13 +9,18 @@ from app.services.project_permissions import user_can_read_project, user_can_wri
 from app.services.badge_service import check_and_award_badges
 from app.services.audit_service import log_audit
 
-require_tester_plus = require_roles(get_current_user, "admin", "lead", "tester")
+require_tester_plus = require_roles(get_current_user, "super_admin", "admin", "lead", "tester")
 from app.models.user import User
 from app.models.finding import Finding
 from app.schemas.result import FindingCreate
 from datetime import datetime
 
 router = APIRouter(prefix="/findings", tags=["findings"])
+
+RECHECK_STATUSES = [
+    "pending", "resolved", "not_fixed", "partially_fixed",
+    "exception", "deferred", "retest_needed",
+]
 
 
 def f_to_dict(f: Finding) -> dict:
@@ -40,6 +45,17 @@ def f_to_dict(f: Finding) -> dict:
         "impact": f.impact,
         "recommendation": f.recommendation,
         "created_at": f.created_at.isoformat() if f.created_at else "",
+        # Vulnerability Management fields
+        "recheck_status": getattr(f, "recheck_status", None) or "pending",
+        "recheck_notes": getattr(f, "recheck_notes", None),
+        "recheck_date": f.recheck_date.isoformat() if getattr(f, "recheck_date", None) else None,
+        "recheck_by": str(f.recheck_by) if getattr(f, "recheck_by", None) else None,
+        "recheck_evidence": getattr(f, "recheck_evidence", None) or [],
+        "original_severity": getattr(f, "original_severity", None),
+        "recheck_count": getattr(f, "recheck_count", None) or 0,
+        "remediation_deadline": f.remediation_deadline.isoformat() if getattr(f, "remediation_deadline", None) else None,
+        "remediation_owner": getattr(f, "remediation_owner", None),
+        "recheck_history": getattr(f, "recheck_history", None) or [],
     }
 
 
@@ -68,6 +84,8 @@ async def create_finding(
         impact=payload.impact,
         recommendation=payload.recommendation,
         created_by=current_user.id,
+        original_severity=payload.severity,
+        recheck_status="pending",
     )
     db.add(finding)
     await db.flush()
@@ -87,7 +105,7 @@ async def create_finding(
     )
     is_first = count_result.scalar() == 1
 
-    # Count XSS findings by this user (title/description contains xss)
+    # Count XSS findings by this user
     all_findings = await db.execute(
         select(Finding).where(
             Finding.project_id == payload.project_id,
@@ -122,17 +140,61 @@ async def create_finding(
 @router.get("/project/{project_id}", response_model=list)
 async def get_findings(
     project_id: str,
+    recheck_status: str = Query(None, description="Filter by recheck status"),
+    severity: str = Query(None, description="Filter by severity"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
-    result = await db.execute(
+    query = (
         select(Finding)
         .where(Finding.project_id == project_id)
         .order_by(Finding.created_at.desc())
     )
+    if recheck_status:
+        query = query.where(Finding.recheck_status == recheck_status)
+    if severity:
+        query = query.where(Finding.severity == severity)
+    result = await db.execute(query)
     return [f_to_dict(f) for f in result.scalars().all()]
+
+
+@router.get("/project/{project_id}/summary", response_model=dict)
+async def get_vulnerability_summary(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get vulnerability management summary for a project."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied to this project")
+    result = await db.execute(
+        select(Finding).where(Finding.project_id == project_id)
+    )
+    findings = result.scalars().all()
+    total = len(findings)
+    by_recheck = {}
+    by_severity = {}
+    for f in findings:
+        rs = getattr(f, "recheck_status", None) or "pending"
+        by_recheck[rs] = by_recheck.get(rs, 0) + 1
+        sv = f.severity or "info"
+        by_severity[sv] = by_severity.get(sv, 0) + 1
+    resolved = by_recheck.get("resolved", 0)
+    return {
+        "total": total,
+        "resolved": resolved,
+        "not_fixed": by_recheck.get("not_fixed", 0),
+        "partially_fixed": by_recheck.get("partially_fixed", 0),
+        "pending": by_recheck.get("pending", 0),
+        "exception": by_recheck.get("exception", 0),
+        "deferred": by_recheck.get("deferred", 0),
+        "retest_needed": by_recheck.get("retest_needed", 0),
+        "by_recheck_status": by_recheck,
+        "by_severity": by_severity,
+        "resolution_rate": round((resolved / total * 100) if total > 0 else 0, 1),
+    }
 
 
 @router.patch("/{finding_id}", response_model=dict)
@@ -148,17 +210,95 @@ async def update_finding(
         raise HTTPException(404, "Finding not found")
     if not await user_can_write_project(db, current_user, str(finding.project_id)):
         raise HTTPException(403, "Write access denied to this project")
-    allowed = {"status", "assigned_to", "due_date", "title", "description", "severity", "impact", "recommendation", "reproduction_steps", "owasp_category", "cwe_id", "cvss_score"}
+    allowed = {
+        "status", "assigned_to", "due_date", "title", "description", "severity",
+        "impact", "recommendation", "reproduction_steps", "owasp_category",
+        "cwe_id", "cvss_score", "remediation_deadline", "remediation_owner",
+    }
     for key, val in payload.items():
         if key in allowed and hasattr(finding, key):
-            if key == "due_date" and isinstance(val, str):
+            if key in ("due_date", "remediation_deadline") and isinstance(val, str):
                 try:
-                    from datetime import datetime
                     val = datetime.fromisoformat(val.replace("Z", "")).date()
                 except (ValueError, TypeError):
                     pass
             setattr(finding, key, val)
     finding.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(finding)
+    return f_to_dict(finding)
+
+
+@router.patch("/{finding_id}/recheck", response_model=dict)
+async def update_recheck_status(
+    finding_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update vulnerability recheck status with full audit trail."""
+    result = await db.execute(select(Finding).where(Finding.id == finding_id))
+    finding = result.scalar_one_or_none()
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    if not await user_can_write_project(db, current_user, str(finding.project_id)):
+        raise HTTPException(403, "Write access denied to this project")
+
+    new_status = payload.get("recheck_status")
+    if new_status and new_status not in RECHECK_STATUSES:
+        raise HTTPException(400, f"Invalid recheck_status. Use: {RECHECK_STATUSES}")
+
+    # Build history entry
+    history_entry = {
+        "date": datetime.utcnow().isoformat(),
+        "old_status": getattr(finding, "recheck_status", None) or "pending",
+        "new_status": new_status or getattr(finding, "recheck_status", "pending"),
+        "notes": payload.get("recheck_notes", ""),
+        "by": str(current_user.id),
+        "by_name": current_user.full_name,
+    }
+
+    # Update fields
+    if new_status:
+        finding.recheck_status = new_status
+    if "recheck_notes" in payload:
+        finding.recheck_notes = payload["recheck_notes"]
+    finding.recheck_date = datetime.utcnow()
+    finding.recheck_by = current_user.id
+    finding.recheck_count = (getattr(finding, "recheck_count", None) or 0) + 1
+    if "recheck_evidence" in payload:
+        finding.recheck_evidence = payload["recheck_evidence"]
+    if "remediation_deadline" in payload and payload["remediation_deadline"]:
+        try:
+            finding.remediation_deadline = datetime.fromisoformat(
+                payload["remediation_deadline"].replace("Z", "")
+            ).date()
+        except (ValueError, TypeError):
+            pass
+    if "remediation_owner" in payload:
+        finding.remediation_owner = payload["remediation_owner"]
+
+    # Append to history
+    history = list(getattr(finding, "recheck_history", None) or [])
+    history.append(history_entry)
+    finding.recheck_history = history
+
+    # If resolved, auto-update main status
+    if new_status == "resolved":
+        finding.status = "fixed"
+    elif new_status == "not_fixed":
+        finding.status = "confirmed"
+    elif new_status == "exception":
+        finding.status = "accepted_risk"
+
+    finding.updated_at = datetime.utcnow()
+    await log_audit(
+        db, "recheck_finding",
+        user_id=str(current_user.id),
+        resource_type="finding",
+        resource_id=str(finding.id),
+        details={"recheck_status": new_status, "project_id": str(finding.project_id)},
+    )
     await db.commit()
     await db.refresh(finding)
     return f_to_dict(finding)

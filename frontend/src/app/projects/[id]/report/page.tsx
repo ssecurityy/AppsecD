@@ -48,7 +48,7 @@ export default function LiveReportPage() {
 
   if (loading && !data) {
     return (
-      <div className="min-h-screen bg-[#0a0f1a]">
+      <div className="min-h-screen bg-[#09090b]">
         <Navbar />
         <div className="max-w-6xl mx-auto p-6 flex items-center justify-center min-h-[60vh]">
           <motion.div
@@ -63,7 +63,7 @@ export default function LiveReportPage() {
 
   if (error && !data) {
     return (
-      <div className="min-h-screen bg-[#0a0f1a]">
+      <div className="min-h-screen bg-[#09090b]">
         <Navbar />
         <div className="max-w-6xl mx-auto p-6">
           <div className="card p-8 text-center text-red-400">{error}</div>
@@ -88,7 +88,7 @@ export default function LiveReportPage() {
   const owaspChartData = Object.entries(owasp).slice(0, 10).map(([k, v]) => ({ name: k.length > 20 ? k.slice(0, 18) + "…" : k, count: v }));
 
   return (
-    <div className="min-h-screen bg-[#0a0f1a]">
+    <div className="min-h-screen bg-[#09090b]">
       <Navbar />
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         {/* Header */}
@@ -100,21 +100,21 @@ export default function LiveReportPage() {
           <div className="flex items-center gap-4">
             <Link
               href={`/projects/${id}`}
-              className="p-2 rounded-lg bg-[#1a2332] border border-[#2d3a4f] hover:border-blue-600/50 text-[#9CA3AF] hover:text-white transition-all"
+              className="p-2 rounded-lg bg-[#161922] border border-[#1e2330] hover:border-indigo-500/50 text-[#94a3b8] hover:text-white transition-all"
             >
               <ArrowLeft className="w-4 h-4" />
             </Link>
             <div>
               <h1 className="text-xl font-bold text-white flex items-center gap-2">
-                <FileText className="w-5 h-5 text-blue-400" /> Live Report Preview
+                <FileText className="w-5 h-5 text-indigo-400" /> Live Report Preview
               </h1>
-              <p className="text-[#9CA3AF] text-sm">{p.application_name}</p>
+              <p className="text-[#94a3b8] text-sm">{p.application_name}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={refresh}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a2332] border border-[#2d3a4f] text-[#9CA3AF] hover:text-white hover:border-blue-600/50 transition-all text-sm"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#161922] border border-[#1e2330] text-[#94a3b8] hover:text-white hover:border-indigo-500/50 transition-all text-sm"
             >
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
@@ -122,20 +122,20 @@ export default function LiveReportPage() {
               href={`${getApiBase()}/projects/${id}/report?format=html`}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white text-sm"
             >
               <ExternalLink className="w-4 h-4" /> Open Full HTML
             </a>
             <button
               onClick={async () => {
                 try {
-                  await api.downloadReport(id, "pdf", `VAPT_Report_${p.application_name?.replace(/\s/g, "_")}.pdf`);
+                  await api.downloadReport(id, "pdf", `AppSecD_Report_${p.application_name?.replace(/\s/g, "_")}.pdf`);
                   toast.success("Downloading PDF...");
                 } catch (e: any) {
                   toast.error(e.message);
                 }
               }}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a2332] border border-[#2d3a4f] text-[#9CA3AF] hover:text-white hover:border-blue-600/50 transition-all text-sm"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#161922] border border-[#1e2330] text-[#94a3b8] hover:text-white hover:border-indigo-500/50 transition-all text-sm"
             >
               <Download className="w-4 h-4" /> Download PDF
             </button>
@@ -149,10 +149,10 @@ export default function LiveReportPage() {
           transition={{ delay: 0.1 }}
           className="card p-4 border-blue-900/30"
         >
-          <h2 className="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-3">Table of Contents</h2>
+          <h2 className="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-3">Table of Contents</h2>
           <div className="flex flex-wrap gap-2">
             {["Executive Summary", "Charts & Analytics", "Severity Distribution", "OWASP Mapping", "Findings", "Details"].map((s, i) => (
-              <a key={s} href={`#${s.toLowerCase().replace(/\s/g, "-")}`} className="text-xs px-3 py-1.5 rounded bg-[#1a2332] border border-[#2d3a4f] text-[#9CA3AF] hover:text-blue-400 hover:border-blue-600/50 transition-all">
+              <a key={s} href={`#${s.toLowerCase().replace(/\s/g, "-")}`} className="text-xs px-3 py-1.5 rounded bg-[#161922] border border-[#1e2330] text-[#94a3b8] hover:text-indigo-400 hover:border-indigo-500/50 transition-all">
                 {s}
               </a>
             ))}
@@ -168,7 +168,7 @@ export default function LiveReportPage() {
           className="card p-6 border-blue-900/30"
         >
           <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center text-sm">1</span>
+            <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">1</span>
             Executive Summary
           </h2>
           <div className="grid md:grid-cols-2 gap-6">
@@ -179,7 +179,7 @@ export default function LiveReportPage() {
               </p>
               <div className="mt-4 flex items-center gap-4">
                 <div>
-                  <div className="text-xs text-[#9CA3AF]">Risk Rating</div>
+                  <div className="text-xs text-[#94a3b8]">Risk Rating</div>
                   <div className={`text-2xl font-bold ${
                     riskLevel === "Critical" ? "text-red-400" :
                     riskLevel === "High" ? "text-orange-400" :
@@ -189,30 +189,30 @@ export default function LiveReportPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-[#9CA3AF]">Coverage</div>
-                  <div className="text-2xl font-bold text-blue-400">{cov}%</div>
+                  <div className="text-xs text-[#94a3b8]">Coverage</div>
+                  <div className="text-2xl font-bold text-indigo-400">{cov}%</div>
                 </div>
                 <div>
-                  <div className="text-xs text-[#9CA3AF]">Findings</div>
+                  <div className="text-xs text-[#94a3b8]">Findings</div>
                   <div className="text-2xl font-bold text-white">{findings.length}</div>
                 </div>
               </div>
             </div>
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-[#9CA3AF]">Passed</span>
+                <span className="text-[#94a3b8]">Passed</span>
                 <span className="text-green-400 font-medium">{p.passed_count || 0}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-[#9CA3AF]">Failed</span>
+                <span className="text-[#94a3b8]">Failed</span>
                 <span className="text-red-400 font-medium">{p.failed_count || 0}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-[#9CA3AF]">N/A</span>
-                <span className="text-[#9CA3AF] font-medium">{p.na_count || 0}</span>
+                <span className="text-[#94a3b8]">N/A</span>
+                <span className="text-[#94a3b8] font-medium">{p.na_count || 0}</span>
               </div>
-              <div className="h-2 bg-[#1a2332] rounded-full overflow-hidden mt-2">
-                <div className="h-full bg-blue-600 rounded-full" style={{ width: `${cov}%` }} />
+              <div className="h-2 bg-[#161922] rounded-full overflow-hidden mt-2">
+                <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${cov}%` }} />
               </div>
             </div>
           </div>
@@ -227,12 +227,12 @@ export default function LiveReportPage() {
           className="card p-6 border-blue-900/30"
         >
           <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center text-sm">2</span>
+            <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">2</span>
             Charts & Analytics
           </h2>
           <div className="grid md:grid-cols-2 gap-6">
-            <div className="bg-[#0D1424] rounded-xl p-4 border border-[#1F2937]">
-              <h3 className="text-sm font-semibold text-[#9CA3AF] mb-4">Severity Distribution</h3>
+            <div className="bg-[#0e1018] rounded-xl p-4 border border-[#1e2330]">
+              <h3 className="text-sm font-semibold text-[#94a3b8] mb-4">Severity Distribution</h3>
               {severityChartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={220}>
                   <PieChart>
@@ -245,11 +245,11 @@ export default function LiveReportPage() {
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-[220px] flex items-center justify-center text-[#6B7280] text-sm">No data</div>
+                <div className="h-[220px] flex items-center justify-center text-[#64748b] text-sm">No data</div>
               )}
             </div>
-            <div className="bg-[#0D1424] rounded-xl p-4 border border-[#1F2937]">
-              <h3 className="text-sm font-semibold text-[#9CA3AF] mb-4">OWASP Top 10 Mapping</h3>
+            <div className="bg-[#0e1018] rounded-xl p-4 border border-[#1e2330]">
+              <h3 className="text-sm font-semibold text-[#94a3b8] mb-4">OWASP Top 10 Mapping</h3>
               {owaspChartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={owaspChartData} layout="vertical" margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
@@ -261,7 +261,7 @@ export default function LiveReportPage() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-[220px] flex items-center justify-center text-[#6B7280] text-sm">No data</div>
+                <div className="h-[220px] flex items-center justify-center text-[#64748b] text-sm">No data</div>
               )}
             </div>
           </div>
@@ -276,13 +276,13 @@ export default function LiveReportPage() {
           className="card p-6 border-blue-900/30 overflow-hidden"
         >
           <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center text-sm">3</span>
+            <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">3</span>
             Detailed Findings
           </h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[#1F2937] text-left text-[#9CA3AF]">
+                <tr className="border-b border-[#1e2330] text-left text-[#94a3b8]">
                   <th className="p-3">#</th>
                   <th className="p-3">Title</th>
                   <th className="p-3">Severity</th>
@@ -293,8 +293,8 @@ export default function LiveReportPage() {
               </thead>
               <tbody>
                 {findings.map((f: any, i: number) => (
-                  <tr key={i} className="border-b border-[#1F2937]/50 hover:bg-[#1F2937]/30 transition-colors">
-                    <td className="p-3 text-[#9CA3AF]">{i + 1}</td>
+                  <tr key={i} className="border-b border-[#1e2330]/50 hover:bg-[#161922]/30 transition-colors">
+                    <td className="p-3 text-[#94a3b8]">{i + 1}</td>
                     <td className="p-3 font-medium text-white">{f.title}</td>
                     <td className="p-3">
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${
@@ -306,16 +306,16 @@ export default function LiveReportPage() {
                         {f.severity}
                       </span>
                     </td>
-                    <td className="p-3 text-[#9CA3AF]">{f.owasp_category || "-"}</td>
-                    <td className="p-3 text-[#9CA3AF]">{f.cwe_id || "-"}</td>
-                    <td className="p-3 text-[#9CA3AF] truncate max-w-[200px]">{f.affected_url || "-"}</td>
+                    <td className="p-3 text-[#94a3b8]">{f.owasp_category || "-"}</td>
+                    <td className="p-3 text-[#94a3b8]">{f.cwe_id || "-"}</td>
+                    <td className="p-3 text-[#94a3b8] truncate max-w-[200px]">{f.affected_url || "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           {findings.length === 0 && (
-            <div className="py-12 text-center text-[#6B7280]">No findings yet</div>
+            <div className="py-12 text-center text-[#64748b]">No findings yet</div>
           )}
         </motion.section>
 
@@ -328,7 +328,7 @@ export default function LiveReportPage() {
           className="space-y-4"
         >
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <span className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center text-sm">4</span>
+            <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">4</span>
             Finding Details with Evidence
           </h2>
           <AnimatePresence>
@@ -338,7 +338,7 @@ export default function LiveReportPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.05 * i }}
-                className="card p-5 border-[#1F2937] hover:border-blue-900/50 transition-colors"
+                className="card p-5 border-[#1e2330] hover:border-blue-900/50 transition-colors"
               >
                 <h3 className="font-semibold text-white mb-2">
                   #{i + 1} {f.title} <span className={`text-xs px-2 py-0.5 rounded ml-2 ${
@@ -348,9 +348,9 @@ export default function LiveReportPage() {
                     f.severity === "low" ? "bg-green-900/40 text-green-300" : "bg-blue-900/40 text-blue-300"
                   }`}>{f.severity}</span>
                 </h3>
-                <p className="text-sm text-[#9CA3AF] mb-2">{f.description || "-"}</p>
-                <p className="text-xs text-[#6B7280]">URL: {f.affected_url || "-"}</p>
-                <p className="text-xs text-[#6B7280] mt-1">Recommendation: {f.recommendation || "-"}</p>
+                <p className="text-sm text-[#94a3b8] mb-2">{f.description || "-"}</p>
+                <p className="text-xs text-[#64748b]">URL: {f.affected_url || "-"}</p>
+                <p className="text-xs text-[#64748b] mt-1">Recommendation: {f.recommendation || "-"}</p>
                 {f.evidence?.length > 0 && (
                   <div className="mt-3 flex gap-2 flex-wrap">
                     {f.evidence.map((e: any, j: number) => (
@@ -359,7 +359,7 @@ export default function LiveReportPage() {
                         href={`${getApiBase()}${e.url}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs px-2 py-1 rounded bg-[#1a2332] border border-[#2d3a4f] text-blue-400 hover:border-blue-600/50"
+                        className="text-xs px-2 py-1 rounded bg-[#161922] border border-[#1e2330] text-indigo-400 hover:border-indigo-500/50"
                       >
                         {e.filename || "Evidence"}
                       </a>
@@ -371,7 +371,7 @@ export default function LiveReportPage() {
           </AnimatePresence>
         </motion.section>
 
-        <p className="text-[#6B7280] text-xs text-center py-8">
+        <p className="text-[#64748b] text-xs text-center py-8">
           Report generated at {data?.generated_at ? new Date(data.generated_at).toLocaleString() : "—"} · Live preview updates on refresh
         </p>
       </div>

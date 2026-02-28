@@ -2,7 +2,7 @@
 from fastapi import HTTPException, Depends
 from app.models.user import User
 
-ROLES = {"admin", "lead", "tester", "viewer"}
+ROLES = {"super_admin", "admin", "lead", "tester", "viewer"}
 
 
 def require_roles(get_user_dep, *allowed: str):

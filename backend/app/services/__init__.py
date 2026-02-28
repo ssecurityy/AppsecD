@@ -1,17 +1,2 @@
-from .payload_service import (
-    get_payload_categories,
-    get_payload_content,
-    get_seclists_categories,
-    get_wordlist_path,
-    list_wordlist_files,
-    read_wordlist_preview,
-)
-
-__all__ = [
-    "get_payload_categories",
-    "get_payload_content",
-    "get_seclists_categories",
-    "get_wordlist_path",
-    "list_wordlist_files",
-    "read_wordlist_preview",
-]
+# Payloads/SecLists now 100% from PostgreSQL (payload_service_db)
+# Old payload_service (filesystem) removed - use import script to populate DB

@@ -7,9 +7,12 @@ interface User {
   username: string;
   full_name: string;
   role: string;
+  organization_id?: string;
+  organization_name?: string;
   xp_points: number;
   level: number;
   badges: string[];
+  streak_days?: number;
 }
 
 interface AuthStore {
@@ -26,31 +29,40 @@ export const useAuthStore = create<AuthStore>((set) => ({
   token: null,
   setAuth: (user, token) => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("vapt_token", token);
-      localStorage.setItem("vapt_user", JSON.stringify(user));
+      localStorage.setItem("appsecdtoken", token);
+      localStorage.setItem("appsecduser", JSON.stringify(user));
     }
     set({ user, token });
   },
   setUser: (user) => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("vapt_user", JSON.stringify(user));
+      localStorage.setItem("appsecduser", JSON.stringify(user));
     }
     set({ user });
   },
   clearAuth: () => {
     if (typeof window !== "undefined") {
-      localStorage.removeItem("vapt_token");
-      localStorage.removeItem("vapt_user");
+      localStorage.removeItem("appsecdtoken");
+      localStorage.removeItem("appsecduser");
     }
     set({ user: null, token: null });
   },
   hydrate: () => {
     if (typeof window !== "undefined") {
-      const token = localStorage.getItem("vapt_token");
-      const userStr = localStorage.getItem("vapt_user");
+      const token = localStorage.getItem("appsecdtoken");
+      const userStr = localStorage.getItem("appsecduser");
       if (token && userStr) {
         set({ token, user: JSON.parse(userStr) });
       }
     }
   },
 }));
+
+// Helper to check admin roles
+export function isAdmin(role?: string): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
+export function isSuperAdmin(role?: string): boolean {
+  return role === "super_admin";
+}

@@ -29,7 +29,7 @@ async def mfa_setup(
     """Generate MFA secret for setup. Admin only."""
     secret = pyotp.random_base32()
     totp = pyotp.TOTP(secret)
-    issuer = "VAPT Navigator"
+    issuer = "AppSecD"
     qr_uri = totp.provisioning_uri(name=current_user.email, issuer_name=issuer)
     # Store secret temporarily - user must verify to enable
     current_user.mfa_secret = secret

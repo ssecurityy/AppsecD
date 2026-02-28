@@ -8,7 +8,7 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck
 } from "lucide-react";
 import Link from "next/link";
 
@@ -26,20 +26,20 @@ const PHASE_INFO: Record<string, { label: string; color: string }> = {
 };
 
 const STATUS_CONFIG = {
-  passed: { icon: CheckCircle, color: "text-green-400", bg: "bg-green-900/20 border-green-800" },
-  failed: { icon: XCircle, color: "text-red-400", bg: "bg-red-900/20 border-red-800" },
-  not_started: { icon: Circle, color: "text-[#6B7280]", bg: "bg-[#1F2937] border-[#374151]" },
-  in_progress: { icon: Target, color: "text-blue-400", bg: "bg-blue-900/20 border-blue-800" },
-  na: { icon: MinusCircle, color: "text-[#9CA3AF]", bg: "bg-[#111827] border-[#1F2937]" },
-  blocked: { icon: Flag, color: "text-orange-400", bg: "bg-orange-900/20 border-orange-800" },
+  passed: { icon: CheckCircle, color: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+  failed: { icon: XCircle, color: "text-red-400", bg: "bg-red-500/10 border-red-500/20" },
+  not_started: { icon: Circle, color: "text-[#64748b]", bg: "bg-[#161922] border-[#1e2330]" },
+  in_progress: { icon: Target, color: "text-indigo-400", bg: "bg-indigo-500/10 border-indigo-500/20" },
+  na: { icon: MinusCircle, color: "text-[#64748b]", bg: "bg-[#0e1018] border-[#1e2330]" },
+  blocked: { icon: Flag, color: "text-orange-400", bg: "bg-orange-500/10 border-orange-500/20" },
 };
 
 const SEVERITY_BADGE: Record<string, string> = {
-  critical: "bg-red-900/40 text-red-300 border-red-700",
-  high: "bg-orange-900/40 text-orange-300 border-orange-700",
-  medium: "bg-yellow-900/40 text-yellow-300 border-yellow-700",
-  low: "bg-green-900/40 text-green-300 border-green-700",
-  info: "bg-blue-900/40 text-blue-300 border-blue-700",
+  critical: "severity-critical",
+  high: "severity-high",
+  medium: "severity-medium",
+  low: "severity-low",
+  info: "severity-info",
 };
 
 const replaceTarget = (text: string, url: string) => {
@@ -59,14 +59,14 @@ function EvidenceItem({ e, onRemove, getApiBase }: { e: { filename: string; url:
     return () => { if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null; } };
   }, [e.url, isImage]);
   return (
-    <div className="flex items-center gap-2 bg-[#0D1424] rounded px-2 py-1 border border-[#1F2937] text-xs">
+    <div className="flex items-center gap-2 bg-[#0e1018] rounded px-2 py-1 border border-[#1e2330] text-xs">
       {previewUrl && (
         <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="shrink-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={previewUrl} alt={e.filename} className="w-10 h-10 object-cover rounded border border-[#374151]" />
+          <img src={previewUrl} alt={e.filename} className="w-10 h-10 object-cover rounded border border-[#1e2330]" />
         </a>
       )}
-      <a href={isImage && previewUrl ? previewUrl : `${getApiBase()}${e.url}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline truncate max-w-[120px]">{e.filename}</a>
+      <a href={isImage && previewUrl ? previewUrl : `${getApiBase()}${e.url}`} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline truncate max-w-[120px]">{e.filename}</a>
       <button onClick={onRemove} className="text-red-400 hover:text-red-300 shrink-0">×</button>
     </div>
   );
@@ -160,14 +160,14 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                 {tc.severity}
               </span>
               {tc.owasp_ref && (
-                <span className="text-xs text-[#9CA3AF] bg-[#0D1424] px-1.5 py-0.5 rounded border border-[#1F2937]">
+                <span className="text-xs text-[#94a3b8] bg-[#0e1018] px-1.5 py-0.5 rounded border border-[#1e2330]">
                   {tc.owasp_ref}
                 </span>
               )}
-              {tc.module_id && <span className="text-xs text-[#6B7280]">{tc.module_id}</span>}
+              {tc.module_id && <span className="text-xs text-[#64748b]">{tc.module_id}</span>}
             </div>
             {tc.description && (
-              <p className="text-xs text-[#9CA3AF] mt-1 line-clamp-1">{tc.description}</p>
+              <p className="text-xs text-[#94a3b8] mt-1 line-clamp-1">{tc.description}</p>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -185,14 +185,14 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                 </button>
                 <button onClick={e => { e.stopPropagation(); updateStatus("na"); }}
                   title="Not Applicable"
-                  className="p-1.5 rounded bg-[#1F2937] hover:bg-[#374151] text-[#9CA3AF] transition-colors">
+                  className="p-1.5 rounded bg-[#161922] hover:bg-[#374151] text-[#94a3b8] transition-colors">
                   <MinusCircle className="w-3.5 h-3.5" />
                 </button>
               </>
             ) : (
               <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
             )}
-            <div className="ml-1 text-[#6B7280]">
+            <div className="ml-1 text-[#64748b]">
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </div>
           </div>
@@ -203,18 +203,18 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
         {expanded && (
           <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }}
             className="overflow-hidden">
-            <div className="px-4 pb-4 border-t border-[#1F2937] pt-4 space-y-4">
+            <div className="px-4 pb-4 border-t border-[#1e2330] pt-4 space-y-4">
               <div className="grid md:grid-cols-2 gap-4">
                 {tc.where_to_test && (
                   <div>
-                    <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-1">📍 Where to Test</h4>
-                    <p className="text-xs text-[#D1D5DB] bg-[#0D1424] p-2 rounded">{tc.where_to_test}</p>
+                    <h4 className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-1">📍 Where to Test</h4>
+                    <p className="text-xs text-[#D1D5DB] bg-[#0e1018] p-2 rounded">{tc.where_to_test}</p>
                   </div>
                 )}
                 {tc.what_to_test && (
                   <div>
                     <h4 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider mb-1">🎯 What to Test</h4>
-                    <p className="text-xs text-[#D1D5DB] bg-[#0D1424] p-2 rounded">{tc.what_to_test}</p>
+                    <p className="text-xs text-[#D1D5DB] bg-[#0e1018] p-2 rounded">{tc.what_to_test}</p>
                   </div>
                 )}
               </div>
@@ -222,7 +222,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
               {tc.how_to_test && (
                 <div>
                   <h4 className="text-xs font-semibold text-green-400 uppercase tracking-wider mb-1">📋 How to Test</h4>
-                  <pre className="text-xs text-[#D1D5DB] bg-[#0D1424] p-3 rounded font-mono whitespace-pre-wrap overflow-x-auto">{replaceTarget(tc.how_to_test, applicationUrl)}</pre>
+                  <pre className="text-xs text-[#D1D5DB] bg-[#0e1018] p-3 rounded font-mono whitespace-pre-wrap overflow-x-auto">{replaceTarget(tc.how_to_test, applicationUrl)}</pre>
                 </div>
               )}
 
@@ -234,9 +234,9 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                       const resolved = replaceTarget(p, applicationUrl);
                       return (
                         <div key={i} className="flex items-center gap-2">
-                          <code className="text-xs text-[#A5F3FC] bg-[#0D1424] px-2 py-1 rounded font-mono flex-1 overflow-x-auto">{resolved}</code>
+                          <code className="text-xs text-[#A5F3FC] bg-[#0e1018] px-2 py-1 rounded font-mono flex-1 overflow-x-auto">{resolved}</code>
                           <button onClick={() => { navigator.clipboard.writeText(resolved); toast.success("Copied! Ready to paste."); }}
-                            className="text-[#6B7280] hover:text-white text-xs px-2 py-1 bg-[#1F2937] rounded shrink-0">
+                            className="text-[#64748b] hover:text-white text-xs px-2 py-1 bg-[#161922] rounded shrink-0">
                             Copy
                           </button>
                         </div>
@@ -255,16 +255,16 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                     {tc.tool_commands.map((cmd: { tool?: string; command?: string; description?: string }, i: number) => {
                       const resolvedCmd = replaceTarget(cmd.command || "", applicationUrl);
                       return (
-                        <div key={i} className="bg-[#0D1424] rounded p-2 border border-[#1F2937]">
+                        <div key={i} className="bg-[#0e1018] rounded p-2 border border-[#1e2330]">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-bold text-orange-400">{cmd.tool}</span>
                             <button onClick={() => { navigator.clipboard.writeText(resolvedCmd); toast.success("Command copied! Run in terminal."); }}
-                              className="text-xs text-[#6B7280] hover:text-white bg-[#1F2937] px-2 py-0.5 rounded">
+                              className="text-xs text-[#64748b] hover:text-white bg-[#161922] px-2 py-0.5 rounded">
                               Copy
                             </button>
                           </div>
                           <code className="text-xs text-[#A5F3FC] font-mono block overflow-x-auto whitespace-pre">{resolvedCmd}</code>
-                          {cmd.description && <p className="text-xs text-[#6B7280] mt-1">{cmd.description}</p>}
+                          {cmd.description && <p className="text-xs text-[#64748b] mt-1">{cmd.description}</p>}
                         </div>
                       );
                     })}
@@ -295,7 +295,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
               )}
 
               <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wider">📎 Evidence</h4>
+                <h4 className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider">📎 Evidence</h4>
                 <div className="flex flex-wrap gap-2">
                   {evidence.map((e, i) => (
                     <EvidenceItem
@@ -332,7 +332,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                         }
                       }}
                       disabled={uploadingEvidence} />
-                    <span className={`inline-block px-3 py-1.5 rounded border text-xs ${uploadingEvidence ? "opacity-50 cursor-not-allowed" : "border-blue-600 text-blue-400 hover:bg-blue-900/20"}`}>
+                    <span className={`inline-block px-3 py-1.5 rounded border text-xs ${uploadingEvidence ? "opacity-50 cursor-not-allowed" : "border-indigo-500 text-indigo-400 hover:bg-indigo-500/10"}`}>
                       {uploadingEvidence ? "Uploading..." : "+ Add evidence"}
                     </span>
                   </label>
@@ -340,7 +340,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
               </div>
 
               <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wider">📝 Tester Notes</h4>
+                <h4 className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider">📝 Tester Notes</h4>
                 <textarea className="input-field text-xs h-16 resize-none" placeholder="Add notes about this test case..."
                   value={notes} onChange={e => setNotes(e.target.value)} />
               </div>
@@ -460,8 +460,8 @@ export default function ProjectDetail() {
 
   const loadTestCases = async (phase: string) => {
     try {
-      const tcs = await api.getProjectTestCases(id, phase);
-      setTestCases(tcs);
+      const res = await api.getProjectTestCases(id, phase);
+      setTestCases(res.items || res);
     } catch {}
   };
 
@@ -531,8 +531,8 @@ export default function ProjectDetail() {
     loadFindings();
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-[#9CA3AF]">Loading project...</div>;
-  if (!project) return <div className="min-h-screen flex items-center justify-center text-[#9CA3AF]">Project not found</div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-[#94a3b8]">Loading project...</div>;
+  if (!project) return <div className="min-h-screen flex items-center justify-center text-[#94a3b8]">Project not found</div>;
 
   const pct = progress?.completion_pct || 0;
   const applicable = progress?.total_applicable || 0;
@@ -543,10 +543,10 @@ export default function ProjectDetail() {
       <Navbar />
 
       {/* Global progress bar */}
-      <div className="sticky top-14 z-40 bg-[#0A0F1E] border-b border-[#1F2937] px-4 py-2">
+      <div className="sticky top-14 z-40 bg-[#09090b] border-b border-[#1e2330] px-4 py-2">
         <div className="max-w-6xl mx-auto flex items-center gap-3">
-          <span className="text-xs text-[#9CA3AF] shrink-0">{pct}% Complete</span>
-          <div className="flex-1 h-2 bg-[#1F2937] rounded-full overflow-hidden">
+          <span className="text-xs text-[#94a3b8] shrink-0">{pct}% Complete</span>
+          <div className="flex-1 h-2 bg-[#161922] rounded-full overflow-hidden">
             <motion.div
               initial={{ width: 0 }}
               animate={{ width: `${pct}%` }}
@@ -556,7 +556,7 @@ export default function ProjectDetail() {
               }`}
             />
           </div>
-          <span className="text-xs text-[#9CA3AF] shrink-0">{tested}/{applicable} tested</span>
+          <span className="text-xs text-[#94a3b8] shrink-0">{tested}/{applicable} tested</span>
           {pct > 0 && (
             <motion.span
               animate={{ scale: [1, 1.08, 1] }}
@@ -573,7 +573,7 @@ export default function ProjectDetail() {
         {/* Phase sidebar */}
         <div className="w-52 shrink-0 hidden md:block">
           <div className="card p-3 sticky top-28">
-            <h3 className="text-xs text-[#9CA3AF] uppercase tracking-wider mb-3 px-1">Testing Phases</h3>
+            <h3 className="text-xs text-[#94a3b8] uppercase tracking-wider mb-3 px-1">Testing Phases</h3>
             <div className="space-y-1">
               {(progress?.phases || []).map((phase: any) => {
                 const info = PHASE_INFO[phase.phase] || { label: "Phase", color: "blue" };
@@ -585,15 +585,15 @@ export default function ProjectDetail() {
                     onClick={() => setSelectedPhase(phase.phase)}
                     className={`w-full text-left px-2 py-2 rounded text-xs transition-all ${
                       selectedPhase === phase.phase
-                        ? "bg-blue-600/20 text-blue-400 border border-blue-800"
-                        : "text-[#9CA3AF] hover:text-white hover:bg-[#1F2937]"
+                        ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/20"
+                        : "text-[#94a3b8] hover:text-white hover:bg-[#161922]"
                     }`}>
                     <div className="flex items-center justify-between mb-1">
                       <span>{info.label}</span>
                       <span className={phasePct === 100 ? "text-green-400" : ""}>{phasePct}%</span>
                     </div>
                     <div className="h-1 bg-[#374151] rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full ${phasePct === 100 ? "bg-green-500" : "bg-blue-600"}`}
+                      <div className={`h-full rounded-full ${phasePct === 100 ? "bg-green-500" : "bg-indigo-500"}`}
                         style={{ width: `${phasePct}%` }} />
                     </div>
                   </button>
@@ -609,62 +609,68 @@ export default function ProjectDetail() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h1 className="text-xl font-bold text-white">{project.application_name}</h1>
-                <p className="text-[#9CA3AF] text-sm">{project.application_url}</p>
+                <p className="text-[#94a3b8] text-sm">{project.application_url}</p>
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className="text-xs text-[#9CA3AF]">Owner: {project.app_owner_name || "—"}</span>
+                  <span className="text-xs text-[#94a3b8]">Owner: {project.app_owner_name || "—"}</span>
                   <span className="text-[#374151]">•</span>
-                  <span className="text-xs text-[#9CA3AF]">SPOC: {project.app_spoc_name || "—"}</span>
+                  <span className="text-xs text-[#94a3b8]">SPOC: {project.app_spoc_name || "—"}</span>
                   <span className="text-[#374151]">•</span>
-                  <span className="text-xs text-[#9CA3AF]">{project.testing_type}</span>
+                  <span className="text-xs text-[#94a3b8]">{project.testing_type}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <Link
                   href={`/projects/${id}/report`}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-blue-600/50 text-blue-400 hover:bg-blue-900/20 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm"
                 >
                   <FileText className="w-4 h-4" /> Live Report
                 </Link>
                 <div className="relative group">
                   <button
-                    className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#374151] text-[#9CA3AF] hover:text-white hover:border-blue-600 transition-colors text-sm"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#1e2330] text-[#94a3b8] hover:text-white hover:border-indigo-500 transition-colors text-sm"
                   >
                     <FileDown className="w-4 h-4" /> Download <ChevronDown className="w-3 h-3" />
                   </button>
-                  <div className="absolute right-0 mt-1 top-full hidden group-hover:block w-48 bg-[#0D1424] border border-[#1F2937] rounded-lg shadow-xl z-50 py-1">
+                  <div className="absolute right-0 mt-1 top-full hidden group-hover:block w-48 bg-[#0e1018] border border-[#1e2330] rounded-lg shadow-xl z-50 py-1">
                     {(["html", "pdf", "docx", "json", "csv"] as const).map((fmt) => (
                       <button
                         key={fmt}
                         onClick={async () => {
                           try {
-                            await api.downloadReport(id, fmt, `VAPT_Report_${project.application_name.replace(/\s/g, "_")}.${fmt === "html" ? "html" : fmt}`);
+                            await api.downloadReport(id, fmt, `AppSecD_Report_${project.application_name.replace(/\s/g, "_")}.${fmt === "html" ? "html" : fmt}`);
                             toast.success(`Downloaded ${fmt.toUpperCase()} report`);
                           } catch (e: any) {
                             toast.error(e.message || "Download failed");
                           }
                         }}
-                        className="w-full text-left px-3 py-2 text-sm text-[#D1D5DB] hover:bg-[#1F2937] hover:text-white transition-colors"
+                        className="w-full text-left px-3 py-2 text-sm text-[#D1D5DB] hover:bg-[#161922] hover:text-white transition-colors"
                       >
                         Download {fmt.toUpperCase()}
                       </button>
                     ))}
                   </div>
                 </div>
+                <Link
+                  href={`/projects/${id}/vulnerabilities`}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm"
+                >
+                  <ShieldCheck className="w-4 h-4" /> Vuln Management
+                </Link>
                 <button
                   onClick={openFindingsPanel}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#374151] text-[#9CA3AF] hover:text-white hover:border-blue-600 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#1e2330] text-[#94a3b8] hover:text-white hover:border-indigo-500 transition-colors text-sm"
                 >
                   <AlertTriangle className="w-4 h-4" /> Findings ({progress?.failed || 0})
                 </button>
                 <button
                   onClick={openMembersModal}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#374151] text-[#9CA3AF] hover:text-white hover:border-blue-600 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#1e2330] text-[#94a3b8] hover:text-white hover:border-indigo-500 transition-colors text-sm"
                 >
                   <Users className="w-4 h-4" /> Team
                 </button>
                 <div className="text-right">
                   <div className="text-2xl font-bold text-red-400">{progress?.failed || 0}</div>
-                  <div className="text-xs text-[#9CA3AF]">findings</div>
+                  <div className="text-xs text-[#94a3b8]">findings</div>
                 </div>
               </div>
             </div>
@@ -677,9 +683,9 @@ export default function ProjectDetail() {
                 { label: "Failed", value: progress?.failed || 0, color: "red" },
                 { label: "Not Started", value: progress?.not_started || 0, color: "gray" },
               ].map(({ label, value, color }) => (
-                <div key={label} className="text-center bg-[#0D1424] rounded-lg p-2 border border-[#1F2937]">
+                <div key={label} className="text-center bg-[#0e1018] rounded-lg p-2 border border-[#1e2330]">
                   <div className={`text-xl font-bold text-${color}-400`}>{value}</div>
-                  <div className="text-xs text-[#9CA3AF]">{label}</div>
+                  <div className="text-xs text-[#94a3b8]">{label}</div>
                 </div>
               ))}
             </div>
@@ -690,14 +696,14 @@ export default function ProjectDetail() {
             <div className="card p-4 mb-4">
               <div className="flex justify-between items-center mb-3">
                 <h3 className="font-bold text-white">Remediation Tracking</h3>
-                <button onClick={() => setShowFindings(false)} className="text-[#9CA3AF] hover:text-white">×</button>
+                <button onClick={() => setShowFindings(false)} className="text-[#94a3b8] hover:text-white">×</button>
               </div>
               <div className="space-y-2">
                 {findings.map((f) => (
-                  <div key={f.id} className="flex items-center gap-3 p-3 bg-[#0D1424] rounded border border-[#1F2937]">
+                  <div key={f.id} className="flex items-center gap-3 p-3 bg-[#0e1018] rounded border border-[#1e2330]">
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-white truncate">{f.title}</div>
-                      <div className="text-xs text-[#9CA3AF]">{f.severity} • {f.affected_url || "-"}</div>
+                      <div className="text-xs text-[#94a3b8]">{f.severity} • {f.affected_url || "-"}</div>
                     </div>
                     <select
                       value={f.status || "open"}
@@ -726,14 +732,14 @@ export default function ProjectDetail() {
                           toast.error(err.message || "JIRA integration not configured");
                         }
                       }}
-                      className="text-xs px-2 py-1 rounded border border-[#374151] text-[#9CA3AF] hover:text-blue-400 hover:border-blue-600 transition-colors"
+                      className="text-xs px-2 py-1 rounded border border-[#1e2330] text-[#94a3b8] hover:text-indigo-400 hover:border-indigo-500 transition-colors"
                       title="Create JIRA issue"
                     >
                       JIRA
                     </button>
                   </div>
                 ))}
-                {findings.length === 0 && <p className="text-[#9CA3AF] text-sm">No findings yet</p>}
+                {findings.length === 0 && <p className="text-[#94a3b8] text-sm">No findings yet</p>}
               </div>
             </div>
           )}
@@ -747,8 +753,8 @@ export default function ProjectDetail() {
                   onClick={() => setSelectedPhase(phase.phase)}
                   className={`shrink-0 px-3 py-1.5 rounded text-xs transition-all ${
                     selectedPhase === phase.phase
-                      ? "bg-blue-600 text-white"
-                      : "bg-[#111827] text-[#9CA3AF] border border-[#1F2937]"
+                      ? "bg-indigo-500 text-white"
+                      : "bg-[#0e1018] text-[#94a3b8] border border-[#1e2330]"
                   }`}>
                   {info.label}
                 </button>
@@ -765,7 +771,7 @@ export default function ProjectDetail() {
                   <h2 className="text-lg font-bold text-white capitalize">
                     {selectedPhase.replace("_", "-")} Testing
                   </h2>
-                  <span className="text-xs text-[#9CA3AF]">
+                  <span className="text-xs text-[#94a3b8]">
                     ({testCases.filter(t => !showPassedNa ? !["passed", "na"].includes(t.result_status) : true).length} to do
                     {!showPassedNa && (() => {
                       const hidden = testCases.filter(t => ["passed", "na"].includes(t.result_status)).length;
@@ -775,14 +781,14 @@ export default function ProjectDetail() {
                 </div>
                 <button
                   onClick={() => setShowPassedNa(!showPassedNa)}
-                  className="text-xs px-3 py-1.5 rounded border border-[#374151] text-[#9CA3AF] hover:text-white hover:border-blue-600 transition-colors"
+                  className="text-xs px-3 py-1.5 rounded border border-[#1e2330] text-[#94a3b8] hover:text-white hover:border-indigo-500 transition-colors"
                 >
                   {showPassedNa ? "🙈 Hide passed/NA" : "👁 Show passed/NA"}
                 </button>
               </div>
 
               {testCases.length === 0 ? (
-                <div className="card p-8 text-center text-[#9CA3AF]">
+                <div className="card p-8 text-center text-[#94a3b8]">
                   No test cases in this phase
                 </div>
               ) : (
@@ -815,12 +821,12 @@ export default function ProjectDetail() {
       {/* Team modal */}
       {showMembers && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setShowMembers(false)}>
-          <div className="bg-[#0D1424] border border-[#1F2937] rounded-lg max-w-lg w-full max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-[#1F2937]">
+          <div className="bg-[#0e1018] border border-[#1e2330] rounded-lg max-w-lg w-full max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-[#1e2330]">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Users className="w-5 h-5 text-blue-400" /> Project Team
+                <Users className="w-5 h-5 text-indigo-400" /> Project Team
               </h2>
-              <button onClick={() => setShowMembers(false)} className="text-[#9CA3AF] hover:text-white"
+              <button onClick={() => setShowMembers(false)} className="text-[#94a3b8] hover:text-white"
                 ><X className="w-5 h-5" /></button>
             </div>
             <div className="p-4 overflow-y-auto max-h-[calc(90vh-8rem)]">
@@ -830,18 +836,18 @@ export default function ProjectDetail() {
                 </div>
               )}
               {membersLoading ? (
-                <div className="text-center text-[#9CA3AF] py-8">Loading...</div>
+                <div className="text-center text-[#94a3b8] py-8">Loading...</div>
               ) : (
                 <>
                   <div className="space-y-2 mb-6">
                     {members.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between p-3 rounded bg-[#111827] border border-[#1F2937]">
+                      <div key={m.id} className="flex items-center justify-between p-3 rounded bg-[#0e1018] border border-[#1e2330]">
                         <div>
                           <div className="font-medium text-white">{m.full_name || m.username}</div>
-                          <div className="text-xs text-[#9CA3AF]">@{m.username} · {m.role}</div>
+                          <div className="text-xs text-[#94a3b8]">@{m.username} · {m.role}</div>
                           <div className="flex gap-2 mt-1 flex-wrap">
                             {m.can_read && <span className="text-xs text-green-400">read</span>}
-                            {m.can_write && <span className="text-xs text-blue-400">write</span>}
+                            {m.can_write && <span className="text-xs text-indigo-400">write</span>}
                             {m.can_download_report && <span className="text-xs text-purple-400">report</span>}
                             {m.can_manage_members && <span className="text-xs text-orange-400">manage</span>}
                           </div>
@@ -860,7 +866,7 @@ export default function ProjectDetail() {
                     <form onSubmit={handleAddMember} className="space-y-2">
                       <h3 className="text-sm font-semibold text-white">Add member</h3>
                       {users.length === 0 ? (
-                        <p className="text-xs text-[#9CA3AF]">All users are already members.</p>
+                        <p className="text-xs text-[#94a3b8]">All users are already members.</p>
                       ) : (
                       <div className="flex gap-2">
                         <select

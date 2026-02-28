@@ -16,7 +16,7 @@ const API = getApiBase();
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("vapt_token");
+  return localStorage.getItem("appsecdtoken");
 }
 
 async function request(path: string, opts: RequestInit = {}): Promise<any> {
@@ -44,11 +44,11 @@ export const api = {
   register: (data: object) =>
     request("/auth/register", { method: "POST", body: JSON.stringify(data) }),
   me: () => request("/auth/me"),
-  users: () => request("/auth/users"),
+  users: (orgId?: string) => request(`/auth/users${orgId ? `?org_id=${orgId}` : ""}`),
   assignableUsers: () => request("/auth/users/assignable"),
-  createUser: (data: { email: string; username: string; full_name: string; password: string; role?: string }) =>
+  createUser: (data: { email: string; username: string; full_name: string; password: string; role?: string; organization_id?: string }) =>
     request("/auth/users", { method: "POST", body: JSON.stringify(data) }),
-  updateUser: (userId: string, data: { email?: string; username?: string; full_name?: string; role?: string; is_active?: boolean; xp_points?: number; level?: number }) =>
+  updateUser: (userId: string, data: { email?: string; username?: string; full_name?: string; role?: string; organization_id?: string; is_active?: boolean; xp_points?: number; level?: number }) =>
     request(`/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(data) }),
   updateUserPassword: (userId: string, password: string) =>
     request(`/auth/users/${userId}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
@@ -118,7 +118,7 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename || `VAPT_Report.${format === "html" ? "html" : format}`;
+    a.download = filename || `AppSecD_Report.${format === "html" ? "html" : format}`;
     a.click();
     URL.revokeObjectURL(url);
   },
@@ -145,6 +145,9 @@ export const api = {
     request(`/findings/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   createJiraIssue: (findingId: string, projectKey?: string) =>
     request(`/findings/${findingId}/jira${projectKey ? `?project_key=${projectKey}` : ""}`, { method: "POST" }),
+  getVulnSummary: (projectId: string) => request(`/findings/project/${projectId}/summary`),
+  updateRecheckStatus: (findingId: string, data: object) =>
+    request(`/findings/${findingId}/recheck`, { method: "PATCH", body: JSON.stringify(data) }),
 
   // Badges
   badges: () => request("/badges"),
@@ -154,15 +157,28 @@ export const api = {
     request("/ai-assist/suggest", { method: "POST", body: JSON.stringify(data) }),
 
   // Admin settings (integration status, LLM config)
-  getSettingsStatus: () => request("/admin/settings"),
-  updateLlmSettings: (data: { model: string; api_key?: string }) =>
-    request("/admin/settings/llm", { method: "PUT", body: JSON.stringify(data) }),
+  getSettingsStatus: (orgId?: string) => request(`/admin/settings${orgId ? `?org_id=${orgId}` : ""}`),
+  updateLlmSettings: (data: { provider?: string; model: string; api_key?: string }, orgId?: string) =>
+    request(`/admin/settings/llm${orgId ? `?org_id=${orgId}` : ""}`, { method: "PUT", body: JSON.stringify(data) }),
+  updateJiraSettings: (data: { base_url: string; email: string; api_token: string; project_key: string }, orgId?: string) =>
+    request(`/admin/settings/jira${orgId ? `?org_id=${orgId}` : ""}`, { method: "PUT", body: JSON.stringify(data) }),
 
-  // Audit (admin)
-  auditLogs: (params?: { limit?: number; offset?: number; action?: string }) => {
-    const q = new URLSearchParams(params as Record<string, string>).toString();
+  // Organizations
+  listOrganizations: () => request("/organizations"),
+  createOrganization: (data: { name: string; slug?: string }) =>
+    request("/organizations", { method: "POST", body: JSON.stringify(data) }),
+
+  // Audit (admin+ access)
+  auditLogs: (params?: Record<string, string | number | undefined>) => {
+    const clean: Record<string, string> = {};
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== "") clean[k] = String(v); });
+    }
+    const q = new URLSearchParams(clean).toString();
     return request(`/audit${q ? `?${q}` : ""}`);
   },
+  auditStats: (days?: number) =>
+    request(`/audit/stats${days ? `?days=${days}` : ""}`),
 
   // Payloads
   payloadCategories: () => request("/payloads/categories"),

@@ -1,5 +1,5 @@
-"""Security finding model."""
-from sqlalchemy import Column, String, Text, DateTime, Date, ForeignKey
+"""Security finding model with vulnerability management."""
+from sqlalchemy import Column, String, Text, DateTime, Date, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from datetime import datetime
 import uuid
@@ -35,3 +35,16 @@ class Finding(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Vulnerability Management / Recheck fields
+    recheck_status = Column(String(30), default="pending")
+    # pending, resolved, not_fixed, partially_fixed, exception, deferred, retest_needed
+    recheck_notes = Column(Text, nullable=True)
+    recheck_date = Column(DateTime, nullable=True)
+    recheck_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    recheck_evidence = Column(JSONB, default=list)  # [{filename, url}]
+    original_severity = Column(String(20), nullable=True)  # preserve original severity
+    recheck_count = Column(Integer, default=0)  # how many times rechecked
+    remediation_deadline = Column(Date, nullable=True)
+    remediation_owner = Column(Text, nullable=True)  # dev team / person responsible
+    recheck_history = Column(JSONB, default=list)  # [{date, status, notes, by}]

@@ -139,7 +139,35 @@ python scripts/seed_db.py
 
 ---
 
-## 9. Run Application
+## 9. Payload & Test Case Import (Required for Full Setup)
+
+After migrations and seed, populate PostgreSQL with payloads, wordlists, and OWASP WSTG test cases:
+
+```bash
+cd /opt/navigator/backend
+source venv/bin/activate
+
+# 1. Import PayloadsAllTheThings + SecLists (requires data/PayloadsAllTheThings and data/SecLists)
+python scripts/import_payloads_seclists.py
+
+# 2. Clone and import extra sources (FuzzDB, XSS, SQLi, Nuclei, WSTG, Intruder, etc.)
+python scripts/sync_all_payloads.py
+
+# 3. Import OWASP WSTG test cases into test_cases table
+python scripts/import_wstg_test_cases.py
+```
+
+**Or run all at once (single script):**
+
+```bash
+cd /opt/navigator/backend && source venv/bin/activate && python scripts/setup_payloads.py
+```
+
+See `docs/PAYLOAD_SYNC.md` for details.
+
+---
+
+## 10. Run Application
 
 ### Option A: PM2 (Recommended)
 
@@ -175,7 +203,7 @@ NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:5001 npm run dev
 
 ---
 
-## 10. Ports Used by Navigator
+## 11. Ports Used by Navigator
 
 | Service    | Port | Notes                    |
 |-----------|------|--------------------------|
@@ -184,7 +212,7 @@ NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:5001 npm run dev
 | PostgreSQL| 5433 | Docker (host mapping)    |
 | Redis     | 6379 | Shared (existing)        |
 
-## 11. Docker Containers (Navigator Only)
+## 12. Docker Containers (Navigator Only)
 
 ```bash
 # PostgreSQL for Navigator
@@ -212,7 +240,8 @@ When moving to a new server:
 7. [ ] Run `npm install` in frontend
 8. [ ] Run `alembic upgrade head`
 9. [ ] Run `python scripts/seed_db.py`
-10. [ ] Start backend and frontend
+10. [ ] Run payload import: `import_payloads_seclists.py`, `sync_all_payloads.py`, `import_wstg_test_cases.py`
+11. [ ] Start backend and frontend
 
 ---
 

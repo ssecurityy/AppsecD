@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/1"
 
     # App
-    app_name: str = "VAPT Navigator"
+    app_name: str = "AppSecD"
     debug: bool = False
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_project_key: str = ""
 
-    # AI Assist — LLM mode (optional; when set, uses OpenAI instead of rule-based)
+    # AI Assist — LLM mode (optional; when set, uses LLM instead of rule-based)
     openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    google_api_key: str = ""
 
     class Config:
         env_file = ".env"
