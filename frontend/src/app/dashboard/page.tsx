@@ -32,7 +32,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     api.listProjects()
-      .then(setProjects)
+      .then((r: any) => setProjects(r?.items ?? (Array.isArray(r) ? r : [])))
       .catch(() => {})
       .finally(() => setLoading(false));
 
@@ -63,7 +63,7 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#09090b]">
+    <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
       <div className="max-w-7xl mx-auto p-6 space-y-6">
         {/* Welcome banner */}
@@ -71,13 +71,13 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          className="relative overflow-hidden rounded-2xl border border-[#1e2330] p-6"
-          style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.04) 50%, rgba(14,16,24,1) 100%)" }}
+          className="relative overflow-hidden rounded-2xl border p-6"
+          style={{ borderColor: "var(--border-subtle)", background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.04) 50%, rgba(14,16,24,1) 100%)" }}
         >
           <div className="absolute top-0 right-0 w-[400px] h-[200px] bg-indigo-500/5 rounded-full blur-[80px]" />
           <div className="relative flex items-center justify-between">
             <div>
-              <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+              <h1 className="text-xl font-bold tracking-tight flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
                 Welcome back, {user?.full_name || "Tester"}
                 {isSuperAdmin(user?.role) && (
                   <span className="text-xs text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -90,7 +90,7 @@ export default function Dashboard() {
                   </span>
                 )}
               </h1>
-              <p className="text-[#64748b] mt-1 text-sm">
+              <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
                 {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
               </p>
               {user?.streak_days && user.streak_days > 0 ? (
@@ -101,13 +101,13 @@ export default function Dashboard() {
             </div>
             <div className="text-right hidden sm:block">
               <div className="text-3xl font-bold gradient-text tabular-nums">{user?.xp_points || 0}</div>
-              <div className="text-[#64748b] text-xs font-medium mt-0.5 flex items-center gap-1 justify-end">
+              <div className="text-xs font-medium mt-0.5 flex items-center gap-1 justify-end" style={{ color: "var(--text-muted)" }}>
                 <Zap className="w-3 h-3 text-indigo-400" /> XP &middot; Level {user?.level || 1}
               </div>
               {user?.badges && user.badges.length > 0 && (
                 <div className="flex items-center gap-1 mt-1 justify-end">
                   <Award className="w-3 h-3 text-amber-400" />
-                  <span className="text-[10px] text-[#64748b]">{user.badges.length} badge{user.badges.length !== 1 ? "s" : ""}</span>
+                  <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>{user.badges.length} badge{user.badges.length !== 1 ? "s" : ""}</span>
                 </div>
               )}
             </div>
@@ -137,10 +137,10 @@ export default function Dashboard() {
               className={`card p-5 ${borderColor} bg-gradient-to-br ${gradient}`}>
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-[#64748b] text-xs font-medium tracking-wide uppercase">{label}</p>
-                  <p className="text-2xl font-bold text-white mt-2 tabular-nums">{value}</p>
+                  <p className="text-xs font-medium tracking-wide uppercase" style={{ color: "var(--text-muted)" }}>{label}</p>
+                  <p className="text-2xl font-bold mt-2 tabular-nums" style={{ color: "var(--text-primary)" }}>{value}</p>
                 </div>
-                <div className={`w-9 h-9 rounded-xl bg-[#0e1018] flex items-center justify-center ${iconColor}`}>
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${iconColor}`} style={{ background: "var(--bg-card)" }}>
                   <Icon className="w-4 h-4" />
                 </div>
               </div>
@@ -154,7 +154,7 @@ export default function Dashboard() {
             className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Organizations */}
             <div className="card p-5 border-emerald-500/10">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2 mb-3" style={{ color: "var(--text-primary)" }}>
                 <Building2 className="w-4 h-4 text-emerald-400" /> Organizations ({orgs.length})
               </h3>
               <div className="space-y-2">
@@ -167,9 +167,9 @@ export default function Dashboard() {
                         <div className="w-6 h-6 rounded bg-emerald-500/10 flex items-center justify-center text-emerald-400 text-[10px] font-bold">
                           {o.name[0].toUpperCase()}
                         </div>
-                        <span className="text-sm text-white">{o.name}</span>
+                        <span className="text-sm" style={{ color: "var(--text-primary)" }}>{o.name}</span>
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-[#64748b]">
+                      <div className="flex items-center gap-3 text-xs" style={{ color: "var(--text-muted)" }}>
                         <span>{orgProjects.length} projects</span>
                         <span>{orgUsers_.length} users</span>
                       </div>
@@ -181,25 +181,25 @@ export default function Dashboard() {
 
             {/* Platform Stats */}
             <div className="card p-5 border-indigo-500/10">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2 mb-3" style={{ color: "var(--text-primary)" }}>
                 <BarChart3 className="w-4 h-4 text-indigo-400" /> Platform Overview
               </h3>
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
-                  <p className="text-xl font-bold text-white tabular-nums">{users.length}</p>
-                  <p className="text-[10px] text-[#64748b] uppercase">Total Users</p>
+                <div className="rounded-lg p-3 text-center" style={{ background: "var(--bg-card)" }}>
+                  <p className="text-xl font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{users.length}</p>
+                  <p className="text-[10px] uppercase" style={{ color: "var(--text-muted)" }}>Total Users</p>
                 </div>
-                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
-                  <p className="text-xl font-bold text-white tabular-nums">{orgs.length}</p>
-                  <p className="text-[10px] text-[#64748b] uppercase">Organizations</p>
+                <div className="rounded-lg p-3 text-center" style={{ background: "var(--bg-card)" }}>
+                  <p className="text-xl font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{orgs.length}</p>
+                  <p className="text-[10px] uppercase" style={{ color: "var(--text-muted)" }}>Organizations</p>
                 </div>
-                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
-                  <p className="text-xl font-bold text-white tabular-nums">{stats.review}</p>
-                  <p className="text-[10px] text-[#64748b] uppercase">In Review</p>
+                <div className="rounded-lg p-3 text-center" style={{ background: "var(--bg-card)" }}>
+                  <p className="text-xl font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{stats.review}</p>
+                  <p className="text-[10px] uppercase" style={{ color: "var(--text-muted)" }}>In Review</p>
                 </div>
-                <div className="bg-[#0e1018] rounded-lg p-3 text-center">
-                  <p className="text-xl font-bold text-white tabular-nums">{stats.draft}</p>
-                  <p className="text-[10px] text-[#64748b] uppercase">Draft</p>
+                <div className="rounded-lg p-3 text-center" style={{ background: "var(--bg-card)" }}>
+                  <p className="text-xl font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{stats.draft}</p>
+                  <p className="text-[10px] uppercase" style={{ color: "var(--text-muted)" }}>Draft</p>
                 </div>
               </div>
             </div>
@@ -209,15 +209,15 @@ export default function Dashboard() {
         {/* Severity breakdown */}
         {stats.findings > 0 && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-            className="card p-5 border-[#1e2330]">
+            className="card p-5" style={{ borderColor: "var(--border-subtle)" }}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
                 <TrendingUp className="w-4 h-4 text-indigo-400" />
                 Vulnerability Distribution
               </h3>
-              <span className="text-xs text-[#64748b]">{stats.findings} total findings</span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stats.findings} total findings</span>
             </div>
-            <div className="flex gap-1 h-2.5 rounded-full overflow-hidden bg-[#161922]">
+            <div className="flex gap-1 h-2.5 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
               {(() => {
                 const sevCounts: Record<string, number> = {};
                 projects.forEach(p => {
@@ -237,7 +237,7 @@ export default function Dashboard() {
             </div>
             <div className="flex gap-4 mt-3">
               {["critical", "high", "medium", "low", "info"].map(sev => (
-                <div key={sev} className="flex items-center gap-1.5 text-[11px] text-[#64748b]">
+                <div key={sev} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
                   <div className={`w-2 h-2 rounded-full ${SEVERITY_COLORS[sev]}`} />
                   <span className="capitalize">{sev}</span>
                 </div>
@@ -249,8 +249,8 @@ export default function Dashboard() {
         {/* Projects */}
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <FolderOpen className="w-4 h-4 text-[#64748b]" /> Projects
+            <h2 className="text-base font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+              <FolderOpen className="w-4 h-4" style={{ color: "var(--text-muted)" }} /> Projects
             </h2>
             <Link href="/projects/new" className="btn-primary flex items-center gap-2 text-xs py-2 px-4">
               <Plus className="w-3.5 h-3.5" /> New Project
@@ -265,11 +265,11 @@ export default function Dashboard() {
             </div>
           ) : projects.length === 0 ? (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className="card p-16 text-center border-dashed border-[#1e2330]">
+              className="card p-16 text-center border-dashed" style={{ borderColor: "var(--border-subtle)" }}>
               <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center mx-auto mb-4">
                 <ShieldCheck className="w-7 h-7 text-indigo-400" />
               </div>
-              <p className="text-[#94a3b8] text-sm">No projects yet. Start your first security assessment.</p>
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No projects yet. Start your first security assessment.</p>
               <Link href="/projects/new" className="btn-primary inline-flex items-center gap-2 mt-5 text-xs">
                 <Plus className="w-3.5 h-3.5" /> Create Project
               </Link>
@@ -290,7 +290,7 @@ export default function Dashboard() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-white text-sm group-hover:text-indigo-300 transition-colors truncate">
+                          <span className="font-medium text-sm group-hover:text-indigo-300 transition-colors truncate" style={{ color: "var(--text-primary)" }}>
                             {p.application_name}
                           </span>
                           <span className={`status-pill ${
@@ -309,7 +309,7 @@ export default function Dashboard() {
                         </div>
                         <div className="mt-2 flex items-center gap-3">
                           <div className="flex-1">
-                            <div className="h-1.5 bg-[#161922] rounded-full overflow-hidden">
+                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
                               <motion.div
                                 initial={{ width: 0 }}
                                 animate={{ width: `${pct}%` }}
@@ -320,7 +320,7 @@ export default function Dashboard() {
                               />
                             </div>
                           </div>
-                          <span className="text-[11px] text-[#64748b] tabular-nums shrink-0">{pct}%</span>
+                          <span className="text-[11px] tabular-nums shrink-0" style={{ color: "var(--text-muted)" }}>{pct}%</span>
                         </div>
                       </div>
                       <div className="text-right shrink-0 hidden sm:block">

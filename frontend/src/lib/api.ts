@@ -41,6 +41,8 @@ export const api = {
   // Auth
   login: (username: string, password: string) =>
     request("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  mfaCompleteLogin: (mfaToken: string, code: string) =>
+    request("/mfa/complete-login", { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code }) }),
   register: (data: object) =>
     request("/auth/register", { method: "POST", body: JSON.stringify(data) }),
   me: () => request("/auth/me"),
@@ -56,7 +58,10 @@ export const api = {
   // Projects
   createProject: (data: object) =>
     request("/projects", { method: "POST", body: JSON.stringify(data) }),
-  listProjects: () => request("/projects"),
+  listProjects: (params?: { limit?: number; offset?: number }) => {
+    const q = params ? `?limit=${params.limit ?? 50}&offset=${params.offset ?? 0}` : "";
+    return request(`/projects${q}`);
+  },
   getProject: (id: string) => request(`/projects/${id}`),
   updateProject: (id: string, data: object) =>
     request(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
@@ -140,7 +145,14 @@ export const api = {
   // Findings
   createFinding: (data: object) =>
     request("/findings", { method: "POST", body: JSON.stringify(data) }),
-  getFindings: (projectId: string) => request(`/findings/project/${projectId}`),
+  getFindings: (projectId: string, params?: { limit?: number; offset?: number; severity?: string; recheck_status?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    if (params?.severity) q.set("severity", params.severity);
+    if (params?.recheck_status) q.set("recheck_status", params.recheck_status);
+    return request(`/findings/project/${projectId}${q.toString() ? `?${q}` : ""}`);
+  },
   updateFinding: (id: string, data: object) =>
     request(`/findings/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   createJiraIssue: (findingId: string, projectKey?: string) =>
@@ -179,6 +191,36 @@ export const api = {
   },
   auditStats: (days?: number) =>
     request(`/audit/stats${days ? `?days=${days}` : ""}`),
+
+  // User management
+  deleteUser: (userId: string) =>
+    request(`/auth/users/${userId}`, { method: "DELETE" }),
+
+  // MFA
+  mfaSetup: () => request("/mfa/setup"),
+  mfaSetupWithToken: (mfaToken: string) =>
+    request("/mfa/setup-with-token", { method: "POST", body: JSON.stringify({ mfa_token: mfaToken }) }),
+  mfaCompleteSetup: (mfaToken: string, code: string) =>
+    request("/mfa/complete-setup", { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code }) }),
+  mfaVerify: (code: string) =>
+    request("/mfa/verify", { method: "POST", body: JSON.stringify({ code }) }),
+  mfaDisable: (code: string) =>
+    request("/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
+  mfaStatus: () => request("/mfa/status"),
+  mfaAdminEnableForUser: (userId: string, enable: boolean) =>
+    request("/mfa/admin/enable-for-user", { method: "POST", body: JSON.stringify({ user_id: userId, enable }) }),
+  mfaAdminResetForUser: (userId: string) =>
+    request("/mfa/admin/reset-mfa", { method: "POST", body: JSON.stringify({ user_id: userId }) }),
+
+  // Notification settings
+  getNotificationSettings: (orgId?: string) =>
+    request(`/admin/settings/notifications${orgId ? `?org_id=${orgId}` : ""}`),
+  updateNotificationSettings: (data: object, orgId?: string) =>
+    request(`/admin/settings/notifications${orgId ? `?org_id=${orgId}` : ""}`, { method: "PUT", body: JSON.stringify(data) }),
+  testSlackNotification: (orgId?: string) =>
+    request(`/admin/settings/notifications/test-slack${orgId ? `?org_id=${orgId}` : ""}`, { method: "POST" }),
+  testSmtpNotification: (orgId?: string) =>
+    request(`/admin/settings/notifications/test-smtp${orgId ? `?org_id=${orgId}` : ""}`, { method: "POST" }),
 
   // Payloads
   payloadCategories: () => request("/payloads/categories"),

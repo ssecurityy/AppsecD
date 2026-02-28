@@ -12,6 +12,7 @@ from app.services.audit_service import log_audit
 require_tester_plus = require_roles(get_current_user, "super_admin", "admin", "lead", "tester")
 from app.models.user import User
 from app.models.finding import Finding
+from app.models.project import Project
 from app.schemas.result import FindingCreate
 from datetime import datetime
 
@@ -134,30 +135,76 @@ async def create_finding(
     await log_audit(db, "create_finding", user_id=str(current_user.id), resource_type="finding", resource_id=str(finding.id), details={"project_id": str(payload.project_id), "severity": payload.severity})
     await db.commit()
     await db.refresh(finding)
+
+    # Fire notifications for critical/high (non-blocking)
+    if payload.severity and payload.severity.lower() in ("critical", "high"):
+        proj_result = await db.execute(select(Project).where(Project.id == payload.project_id))
+        proj = proj_result.scalar_one_or_none()
+        proj_name = proj.application_name or proj.name if proj else "Unknown"
+        from app.services.notification_service import notify_critical_finding
+        import asyncio
+        asyncio.create_task(notify_critical_finding(
+            project_name=proj_name,
+            finding_title=payload.title or "Security Finding",
+            severity=payload.severity,
+            finding_id=str(finding.id),
+            project_id=str(payload.project_id),
+        ))
+
     return {**f_to_dict(finding), "xp_earned": xp, "badges_earned": new_badges}
 
 
-@router.get("/project/{project_id}", response_model=list)
+@router.get("/project/{project_id}", response_model=dict)
 async def get_findings(
     project_id: str,
-    recheck_status: str = Query(None, description="Filter by recheck status"),
-    severity: str = Query(None, description="Filter by severity"),
+    recheck_status: str = Query(None),
+    severity: str = Query(None),
+    status: str = Query(None, description="Filter by finding status (open, confirmed, mitigated, fixed)"),
+    date_from: str = Query(None, description="YYYY-MM-DD"),
+    date_to: str = Query(None, description="YYYY-MM-DD"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
-    query = (
+    from sqlalchemy import and_, func
+    from datetime import datetime
+
+    base = (
         select(Finding)
         .where(Finding.project_id == project_id)
         .order_by(Finding.created_at.desc())
     )
+    conditions = []
     if recheck_status:
-        query = query.where(Finding.recheck_status == recheck_status)
+        conditions.append(Finding.recheck_status == recheck_status)
     if severity:
-        query = query.where(Finding.severity == severity)
+        conditions.append(Finding.severity == severity)
+    if status:
+        conditions.append(Finding.status == status)
+    if date_from:
+        try:
+            conditions.append(Finding.created_at >= datetime.strptime(date_from, "%Y-%m-%d"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            from datetime import timedelta
+            end = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59) + timedelta(days=1)
+            conditions.append(Finding.created_at < end)
+        except ValueError:
+            pass
+    if conditions:
+        base = base.where(and_(*conditions))
+
+    count_q = select(func.count()).select_from(base.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+    query = base.limit(limit).offset(offset)
     result = await db.execute(query)
-    return [f_to_dict(f) for f in result.scalars().all()]
+    items = [f_to_dict(f) for f in result.scalars().all()]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/project/{project_id}/summary", response_model=dict)

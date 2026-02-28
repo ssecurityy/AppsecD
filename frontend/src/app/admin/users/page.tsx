@@ -8,7 +8,7 @@ import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
   UserPlus, Shield, Crown, Building2, Search, Edit2, Check, X,
-  Users, Eye, Key, ToggleLeft, ToggleRight, ChevronDown, Plus
+  Users, Key, ToggleLeft, ToggleRight, Trash2, ShieldCheck, ShieldOff, RefreshCw
 } from "lucide-react";
 
 const ROLE_COLORS: Record<string, string> = {
@@ -42,6 +42,8 @@ export default function AdminUsersPage() {
   const [editRole, setEditRole] = useState("");
   const [editOrg, setEditOrg] = useState("");
   const [editActive, setEditActive] = useState(true);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmResetMfa, setConfirmResetMfa] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     email: "", username: "", full_name: "", password: "", role: "tester", organization_id: "",
@@ -50,20 +52,15 @@ export default function AdminUsersPage() {
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
-    if (user && !isAdmin(user.role)) {
-      router.replace("/dashboard");
-    }
+    if (user && !isAdmin(user.role)) router.replace("/dashboard");
   }, [user, router]);
 
   const loadUsers = async () => {
     try {
       const list = await api.users();
       setUsers(list);
-    } catch (e: any) {
-      toast.error(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { toast.error(e.message); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
@@ -83,9 +80,7 @@ export default function AdminUsersPage() {
       setForm({ email: "", username: "", full_name: "", password: "", role: "tester", organization_id: "" });
       setShowForm(false);
       loadUsers();
-    } catch (e: any) {
-      toast.error(e.message);
-    }
+    } catch (e: any) { toast.error(e.message); }
   };
 
   const handleCreateOrg = async (e: React.FormEvent) => {
@@ -96,9 +91,7 @@ export default function AdminUsersPage() {
       setOrgForm({ name: "", slug: "" });
       setShowOrgForm(false);
       api.listOrganizations().then(setOrgs).catch(() => {});
-    } catch (e: any) {
-      toast.error(e.message);
-    }
+    } catch (e: any) { toast.error(e.message); }
   };
 
   const handleEditUser = async (userId: string) => {
@@ -109,9 +102,7 @@ export default function AdminUsersPage() {
       toast.success("User updated");
       setEditingUser(null);
       loadUsers();
-    } catch (e: any) {
-      toast.error(e.message);
-    }
+    } catch (e: any) { toast.error(e.message); }
   };
 
   const handleResetPassword = async (userId: string) => {
@@ -123,9 +114,33 @@ export default function AdminUsersPage() {
     try {
       await api.updateUserPassword(userId, pwd);
       toast.success("Password reset successfully");
-    } catch (e: any) {
-      toast.error(e.message);
-    }
+    } catch (e: any) { toast.error(e.message); }
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      await api.deleteUser(userId);
+      toast.success("User deleted");
+      setConfirmDelete(null);
+      loadUsers();
+    } catch (e: any) { toast.error(e.message); }
+  };
+
+  const handleToggleMfa = async (userId: string, currentlyEnabled: boolean) => {
+    try {
+      await api.mfaAdminEnableForUser(userId, !currentlyEnabled);
+      toast.success(`MFA ${!currentlyEnabled ? "enabled — user will set up on next login" : "disabled"}`);
+      loadUsers();
+    } catch (e: any) { toast.error(e.message); }
+  };
+
+  const handleResetMfa = async (userId: string) => {
+    try {
+      await api.mfaAdminResetForUser(userId);
+      toast.success("MFA reset — user will set up a new authenticator on next login");
+      setConfirmResetMfa(null);
+      loadUsers();
+    } catch (e: any) { toast.error(e.message); }
   };
 
   const startEdit = (u: any) => {
@@ -151,18 +166,18 @@ export default function AdminUsersPage() {
   if (!user || !isAdmin(user.role)) return null;
 
   return (
-    <div className="min-h-screen bg-[#09090b]">
+    <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between">
+          className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-xl font-bold text-white flex items-center gap-2">
+            <h1 className="text-xl font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
               <Shield className="w-5 h-5 text-indigo-400" /> User Management
               {isSuperAdmin(user.role) && <span className="text-[10px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full">All Orgs</span>}
             </h1>
-            <p className="text-sm text-[#64748b] mt-1">
+            <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>
               {isSuperAdmin(user.role) ? "Manage users across all organizations" : "Manage users in your organization"}
             </p>
           </div>
@@ -186,10 +201,10 @@ export default function AdminUsersPage() {
             const count = users.filter(u => u.role === role).length;
             return (
               <motion.div key={role} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                className="card p-3 text-center cursor-pointer hover:border-indigo-500/20 transition-all"
+                className="card p-3 text-center cursor-pointer transition-all"
                 onClick={() => setFilterRole(filterRole === role ? "" : role)}>
-                <p className="text-2xl font-bold text-white tabular-nums">{count}</p>
-                <p className={`text-xs font-medium mt-0.5 ${ROLE_COLORS[role]?.split(" ")[0] || "text-[#64748b]"}`}>
+                <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--text-primary)" }}>{count}</p>
+                <p className={`text-xs font-medium mt-0.5 ${ROLE_COLORS[role]?.split(" ")[0] || ""}`}>
                   {ROLE_LABELS[role]}
                 </p>
               </motion.div>
@@ -201,13 +216,13 @@ export default function AdminUsersPage() {
         {showOrgForm && isSuperAdmin(user.role) && (
           <motion.form initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
             onSubmit={handleCreateOrg} className="card p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
               <Building2 className="w-4 h-4 text-emerald-400" /> New Organization
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <input className="input-field py-2 text-sm" placeholder="Organization name" required
                 value={orgForm.name} onChange={e => setOrgForm({ ...orgForm, name: e.target.value })} />
-              <input className="input-field py-2 text-sm" placeholder="Slug (auto-generated if empty)"
+              <input className="input-field py-2 text-sm" placeholder="Slug (auto if empty)"
                 value={orgForm.slug} onChange={e => setOrgForm({ ...orgForm, slug: e.target.value })} />
               <div className="flex gap-2">
                 <button type="submit" className="btn-primary text-sm flex-1">Create</button>
@@ -221,7 +236,7 @@ export default function AdminUsersPage() {
         {showForm && (
           <motion.form initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
             onSubmit={handleCreate} className="card p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
               <UserPlus className="w-4 h-4 text-indigo-400" /> New User
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -235,9 +250,7 @@ export default function AdminUsersPage() {
                 value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
               <select className="input-field py-2 text-sm" value={form.role}
                 onChange={e => setForm({ ...form, role: e.target.value })}>
-                {availableRoles.map(r => (
-                  <option key={r} value={r}>{ROLE_LABELS[r]}</option>
-                ))}
+                {availableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
               </select>
               {isSuperAdmin(user.role) && (
                 <select className="input-field py-2 text-sm" value={form.organization_id}
@@ -255,9 +268,9 @@ export default function AdminUsersPage() {
         )}
 
         {/* Filters */}
-        <div className="flex items-center gap-3">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#64748b]" />
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex-1 relative min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
             <input className="input-field pl-9 py-2 text-sm" placeholder="Search users..."
               value={search} onChange={e => setSearch(e.target.value)} />
           </div>
@@ -276,17 +289,17 @@ export default function AdminUsersPage() {
         </div>
 
         {/* Users Table */}
-        <div className="card overflow-hidden">
+        <div className="card overflow-visible">
           {loading ? (
             <div className="p-8 space-y-3">
-              {[1, 2, 3].map(i => <div key={i} className="h-14 rounded-lg animate-shimmer bg-[#161922]" />)}
+              {[1, 2, 3].map(i => <div key={i} className="h-14 rounded-lg animate-shimmer" style={{ background: "var(--bg-elevated)" }} />)}
             </div>
           ) : (
-            <div className="divide-y divide-[#1e2330]/50">
+            <div className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
               {filtered.map((u, i) => (
                 <motion.div key={u.id}
                   initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}
-                  className="px-4 py-3 hover:bg-[#0D1424] transition-colors">
+                  className="px-4 py-3 hover:bg-[var(--bg-hover)] transition-colors">
                   <div className="flex items-center gap-4">
                     {/* Avatar */}
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${
@@ -301,24 +314,27 @@ export default function AdminUsersPage() {
 
                     {/* Info */}
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-white truncate">{u.full_name}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium truncate" style={{ color: "var(--text-primary)" }}>{u.full_name}</span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${ROLE_COLORS[u.role] || ROLE_COLORS.viewer}`}>
                           {ROLE_LABELS[u.role] || u.role}
                         </span>
                         {!u.is_active && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full text-red-400 bg-red-500/10 border border-red-500/20">
-                            Inactive
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full text-red-400 bg-red-500/10 border border-red-500/20">Inactive</span>
+                        )}
+                        {u.mfa_enabled && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-0.5">
+                            <ShieldCheck className="w-2.5 h-2.5" /> MFA
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-[#64748b] mt-0.5 flex items-center gap-2">
+                      <div className="text-xs mt-0.5 flex items-center gap-2 flex-wrap" style={{ color: "var(--text-muted)" }}>
                         <span>{u.username}</span>
-                        <span className="text-[#334155]">&middot;</span>
+                        <span>&middot;</span>
                         <span>{u.email}</span>
                         {u.organization_name && (
                           <>
-                            <span className="text-[#334155]">&middot;</span>
+                            <span>&middot;</span>
                             <span className="text-emerald-500 flex items-center gap-0.5">
                               <Building2 className="w-3 h-3" /> {u.organization_name}
                             </span>
@@ -330,12 +346,12 @@ export default function AdminUsersPage() {
                     {/* XP/Level */}
                     <div className="hidden md:block text-right shrink-0">
                       <div className="text-xs font-semibold text-indigo-400 tabular-nums">{u.xp_points} XP</div>
-                      <div className="text-[10px] text-[#64748b]">Lv.{u.level} | {u.streak_days}d streak</div>
+                      <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>Lv.{u.level}</div>
                     </div>
 
-                    {/* Edit mode */}
+                    {/* Actions */}
                     {editingUser === u.id ? (
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
                         <select className="input-field py-1 px-2 text-xs w-24" value={editRole}
                           onChange={e => setEditRole(e.target.value)}>
                           {availableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
@@ -348,29 +364,64 @@ export default function AdminUsersPage() {
                           </select>
                         )}
                         <button onClick={() => setEditActive(!editActive)}
-                          className={`p-1 rounded ${editActive ? "text-emerald-400" : "text-red-400"}`}
-                          title={editActive ? "Active" : "Inactive"}>
+                          className={`p-1 rounded ${editActive ? "text-emerald-400" : "text-red-400"}`}>
                           {editActive ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                         </button>
-                        <button onClick={() => handleEditUser(u.id)}
-                          className="p-1 rounded text-emerald-400 hover:bg-emerald-500/10">
+                        <button onClick={() => handleEditUser(u.id)} className="p-1 rounded text-emerald-400 hover:bg-emerald-500/10">
                           <Check className="w-4 h-4" />
                         </button>
-                        <button onClick={() => setEditingUser(null)}
-                          className="p-1 rounded text-red-400 hover:bg-red-500/10">
+                        <button onClick={() => setEditingUser(null)} className="p-1 rounded text-red-400 hover:bg-red-500/10">
                           <X className="w-4 h-4" />
                         </button>
                       </div>
+                    ) : confirmDelete === u.id ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-red-400">Delete?</span>
+                        <button onClick={() => handleDeleteUser(u.id)}
+                          className="px-2 py-1 rounded text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20">Yes</button>
+                        <button onClick={() => setConfirmDelete(null)}
+                          className="px-2 py-1 rounded text-xs" style={{ color: "var(--text-muted)" }}>No</button>
+                      </div>
+                    ) : confirmResetMfa === u.id ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-amber-400">Reset MFA?</span>
+                        <button onClick={() => handleResetMfa(u.id)}
+                          className="px-2 py-1 rounded text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20">Yes</button>
+                        <button onClick={() => setConfirmResetMfa(null)}
+                          className="px-2 py-1 rounded text-xs" style={{ color: "var(--text-muted)" }}>No</button>
+                      </div>
                     ) : (
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-0.5 shrink-0">
                         <button onClick={() => startEdit(u)}
-                          className="p-1.5 rounded text-[#64748b] hover:text-white hover:bg-white/5" title="Edit user">
+                          className="p-1.5 rounded hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-muted)" }} title="Edit">
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button onClick={() => handleResetPassword(u.id)}
-                          className="p-1.5 rounded text-[#64748b] hover:text-amber-400 hover:bg-amber-500/5" title="Reset password">
+                          className="p-1.5 rounded hover:text-amber-400 hover:bg-amber-500/5" style={{ color: "var(--text-muted)" }} title="Reset password">
                           <Key className="w-3.5 h-3.5" />
                         </button>
+                        {isSuperAdmin(user.role) && u.role !== "super_admin" && (
+                          <>
+                            <button onClick={() => handleToggleMfa(u.id, u.mfa_enabled)}
+                              className={`p-1.5 rounded transition-all ${u.mfa_enabled ? "text-emerald-400 hover:bg-emerald-500/10" : "hover:bg-[var(--bg-hover)]"}`}
+                              style={!u.mfa_enabled ? { color: "var(--text-muted)" } : {}}
+                              title={u.mfa_enabled ? "Disable MFA" : "Enable MFA"}>
+                              {u.mfa_enabled ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldOff className="w-3.5 h-3.5" />}
+                            </button>
+                            {u.mfa_enabled && (
+                              <button onClick={() => setConfirmResetMfa(u.id)}
+                                className="p-1.5 rounded hover:text-cyan-400 hover:bg-cyan-500/5 transition-all"
+                                style={{ color: "var(--text-muted)" }}
+                                title="Reset MFA (user lost authenticator)">
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button onClick={() => setConfirmDelete(u.id)}
+                              className="p-1.5 rounded hover:text-red-400 hover:bg-red-500/5" style={{ color: "var(--text-muted)" }} title="Delete">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -378,37 +429,37 @@ export default function AdminUsersPage() {
               ))}
               {filtered.length === 0 && (
                 <div className="p-12 text-center">
-                  <Users className="w-8 h-8 text-[#334155] mx-auto mb-2" />
-                  <p className="text-[#64748b] text-sm">No users found</p>
+                  <Users className="w-8 h-8 mx-auto mb-2" style={{ color: "var(--text-muted)" }} />
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>No users found</p>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* Organizations List (super_admin) */}
+        {/* Organizations List */}
         {isSuperAdmin(user.role) && orgs.length > 0 && (
           <div className="card overflow-hidden">
-            <div className="px-4 py-3 border-b border-[#1e2330]">
-              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+              <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
                 <Building2 className="w-4 h-4 text-emerald-400" /> Organizations ({orgs.length})
               </h3>
             </div>
-            <div className="divide-y divide-[#1e2330]/50">
+            <div className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
               {orgs.map((o: any) => {
                 const orgUsers = users.filter(u => u.organization_id === o.id);
                 return (
-                  <div key={o.id} className="px-4 py-3 flex items-center justify-between hover:bg-[#0D1424] transition-colors">
+                  <div key={o.id} className="px-4 py-3 flex items-center justify-between hover:bg-[var(--bg-hover)] transition-colors">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs font-bold">
                         {o.name[0].toUpperCase()}
                       </div>
                       <div>
-                        <div className="text-sm font-medium text-white">{o.name}</div>
-                        <div className="text-xs text-[#64748b]">/{o.slug}</div>
+                        <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{o.name}</div>
+                        <div className="text-xs" style={{ color: "var(--text-muted)" }}>/{o.slug}</div>
                       </div>
                     </div>
-                    <div className="text-xs text-[#64748b]">{orgUsers.length} user{orgUsers.length !== 1 ? "s" : ""}</div>
+                    <div className="text-xs" style={{ color: "var(--text-muted)" }}>{orgUsers.length} user{orgUsers.length !== 1 ? "s" : ""}</div>
                   </div>
                 );
               })}

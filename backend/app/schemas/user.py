@@ -42,6 +42,7 @@ class UserOut(BaseModel):
     level: int
     badges: list
     streak_days: int = 0
+    mfa_enabled: bool = False
 
     class Config:
         from_attributes = True
@@ -60,6 +61,7 @@ class UserAdminOut(BaseModel):
     level: int
     badges: list
     streak_days: int = 0
+    mfa_enabled: bool = False
 
     class Config:
         from_attributes = True
@@ -69,3 +71,6 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+    needs_mfa: Optional[bool] = None
+    needs_mfa_setup: Optional[bool] = None
+    mfa_token: Optional[str] = None

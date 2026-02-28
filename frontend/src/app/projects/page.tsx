@@ -18,22 +18,25 @@ export default function ProjectsPage() {
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
 
   useEffect(() => {
-    api.listProjects().then(setProjects).catch(() => {}).finally(() => setLoading(false));
+    api.listProjects()
+      .then((r: any) => setProjects(r?.items ?? (Array.isArray(r) ? r : [])))
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
       <div className="max-w-5xl mx-auto p-6">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2"><ShieldCheck className="w-6 h-6 text-indigo-400" />Security Projects</h1>
+          <h1 className="text-2xl font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}><ShieldCheck className="w-6 h-6 text-indigo-400" />Security Projects</h1>
           <Link href="/projects/new" className="btn-primary flex items-center gap-2 text-sm">
             <Plus className="w-4 h-4" /> New Project
           </Link>
         </div>
 
         {loading ? (
-          <div className="text-center text-[#64748b] py-16">Loading...</div>
+          <div className="text-center py-16" style={{ color: "var(--text-muted)" }}>Loading...</div>
         ) : (
           <div className="grid gap-4">
             {projects.map((p, i) => {
@@ -42,10 +45,10 @@ export default function ProjectsPage() {
                 <motion.div key={p.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.05 }}>
                   <Link href={`/projects/${p.id}`}
-                    className="card p-5 flex items-center gap-4 hover:border-indigo-500/50 transition-all block group">
+                    className="card p-5 flex items-center gap-4 hover:border-indigo-500/50 transition-all block group overflow-visible">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold text-white group-hover:text-indigo-400 transition-colors">
+                        <h3 className="font-semibold group-hover:text-indigo-400 transition-colors" style={{ color: "var(--text-primary)" }}>
                           {p.application_name}
                         </h3>
                         <span className={`text-xs px-2 py-0.5 rounded border ${
@@ -54,17 +57,17 @@ export default function ProjectsPage() {
                           "text-[#64748b] bg-[#1F2937] border-[#374151]"
                         }`}>{p.status.replace("_", " ")}</span>
                       </div>
-                      <p className="text-[#64748b] text-xs">{p.application_url}</p>
+                      <p className="text-xs" style={{ color: "var(--text-muted)" }}>{p.application_url}</p>
                       <div className="flex items-center gap-3 mt-2">
                         <div className="flex-1 h-1.5 bg-[#374151] rounded-full overflow-hidden">
                           <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }}
                             className={`h-full rounded-full ${pct === 100 ? "bg-green-500" : "bg-indigo-500"}`} />
                         </div>
-                        <span className="text-xs text-[#64748b]">{pct}%</span>
+                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>{pct}%</span>
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-sm text-[#64748b]">{p.total_test_cases} cases</div>
+                      <div className="text-sm" style={{ color: "var(--text-muted)" }}>{p.total_test_cases} cases</div>
                       <div className="text-red-400 text-sm">{p.failed_count || 0} findings</div>
                     </div>
                     <ArrowRight className="w-5 h-5 text-[#374151] group-hover:text-indigo-400 transition-colors" />

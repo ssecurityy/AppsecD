@@ -1,8 +1,9 @@
 "use client";
-import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2 } from "lucide-react";
+import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon } from "lucide-react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
+import { useTheme } from "@/components/ThemeProvider";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 
@@ -19,6 +20,7 @@ const BADGE_MAP: Record<string, { label: string; color: string }> = {
 
 export default function Navbar() {
   const { user, clearAuth } = useAuthStore();
+  const { theme, toggleTheme } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -40,14 +42,15 @@ export default function Navbar() {
   ];
 
   return (
-    <nav className="h-14 bg-[#09090b]/95 border-b border-[#1e2330] flex items-center px-5 gap-1 sticky top-0 z-50 backdrop-blur-xl">
+    <nav className="h-14 border-b flex items-center px-5 gap-1 sticky top-0 z-50 backdrop-blur-xl"
+      style={{ background: theme === "dark" ? "rgba(9,9,11,0.95)" : "rgba(255,255,255,0.95)", borderColor: "var(--border-subtle)" }}>
       {/* Brand */}
       <Link href="/dashboard" className="flex items-center gap-2.5 mr-6 group">
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 group-hover:shadow-indigo-500/40 transition-shadow">
           <ShieldCheck className="w-4.5 h-4.5 text-white" />
         </div>
-        <span className="font-bold text-white text-sm tracking-tight hidden sm:block">
-          AppSec<span className="text-indigo-400">D</span>
+        <span className="font-bold text-sm tracking-tight hidden sm:block" style={{ color: "var(--text-primary)" }}>
+          AppSec<span className="text-indigo-500">D</span>
         </span>
       </Link>
 
@@ -59,9 +62,10 @@ export default function Navbar() {
             <Link key={href} href={href}
               className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
                 active
-                  ? "text-white bg-white/[0.06]"
-                  : "text-[#64748b] hover:text-[#94a3b8] hover:bg-white/[0.03]"
-              }`}>
+                  ? "bg-[var(--bg-hover)]"
+                  : "hover:bg-[var(--bg-hover)]"
+              }`}
+              style={{ color: active ? "var(--text-primary)" : "var(--text-muted)" }}>
               <Icon className="w-3.5 h-3.5" />
               <span className="hidden md:inline">{label}</span>
               {active && (
@@ -77,7 +81,42 @@ export default function Navbar() {
       </div>
 
       {/* Right side */}
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex items-center gap-2">
+        {/* Theme Toggle */}
+        <button
+          onClick={toggleTheme}
+          className="relative w-14 h-7 rounded-full transition-all duration-300 flex items-center"
+          style={{
+            background: theme === "dark"
+              ? "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)"
+              : "linear-gradient(135deg, #bfdbfe 0%, #93c5fd 100%)",
+            border: `1px solid ${theme === "dark" ? "#334155" : "#60a5fa"}`,
+          }}
+          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+        >
+          <motion.div
+            className="absolute w-5 h-5 rounded-full flex items-center justify-center shadow-sm"
+            style={{
+              background: theme === "dark" ? "#1e293b" : "#ffffff",
+              border: `1px solid ${theme === "dark" ? "#475569" : "#93c5fd"}`,
+            }}
+            animate={{ x: theme === "dark" ? 3 : 29 }}
+            transition={{ type: "spring", stiffness: 500, damping: 30 }}
+          >
+            {theme === "dark" ? (
+              <Moon className="w-3 h-3 text-indigo-400" />
+            ) : (
+              <Sun className="w-3 h-3 text-amber-500" />
+            )}
+          </motion.div>
+          <span className="absolute left-1.5 top-1/2 -translate-y-1/2">
+            {theme === "light" && <Moon className="w-3 h-3 text-blue-700 opacity-40" />}
+          </span>
+          <span className="absolute right-1.5 top-1/2 -translate-y-1/2">
+            {theme === "dark" && <Sun className="w-3 h-3 text-amber-400 opacity-40" />}
+          </span>
+        </button>
+
         {user && (
           <>
             {/* Badges */}
@@ -97,9 +136,10 @@ export default function Navbar() {
             )}
 
             {/* XP */}
-            <div className="flex items-center gap-1.5 bg-[#161922] border border-[#1e2330] rounded-lg px-2.5 py-1">
+            <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-1"
+              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
               <Zap className="w-3 h-3 text-indigo-400" />
-              <span className="text-indigo-300 text-xs font-semibold tabular-nums">{user.xp_points}</span>
+              <span className="text-indigo-400 text-xs font-semibold tabular-nums">{user.xp_points}</span>
             </div>
 
             {/* User */}
@@ -114,11 +154,11 @@ export default function Navbar() {
                 {isSuperAdmin(user.role) ? <Crown className="w-3.5 h-3.5" /> : (user.full_name || "U")[0].toUpperCase()}
               </div>
               <div className="hidden md:block">
-                <div className="text-xs font-medium text-white leading-none flex items-center gap-1">
+                <div className="text-xs font-medium leading-none flex items-center gap-1" style={{ color: "var(--text-primary)" }}>
                   {user.full_name}
                   {isSuperAdmin(user.role) && <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded">SA</span>}
                 </div>
-                <div className="text-[10px] text-[#64748b] leading-none mt-0.5">
+                <div className="text-[10px] leading-none mt-0.5" style={{ color: "var(--text-muted)" }}>
                   Lv.{user.level} · {user.role === "super_admin" ? "Super Admin" : user.role}
                 </div>
               </div>

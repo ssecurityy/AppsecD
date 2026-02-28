@@ -124,6 +124,21 @@ JWT_PUBLIC_KEY_PATH=./public.pem
 # App
 ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 FRONTEND_URL=http://localhost:3000
+CACHE_ENABLED=true
+
+# Notifications (optional — for critical finding alerts)
+SLACK_WEBHOOK_URL=
+WEBHOOK_URL=
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=navigator@localhost
+NOTIFICATION_EMAILS=admin@example.com
+
+# Enterprise: connection pool
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=10
 ```
 
 ---

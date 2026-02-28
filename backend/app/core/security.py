@@ -28,6 +28,14 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+def create_mfa_pending_token(user_id: str) -> str:
+    """Short-lived token for MFA completion. 5 min expiry."""
+    return create_access_token(
+        {"sub": user_id, "purpose": "mfa_pending"},
+        expires_delta=timedelta(minutes=5),
+    )
+
+
 def decode_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])

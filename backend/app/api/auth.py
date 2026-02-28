@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from app.core.database import get_db
 from app.services.audit_service import log_audit
-from app.core.security import hash_password, verify_password, create_access_token, decode_token
+from app.core.security import hash_password, verify_password, create_access_token, create_mfa_pending_token, decode_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate, UserPasswordUpdate, UserLogin, UserOut, UserAdminOut, TokenOut
 
@@ -83,6 +83,26 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
         user.last_streak_date = today
     await db.commit()
     await db.refresh(user)
+
+    # MFA enforcement for all users who have MFA enabled
+    if getattr(user, "mfa_enabled", False):
+        mfa_token = create_mfa_pending_token(str(user.id))
+        # If user has no secret yet, they need to set up MFA first (scan QR code)
+        if not user.mfa_secret:
+            return TokenOut(
+                access_token="",
+                user=UserOut.model_validate(user),
+                needs_mfa_setup=True,
+                mfa_token=mfa_token,
+            )
+        # User already has MFA set up, just ask for the code
+        return TokenOut(
+            access_token="",
+            user=UserOut.model_validate(user),
+            needs_mfa=True,
+            mfa_token=mfa_token,
+        )
+
     token = create_access_token({"sub": str(user.id), "role": user.role})
     return TokenOut(access_token=token, user=UserOut.model_validate(user))
 
@@ -132,6 +152,7 @@ async def list_users(
             level=u.level or 1,
             badges=u.badges or [],
             streak_days=u.streak_days or 0,
+            mfa_enabled=u.mfa_enabled or False,
         )
         for u in users
     ]
@@ -220,6 +241,7 @@ async def create_user(
         level=user.level or 1,
         badges=user.badges or [],
         streak_days=user.streak_days or 0,
+        mfa_enabled=user.mfa_enabled or False,
     )
 
 
@@ -255,6 +277,7 @@ async def get_user(
         level=user.level or 1,
         badges=user.badges or [],
         streak_days=user.streak_days or 0,
+        mfa_enabled=user.mfa_enabled or False,
     )
 
 
@@ -321,6 +344,7 @@ async def update_user(
         level=user.level or 1,
         badges=user.badges or [],
         streak_days=user.streak_days or 0,
+        mfa_enabled=user.mfa_enabled or False,
     )
 
 
@@ -361,4 +385,27 @@ async def update_user_password(
         level=user.level or 1,
         badges=user.badges or [],
         streak_days=user.streak_days or 0,
+        mfa_enabled=user.mfa_enabled or False,
     )
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete user — super_admin only. Cannot delete yourself or other super_admins."""
+    if str(current_user.id) == user_id:
+        raise HTTPException(400, "Cannot delete yourself")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.role == "super_admin":
+        raise HTTPException(403, "Cannot delete super_admin user")
+    username = user.username
+    await db.delete(user)
+    await log_audit(db, "delete_user", user_id=str(current_user.id), resource_type="user", resource_id=str(user_id), details={"username": username})
+    await db.commit()
+    return {"ok": True, "message": f"User {username} deleted successfully"}

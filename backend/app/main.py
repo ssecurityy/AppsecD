@@ -26,6 +26,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(api_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -35,4 +36,30 @@ async def root():
 
 @app.get("/health")
 async def health():
+    """Liveness: app is running."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness: app can serve traffic (DB + Redis reachable)."""
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy import text
+    ok = {"status": "ready", "database": False, "redis": False}
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+        ok["database"] = True
+    except Exception:
+        pass
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        await r.ping()
+        ok["redis"] = True
+    except Exception:
+        pass
+    if not ok["database"]:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=ok)
+    return ok

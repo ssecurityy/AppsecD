@@ -33,6 +33,22 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     google_api_key: str = ""
 
+    # Notifications (optional)
+    slack_webhook_url: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "navigator@localhost"
+    smtp_tls: bool = True
+    notification_emails: str = ""  # Comma-separated emails for critical alerts
+    webhook_url: str = ""  # Generic outgoing webhook
+    cache_enabled: bool = True
+
+    # Enterprise: connection pool
+    db_pool_size: int = 20
+    db_max_overflow: int = 10
+
     class Config:
         env_file = ".env"
         extra = "ignore"

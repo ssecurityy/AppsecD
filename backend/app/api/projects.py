@@ -1,5 +1,5 @@
-"""Projects API."""
-from fastapi import APIRouter, HTTPException, Depends
+"""Projects API — with Redis caching and pagination for enterprise load."""
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
@@ -132,6 +132,8 @@ async def create_project(
     applicable = await _apply_test_cases(project, db)
     project.total_test_cases = applicable
     await log_audit(db, "create_project", user_id=str(current_user.id), resource_type="project", resource_id=str(project.id), details={"name": project.name})
+    from app.services.cache_service import invalidate_project_list
+    await invalidate_project_list(str(current_user.id))
     await db.commit()
     await db.refresh(project)
     return project_to_dict(project)
@@ -167,16 +169,31 @@ async def _apply_test_cases(project: Project, db: AsyncSession) -> int:
     return count
 
 
-@router.get("", response_model=list)
+@router.get("", response_model=dict)
 async def list_projects(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     from app.models.organization import Organization
+    from app.services.cache_service import get_cached_json, set_cached_json, project_list_key
+    from app.core.config import get_settings
+
+    cache_key = f"{project_list_key(str(current_user.id))}:{limit}:{offset}"
+    settings = get_settings()
+    if getattr(settings, "cache_enabled", True):
+        cached = await get_cached_json(cache_key)
+        if cached:
+            return cached
+
     visible = await get_visible_project_ids(db, current_user)
-    query = select(Project).order_by(Project.created_at.desc())
+    base = select(Project).order_by(Project.created_at.desc())
     if visible is not None:
-        query = query.where(Project.id.in_(visible))
+        base = base.where(Project.id.in_(visible))
+    count_q = select(func.count()).select_from(base.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+    query = base.limit(limit).offset(offset)
     result = await db.execute(query)
     projects = result.scalars().all()
     org_ids = {p.organization_id for p in projects if p.organization_id}
@@ -184,10 +201,14 @@ async def list_projects(
     if org_ids:
         r = await db.execute(select(Organization).where(Organization.id.in_(org_ids)))
         orgs = {str(o.id): o.name for o in r.scalars().all()}
-    return [
+    items = [
         project_to_dict(p, orgs.get(str(p.organization_id)) if p.organization_id else None)
         for p in projects
     ]
+    out = {"items": items, "total": total, "limit": limit, "offset": offset}
+    if getattr(settings, "cache_enabled", True):
+        await set_cached_json(cache_key, out, ttl=60)
+    return out
 
 
 @router.get("/{project_id}", response_model=dict)

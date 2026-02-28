@@ -71,7 +71,8 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="border rounded-xl overflow-hidden bg-[#0e1018] border-[#1e2330] transition-all hover:border-[#2a2d3e]"
+      className="border rounded-xl overflow-visible transition-all"
+      style={{ background: "var(--bg-tertiary)", borderColor: "var(--border-subtle)" }}
     >
       {/* Header row */}
       <div
@@ -83,7 +84,7 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-white">{finding.title}</span>
+            <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{finding.title}</span>
             <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${SEVERITY_BADGE[finding.severity] || SEVERITY_BADGE.info}`}>
               {finding.severity}
             </span>
@@ -91,12 +92,12 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
               {rc.label}
             </span>
             {finding.recheck_count > 0 && (
-              <span className="text-[10px] text-[#64748b] bg-[#161922] px-1.5 py-0.5 rounded border border-[#1e2330]">
+              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ color: "var(--text-muted)", background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
                 {finding.recheck_count}x rechecked
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-[#64748b]">
+          <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
             {finding.affected_url && <span className="truncate max-w-[200px]">{finding.affected_url}</span>}
             {finding.owasp_category && <span>{finding.owasp_category}</span>}
             {finding.cwe_id && <span>CWE-{finding.cwe_id}</span>}
@@ -105,12 +106,12 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {finding.remediation_deadline && (
-            <span className="text-xs text-[#64748b] flex items-center gap-1">
+            <span className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
               <Calendar className="w-3 h-3" />
               {new Date(finding.remediation_deadline).toLocaleDateString()}
             </span>
           )}
-          <div className="text-[#64748b]">
+          <div style={{ color: "var(--text-muted)" }}>
             {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </div>
         </div>
@@ -125,45 +126,45 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
             exit={{ height: 0 }}
             className="overflow-hidden"
           >
-            <div className="px-4 pb-4 border-t border-[#1e2330] pt-4 space-y-4">
+            <div className="px-4 pb-4 pt-4 space-y-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
               {/* Finding details */}
               <div className="grid md:grid-cols-2 gap-4">
                 {finding.description && (
                   <div>
-                    <h4 className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider mb-1">Description</h4>
-                    <p className="text-xs text-[#d1d5db] bg-[#131620] p-3 rounded-lg border border-[#1e2330]">{finding.description}</p>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Description</h4>
+                    <p className="text-xs p-3 rounded-lg" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.description}</p>
                   </div>
                 )}
                 {finding.impact && (
                   <div>
-                    <h4 className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider mb-1">Impact</h4>
-                    <p className="text-xs text-[#d1d5db] bg-[#131620] p-3 rounded-lg border border-[#1e2330]">{finding.impact}</p>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Impact</h4>
+                    <p className="text-xs p-3 rounded-lg" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.impact}</p>
                   </div>
                 )}
                 {finding.reproduction_steps && (
                   <div>
-                    <h4 className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider mb-1">Reproduction Steps</h4>
-                    <pre className="text-xs text-[#d1d5db] bg-[#131620] p-3 rounded-lg border border-[#1e2330] whitespace-pre-wrap font-mono">{finding.reproduction_steps}</pre>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Reproduction Steps</h4>
+                    <pre className="text-xs p-3 rounded-lg whitespace-pre-wrap font-mono" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.reproduction_steps}</pre>
                   </div>
                 )}
                 {finding.recommendation && (
                   <div>
-                    <h4 className="text-xs font-semibold text-[#94a3b8] uppercase tracking-wider mb-1">Recommendation</h4>
-                    <p className="text-xs text-[#d1d5db] bg-[#131620] p-3 rounded-lg border border-[#1e2330]">{finding.recommendation}</p>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Recommendation</h4>
+                    <p className="text-xs p-3 rounded-lg" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.recommendation}</p>
                   </div>
                 )}
               </div>
 
               {/* Previous recheck notes */}
               {finding.recheck_notes && (
-                <div className="bg-[#161922] rounded-lg p-3 border border-[#1e2330]">
+                <div className="rounded-lg p-3" style={{ background: "var(--bg-elevated)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
                   <div className="flex items-center gap-2 mb-1">
                     <MessageSquare className="w-3 h-3 text-indigo-400" />
                     <span className="text-xs font-semibold text-indigo-400">Last Recheck Notes</span>
                   </div>
-                  <p className="text-xs text-[#d1d5db]">{finding.recheck_notes}</p>
+                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{finding.recheck_notes}</p>
                   {finding.recheck_date && (
-                    <p className="text-[10px] text-[#64748b] mt-1">
+                    <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
                       {new Date(finding.recheck_date).toLocaleString()}
                     </p>
                   )}
@@ -172,7 +173,7 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
 
               {/* Recheck action panel */}
               <div className="bg-gradient-to-r from-indigo-500/5 to-purple-500/5 rounded-xl p-4 border border-indigo-500/10">
-                <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                <h4 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
                   <RefreshCw className="w-4 h-4 text-indigo-400" />
                   Update Recheck Status
                 </h4>
@@ -186,8 +187,9 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                           newStatus === s.value
                             ? s.color + " ring-1 ring-current"
-                            : "text-[#64748b] bg-[#161922] border-[#1e2330] hover:border-[#2a2d3e]"
+                            : ""
                         }`}
+                        style={newStatus !== s.value ? { color: "var(--text-muted)", background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" } : undefined}
                       >
                         <SIcon className="w-3 h-3" />
                         {s.label}
@@ -250,23 +252,23 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
                         exit={{ height: 0, opacity: 0 }}
                         className="overflow-hidden"
                       >
-                        <div className="relative pl-4 border-l-2 border-[#1e2330] space-y-3">
+                        <div className="relative pl-4 space-y-3" style={{ borderLeft: "2px solid var(--border-subtle)" }}>
                           {history.slice().reverse().map((h: any, i: number) => {
                             const fromConf = getRecheckConfig(h.old_status);
                             const toConf = getRecheckConfig(h.new_status);
                             return (
                               <div key={i} className="relative">
-                                <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-[#161922] border-2 border-indigo-500" />
-                                <div className="bg-[#161922] rounded-lg p-3 border border-[#1e2330]">
+                                <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full border-2 border-indigo-500" style={{ background: "var(--bg-elevated)" }} />
+                                <div className="rounded-lg p-3" style={{ background: "var(--bg-elevated)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
                                   <div className="flex items-center gap-2 text-xs mb-1">
                                     <span className={`px-1.5 py-0.5 rounded border ${fromConf.color}`}>{fromConf.label}</span>
-                                    <span className="text-[#64748b]">&rarr;</span>
+                                    <span style={{ color: "var(--text-muted)" }}>&rarr;</span>
                                     <span className={`px-1.5 py-0.5 rounded border ${toConf.color}`}>{toConf.label}</span>
-                                    <span className="text-[#64748b] ml-auto">{new Date(h.date).toLocaleString()}</span>
+                                    <span className="ml-auto" style={{ color: "var(--text-muted)" }}>{new Date(h.date).toLocaleString()}</span>
                                   </div>
-                                  {h.notes && <p className="text-xs text-[#d1d5db] mt-1">{h.notes}</p>}
+                                  {h.notes && <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>{h.notes}</p>}
                                   {h.by_name && (
-                                    <p className="text-[10px] text-[#64748b] mt-1 flex items-center gap-1">
+                                    <p className="text-[10px] mt-1 flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
                                       <User className="w-2.5 h-2.5" /> {h.by_name}
                                     </p>
                                   )}
@@ -305,13 +307,13 @@ export default function VulnerabilityManagement() {
 
   const loadData = async () => {
     try {
-      const [proj, findingsList, summ] = await Promise.all([
+      const [proj, findingsRes, summ] = await Promise.all([
         api.getProject(id),
         api.getFindings(id),
         api.getVulnSummary(id),
       ]);
       setProject(proj);
-      setFindings(findingsList);
+      setFindings(findingsRes?.items ?? (Array.isArray(findingsRes) ? findingsRes : []));
       setSummary(summ);
     } catch {
       toast.error("Failed to load vulnerability data");
@@ -333,36 +335,36 @@ export default function VulnerabilityManagement() {
   });
 
   if (loading) return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
-      <div className="flex items-center justify-center py-32 text-[#94a3b8]">Loading vulnerability data...</div>
+      <div className="flex items-center justify-center py-32" style={{ color: "var(--text-secondary)" }}>Loading vulnerability data...</div>
     </div>
   );
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
 
       <div className="max-w-6xl mx-auto p-4 md:p-6">
         {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-sm text-[#64748b] mb-6">
+        <div className="flex items-center gap-2 text-sm mb-6" style={{ color: "var(--text-muted)" }}>
           <Link href="/projects" className="hover:text-white transition-colors">Projects</Link>
           <span>/</span>
           <Link href={`/projects/${id}`} className="hover:text-white transition-colors">{project?.application_name || "Project"}</Link>
           <span>/</span>
-          <span className="text-white">Vulnerability Management</span>
+          <span style={{ color: "var(--text-primary)" }}>Vulnerability Management</span>
         </div>
 
         {/* Page header */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+            <h1 className="text-2xl font-bold flex items-center gap-3" style={{ color: "var(--text-primary)" }}>
               <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/20">
                 <ShieldCheck className="w-6 h-6 text-indigo-400" />
               </div>
               Vulnerability Management
             </h1>
-            <p className="text-[#64748b] text-sm mt-1">{project?.application_name} &mdash; Track, recheck, and resolve security findings</p>
+            <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>{project?.application_name} &mdash; Track, recheck, and resolve security findings</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <Link
@@ -403,10 +405,11 @@ export default function VulnerabilityManagement() {
                 key={s.label}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`bg-gradient-to-br ${s.bg} rounded-xl p-3 border border-[#1e2330] text-center`}
+                className={`bg-gradient-to-br ${s.bg} rounded-xl p-3 border text-center`}
+                style={{ borderColor: "var(--border-subtle)" }}
               >
                 <div className={`text-xl font-bold ${s.color}`}>{s.value}</div>
-                <div className="text-[10px] text-[#64748b] uppercase tracking-wider mt-0.5">{s.label}</div>
+                <div className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--text-muted)" }}>{s.label}</div>
               </motion.div>
             ))}
           </div>
@@ -416,10 +419,10 @@ export default function VulnerabilityManagement() {
         {summary && summary.total > 0 && (
           <div className="card p-4 mb-6">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-white">Resolution Progress</span>
+              <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Resolution Progress</span>
               <span className="text-sm font-bold text-emerald-400">{summary.resolution_rate}%</span>
             </div>
-            <div className="h-3 bg-[#161922] rounded-full overflow-hidden flex">
+            <div className="h-3 rounded-full overflow-hidden flex" style={{ background: "var(--bg-elevated)" }}>
               {summary.resolved > 0 && (
                 <motion.div
                   initial={{ width: 0 }}
@@ -457,12 +460,12 @@ export default function VulnerabilityManagement() {
                 />
               )}
             </div>
-            <div className="flex items-center gap-4 mt-2 text-[10px] text-[#64748b]">
+            <div className="flex items-center gap-4 mt-2 text-[10px]" style={{ color: "var(--text-muted)" }}>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Resolved</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500" /> Partial</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500" /> Exception</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> Not Fixed</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#161922]" /> Pending</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: "var(--bg-elevated)" }} /> Pending</span>
             </div>
           </div>
         )}
@@ -470,7 +473,7 @@ export default function VulnerabilityManagement() {
         {/* Severity breakdown */}
         {summary && summary.by_severity && Object.keys(summary.by_severity).length > 0 && (
           <div className="card p-4 mb-6">
-            <h3 className="text-sm font-semibold text-white mb-3">Severity Distribution</h3>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: "var(--text-primary)" }}>Severity Distribution</h3>
             <div className="flex items-end gap-2 h-24">
               {SEVERITY_ORDER.map(sev => {
                 const count = summary.by_severity[sev] || 0;
@@ -485,14 +488,14 @@ export default function VulnerabilityManagement() {
                 };
                 return (
                   <div key={sev} className="flex-1 flex flex-col items-center gap-1">
-                    <span className="text-xs font-bold text-white">{count}</span>
+                    <span className="text-xs font-bold" style={{ color: "var(--text-primary)" }}>{count}</span>
                     <motion.div
                       initial={{ height: 0 }}
                       animate={{ height: `${Math.max(heightPct, 4)}%` }}
                       transition={{ duration: 0.6, ease: "easeOut" }}
                       className={`w-full rounded-t-lg ${colors[sev]} min-h-[4px]`}
                     />
-                    <span className="text-[10px] text-[#64748b] capitalize">{sev}</span>
+                    <span className="text-[10px] capitalize" style={{ color: "var(--text-muted)" }}>{sev}</span>
                   </div>
                 );
               })}
@@ -502,7 +505,7 @@ export default function VulnerabilityManagement() {
 
         {/* Filters */}
         <div className="flex items-center justify-between gap-3 mb-4">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <h2 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
             <AlertTriangle className="w-5 h-5 text-indigo-400" />
             Findings ({filteredFindings.length})
           </h2>
@@ -524,7 +527,7 @@ export default function VulnerabilityManagement() {
             >
               <div className="card p-4 flex flex-wrap gap-4">
                 <div>
-                  <label className="text-xs text-[#64748b] mb-1 block">Severity</label>
+                  <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>Severity</label>
                   <select
                     className="input-field text-xs w-36"
                     value={filterSeverity}
@@ -537,7 +540,7 @@ export default function VulnerabilityManagement() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-[#64748b] mb-1 block">Recheck Status</label>
+                  <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>Recheck Status</label>
                   <select
                     className="input-field text-xs w-44"
                     value={filterStatus}
@@ -566,8 +569,8 @@ export default function VulnerabilityManagement() {
         <div className="space-y-3">
           {filteredFindings.length === 0 ? (
             <div className="card p-12 text-center">
-              <ShieldX className="w-12 h-12 text-[#1e2330] mx-auto mb-3" />
-              <p className="text-[#64748b] text-sm">
+              <ShieldX className="w-12 h-12 mx-auto mb-3" style={{ color: "var(--border-subtle)" }} />
+              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
                 {findings.length === 0
                   ? "No vulnerabilities found yet. Start testing to identify findings."
                   : "No findings match the current filters."}

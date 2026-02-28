@@ -201,3 +201,219 @@ async def delete_llm_custom_model(
     org_uuid, _ = await _resolve_org_id(current_user, org_id, db)
     await remove_custom_model(db, provider, model, org_uuid)
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════
+# Notification Settings (SMTP, Slack, Webhook)
+# ═══════════════════════════════════════════════════════════
+
+class NotificationSettingsUpdate(BaseModel):
+    slack_webhook_url: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_tls: bool = True
+    notification_emails: str = ""
+    webhook_url: str = ""
+
+
+@router.get("/notifications")
+async def get_notification_settings(
+    org_id: str | None = Query(None),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get notification settings. Returns current config (passwords masked)."""
+    import json as _json
+    from app.models.org_setting import OrgSetting
+    org_uuid, org = await _resolve_org_id(current_user, org_id, db)
+
+    # Try org-scoped settings first
+    config = {}
+    if org_uuid:
+        result = await db.execute(
+            select(OrgSetting).where(
+                OrgSetting.organization_id == org_uuid,
+                OrgSetting.key == "notification_settings",
+            )
+        )
+        setting = result.scalar_one_or_none()
+        if setting and setting.value:
+            try:
+                config = _json.loads(setting.value) if isinstance(setting.value, str) else setting.value
+            except (ValueError, TypeError):
+                config = {}
+
+    # Fall back to env
+    s = get_settings()
+    return {
+        "organization_id": str(org_uuid) if org_uuid else None,
+        "slack_webhook_url": config.get("slack_webhook_url", s.slack_webhook_url or ""),
+        "smtp_host": config.get("smtp_host", s.smtp_host or ""),
+        "smtp_port": config.get("smtp_port", s.smtp_port),
+        "smtp_user": config.get("smtp_user", s.smtp_user or ""),
+        "smtp_password_set": bool(config.get("smtp_password") or s.smtp_password),
+        "smtp_from": config.get("smtp_from", s.smtp_from or ""),
+        "smtp_tls": config.get("smtp_tls", s.smtp_tls),
+        "notification_emails": config.get("notification_emails", s.notification_emails or ""),
+        "webhook_url": config.get("webhook_url", s.webhook_url or ""),
+    }
+
+
+@router.put("/notifications")
+async def update_notification_settings(
+    payload: NotificationSettingsUpdate,
+    org_id: str | None = Query(None),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update notification settings per organization."""
+    import json as _json
+    from app.models.org_setting import OrgSetting
+    org_uuid, _ = await _resolve_org_id(current_user, org_id, db)
+    if not org_uuid:
+        raise HTTPException(400, "Organization required for notification settings.")
+
+    result = await db.execute(
+        select(OrgSetting).where(
+            OrgSetting.organization_id == org_uuid,
+            OrgSetting.key == "notification_settings",
+        )
+    )
+    setting = result.scalar_one_or_none()
+
+    config = {
+        "slack_webhook_url": payload.slack_webhook_url,
+        "smtp_host": payload.smtp_host,
+        "smtp_port": payload.smtp_port,
+        "smtp_user": payload.smtp_user,
+        "smtp_from": payload.smtp_from,
+        "smtp_tls": payload.smtp_tls,
+        "notification_emails": payload.notification_emails,
+        "webhook_url": payload.webhook_url,
+    }
+    # Only update password if provided (non-empty)
+    if payload.smtp_password:
+        config["smtp_password"] = payload.smtp_password
+    elif setting and setting.value:
+        try:
+            old = _json.loads(setting.value) if isinstance(setting.value, str) else setting.value
+            config["smtp_password"] = old.get("smtp_password", "")
+        except (ValueError, TypeError):
+            pass
+
+    config_str = _json.dumps(config)
+    if setting:
+        setting.value = config_str
+    else:
+        setting = OrgSetting(
+            organization_id=org_uuid,
+            key="notification_settings",
+            value=config_str,
+        )
+        db.add(setting)
+
+    await db.commit()
+    await log_audit(db, "update_notification_settings", user_id=str(current_user.id), resource_type="settings", details={"org_id": str(org_uuid)})
+    return {"ok": True, "message": "Notification settings saved"}
+
+
+@router.post("/notifications/test-slack")
+async def test_slack_notification(
+    org_id: str | None = Query(None),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a test Slack notification."""
+    import json as _json
+    from app.services.notification_service import notify_slack
+    from app.models.org_setting import OrgSetting
+
+    org_uuid, _ = await _resolve_org_id(current_user, org_id, db)
+    webhook_url = ""
+    if org_uuid:
+        result = await db.execute(
+            select(OrgSetting).where(
+                OrgSetting.organization_id == org_uuid,
+                OrgSetting.key == "notification_settings",
+            )
+        )
+        setting = result.scalar_one_or_none()
+        if setting and setting.value:
+            try:
+                cfg = _json.loads(setting.value) if isinstance(setting.value, str) else setting.value
+                webhook_url = cfg.get("slack_webhook_url", "")
+            except (ValueError, TypeError):
+                pass
+
+    if not webhook_url:
+        webhook_url = get_settings().slack_webhook_url
+
+    if not webhook_url:
+        raise HTTPException(400, "No Slack webhook URL configured")
+
+    ok = await notify_slack(":white_check_mark: AppSecD test notification — Slack integration is working!", webhook_url)
+    if not ok:
+        raise HTTPException(500, "Failed to send Slack notification. Check webhook URL.")
+    return {"ok": True, "message": "Test notification sent to Slack"}
+
+
+@router.post("/notifications/test-smtp")
+async def test_smtp_notification(
+    org_id: str | None = Query(None),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a test SMTP email."""
+    import json as _json
+    from app.models.org_setting import OrgSetting
+    import smtplib
+    from email.mime.text import MIMEText
+
+    org_uuid, _ = await _resolve_org_id(current_user, org_id, db)
+    config = {}
+    if org_uuid:
+        result = await db.execute(
+            select(OrgSetting).where(
+                OrgSetting.organization_id == org_uuid,
+                OrgSetting.key == "notification_settings",
+            )
+        )
+        setting = result.scalar_one_or_none()
+        if setting and setting.value:
+            try:
+                config = _json.loads(setting.value) if isinstance(setting.value, str) else setting.value
+            except (ValueError, TypeError):
+                config = {}
+
+    s = get_settings()
+    host = config.get("smtp_host") or s.smtp_host
+    port = config.get("smtp_port") or s.smtp_port
+    user = config.get("smtp_user") or s.smtp_user
+    password = config.get("smtp_password") or s.smtp_password
+    from_email = config.get("smtp_from") or s.smtp_from
+    tls = config.get("smtp_tls", s.smtp_tls)
+    emails = config.get("notification_emails") or s.notification_emails
+
+    if not host:
+        raise HTTPException(400, "SMTP host not configured")
+    if not emails:
+        raise HTTPException(400, "No notification emails configured")
+
+    to_list = [e.strip() for e in emails.split(",") if e.strip()]
+    try:
+        msg = MIMEText("This is a test notification from AppSecD. SMTP integration is working!")
+        msg["Subject"] = "[AppSecD] Test Email Notification"
+        msg["From"] = from_email
+        msg["To"] = ", ".join(to_list)
+        with smtplib.SMTP(host, port) as server:
+            if tls:
+                server.starttls()
+            if user and password:
+                server.login(user, password)
+            server.sendmail(from_email, to_list, msg.as_string())
+        return {"ok": True, "message": f"Test email sent to {', '.join(to_list)}"}
+    except Exception as e:
+        raise HTTPException(500, f"SMTP test failed: {str(e)}")
