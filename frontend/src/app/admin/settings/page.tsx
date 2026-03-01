@@ -171,7 +171,7 @@ export default function AdminSettingsPage() {
     setTestingLlm(true);
     setLlmTestResult(null);
     try {
-      const res = await api.testLlmConnection();
+      const res = await api.testLlmConnection(selectedOrg || undefined);
       setLlmTestResult(res);
     } catch (e: any) {
       setLlmTestResult({ ok: false, error: e.message });
@@ -184,7 +184,7 @@ export default function AdminSettingsPage() {
     setTestingJira(true);
     setJiraTestResult(null);
     try {
-      const res = await api.testJiraConnection();
+      const res = await api.testJiraConnection(selectedOrg || undefined);
       setJiraTestResult(res);
     } catch (e: any) {
       setJiraTestResult({ ok: false, error: e.message });

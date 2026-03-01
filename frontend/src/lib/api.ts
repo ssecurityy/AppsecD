@@ -1,14 +1,22 @@
-// Use same host as page when in browser — fixes remote access (31.97.239.245:3000 → API at :5001)
-// and avoids ERR_BLOCKED_BY_CLIENT when extensions block cross-origin requests to localhost
+// API base: /api when behind Nginx (appsecd.com), else host:5001 or env
 export function getApiBase(): string {
   if (typeof window !== "undefined") {
     const env = process.env.NEXT_PUBLIC_API_URL;
-    // If env points to localhost but we're on a remote host, override to avoid blocked requests
-    const isRemote = !["localhost", "127.0.0.1", ""].includes(window.location.hostname);
-    if (isRemote && (!env || env.includes("127.0.0.1") || env.includes("localhost"))) {
-      return `${window.location.protocol}//${window.location.hostname}:5001`;
+    const host = window.location.hostname;
+    // Same-origin /api when on appsecd.com (Nginx proxies /api to backend, no path conflict)
+    if (host === "appsecd.com" || host === "www.appsecd.com") {
+      return "/api";
     }
-    return env || `${window.location.protocol}//${window.location.hostname}:5001`;
+    // Explicit env overrides (e.g. https://appsecd.com/api)
+    if (env && !env.includes("localhost") && !env.includes("127.0.0.1")) {
+      return env;
+    }
+    // Remote host (e.g. IP): use host + port 5001
+    const isRemote = !["localhost", "127.0.0.1"].includes(host);
+    if (isRemote) {
+      return `${window.location.protocol}//${host}:5001`;
+    }
+    return env || `${window.location.protocol}//${host}:5001`;
   }
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001";
 }
@@ -243,9 +251,9 @@ export const api = {
   sourceFiles: (sourceSlug: string) =>
     request(`/payloads/sources/${encodeURIComponent(sourceSlug)}/files`),
 
-  // LLM & JIRA test connections
-  testLlmConnection: () => request("/admin/settings/llm/test", { method: "POST" }),
-  testJiraConnection: () => request("/admin/settings/jira/test", { method: "POST" }),
+  // LLM & JIRA test connections (org-scoped)
+  testLlmConnection: (orgId?: string) => request(`/admin/settings/llm/test${orgId ? `?org_id=${orgId}` : ""}`, { method: "POST" }),
+  testJiraConnection: (orgId?: string) => request(`/admin/settings/jira/test${orgId ? `?org_id=${orgId}` : ""}`, { method: "POST" }),
 
   // Auto-suggest finding
   autoSuggestFinding: (data: { test_title: string; test_description?: string; notes?: string }) =>
@@ -287,4 +295,38 @@ export const api = {
     }
     throw new Error("Failed to get report status");
   },
+
+  // LLM Payload Crafting
+  craftPayload: (data: { test_title: string; test_description?: string; existing_payloads: string[]; target_url?: string; context?: string }) =>
+    request("/ai-assist/craft-payload", { method: "POST", body: JSON.stringify(data) }),
+
+  // Organization branding
+  getMyBranding: () => request("/organizations/my-branding"),
+  updateOrganization: (orgId: string, data: { name?: string; description?: string; brand_color?: string }) =>
+    request(`/organizations/${orgId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  uploadOrgLogo: async (orgId: string, file: File) => {
+    const token = getToken();
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API}/organizations/${orgId}/logo`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Upload failed");
+    }
+    return res.json();
+  },
+
+  // Bulk JIRA
+  bulkCreateJira: (data: { finding_ids: string[]; project_key?: string }) =>
+    request("/findings/bulk-jira", { method: "POST", body: JSON.stringify(data) }),
+
+  // Security Intelligence
+  securityDashboard: () => request("/security-intel/dashboard"),
+  cveFeed: () => request("/security-intel/cve-feed"),
+  generateTestCases: (data: { context: string; tech_stack?: string; app_type?: string }) =>
+    request("/security-intel/generate-test-cases", { method: "POST", body: JSON.stringify(data) }),
 };

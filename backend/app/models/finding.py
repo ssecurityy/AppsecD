@@ -36,6 +36,11 @@ class Finding(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # JIRA integration fields
+    jira_key = Column(String(50), nullable=True)  # e.g., PROJ-123
+    jira_url = Column(Text, nullable=True)  # e.g., https://org.atlassian.net/browse/PROJ-123
+    jira_status = Column(String(50), nullable=True)  # e.g., Open, In Progress, Done
+
     # Vulnerability Management / Recheck fields
     recheck_status = Column(String(30), default="pending")
     # pending, resolved, not_fixed, partially_fixed, exception, deferred, retest_needed

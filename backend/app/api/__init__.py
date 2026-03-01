@@ -13,6 +13,7 @@ from .mfa import router as mfa_router
 from .websocket import router as websocket_router
 from .organizations import router as organizations_router
 from .settings import router as settings_router
+from .security_intel import router as security_intel_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -29,3 +30,4 @@ api_router.include_router(settings_router)
 api_router.include_router(testcases_router)
 api_router.include_router(findings_router)
 api_router.include_router(payloads_router)
+api_router.include_router(security_intel_router)

@@ -2,12 +2,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
-import { api } from "@/lib/api";
+import { api, getApiBase } from "@/lib/api";
 import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
-  Building2, Plus, Users, FolderOpen, Search, Shield
+  Building2, Plus, Users, FolderOpen, Search, Shield, Palette, Upload, X
 } from "lucide-react";
 
 export default function AdminOrganizationsPage() {
@@ -26,6 +26,12 @@ export default function AdminOrganizationsPage() {
   const [assignProjectOrg, setAssignProjectOrg] = useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
+
+  // Branding modal
+  const [brandingOrg, setBrandingOrg] = useState<any>(null);
+  const [brandingForm, setBrandingForm] = useState({ description: "", brand_color: "#6366f1" });
+  const [brandingUploading, setBrandingUploading] = useState(false);
+  const [brandingSaving, setBrandingSaving] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -190,12 +196,32 @@ export default function AdminOrganizationsPage() {
                   <div className="p-4">
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold">
-                          {org.name[0].toUpperCase()}
-                        </div>
+                        {org.logo_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={org.logo_url.startsWith("http") ? org.logo_url : `${getApiBase()}${org.logo_url}`}
+                            alt={org.name}
+                            className="w-10 h-10 rounded-lg object-cover border"
+                            style={{ borderColor: org.brand_color ? `${org.brand_color}40` : "var(--border-subtle)" }}
+                          />
+                        ) : (
+                          <div
+                            className="w-10 h-10 rounded-lg flex items-center justify-center font-bold"
+                            style={{
+                              background: org.brand_color ? `${org.brand_color}15` : "rgba(16,185,129,0.1)",
+                              border: `1px solid ${org.brand_color ? `${org.brand_color}30` : "rgba(16,185,129,0.2)"}`,
+                              color: org.brand_color || "#34d399",
+                            }}
+                          >
+                            {org.name[0].toUpperCase()}
+                          </div>
+                        )}
                         <div>
                           <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{org.name}</h3>
                           <p className="text-xs" style={{ color: "var(--text-muted)" }}>/{org.slug}</p>
+                          {org.description && (
+                            <p className="text-xs mt-0.5 max-w-[300px] truncate" style={{ color: "var(--text-secondary)" }}>{org.description}</p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-4 text-xs" style={{ color: "var(--text-secondary)" }}>
@@ -231,6 +257,18 @@ export default function AdminOrganizationsPage() {
                         <button onClick={() => { setAssignProjectOrg(org.id); setSelectedProjectId(""); }}
                           className="text-xs px-3 py-1.5 rounded border border-purple-500/30 text-purple-400 hover:bg-purple-500/10 transition-colors flex items-center gap-1">
                           <FolderOpen className="w-3 h-3" /> Assign Project
+                        </button>
+                        <button
+                          onClick={() => {
+                            setBrandingOrg(org);
+                            setBrandingForm({
+                              description: org.description || "",
+                              brand_color: org.brand_color || "#6366f1",
+                            });
+                          }}
+                          className="text-xs px-3 py-1.5 rounded border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-colors flex items-center gap-1"
+                        >
+                          <Palette className="w-3 h-3" /> Edit Branding
                         </button>
                       </div>
                     )}
@@ -282,6 +320,129 @@ export default function AdminOrganizationsPage() {
                 <button onClick={handleAssignProject} disabled={!selectedProjectId}
                   className="btn-primary text-sm flex-1 disabled:opacity-50">Assign</button>
                 <button onClick={() => setAssignProjectOrg(null)} className="btn-secondary text-sm">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Branding Modal */}
+        {brandingOrg && (
+          <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setBrandingOrg(null)}>
+            <div className="rounded-lg max-w-md w-full p-5 space-y-4" style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)" }} onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                  <Palette className="w-4 h-4 text-emerald-400" /> Edit Branding: {brandingOrg.name}
+                </h3>
+                <button onClick={() => setBrandingOrg(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Logo Upload */}
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: "var(--text-secondary)" }}>Organization Logo</label>
+                <div className="flex items-center gap-3">
+                  {brandingOrg.logo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={brandingOrg.logo_url.startsWith("http") ? brandingOrg.logo_url : `${getApiBase()}${brandingOrg.logo_url}`}
+                      alt="Logo"
+                      className="w-14 h-14 rounded-lg object-cover border"
+                      style={{ borderColor: "var(--border-subtle)" }}
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-lg flex items-center justify-center text-lg font-bold"
+                      style={{ background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                      {brandingOrg.name[0].toUpperCase()}
+                    </div>
+                  )}
+                  <label className="cursor-pointer">
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".png,.jpg,.jpeg,.svg,.webp"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setBrandingUploading(true);
+                        try {
+                          const res = await api.uploadOrgLogo(brandingOrg.id, file);
+                          toast.success("Logo uploaded");
+                          setBrandingOrg({ ...brandingOrg, logo_url: res.logo_url || res.url });
+                          loadData();
+                        } catch (err: any) {
+                          toast.error(err.message || "Upload failed");
+                        } finally {
+                          setBrandingUploading(false);
+                          e.target.value = "";
+                        }
+                      }}
+                      disabled={brandingUploading}
+                    />
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded border text-xs transition-colors ${brandingUploading ? "opacity-50 cursor-not-allowed" : "border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10"}`}>
+                      <Upload className="w-3 h-3" /> {brandingUploading ? "Uploading..." : "Upload Logo"}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Brand Color */}
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: "var(--text-secondary)" }}>Brand Color</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={brandingForm.brand_color}
+                    onChange={(e) => setBrandingForm({ ...brandingForm, brand_color: e.target.value })}
+                    className="w-10 h-10 rounded-lg cursor-pointer border-0 p-0"
+                    style={{ background: "transparent" }}
+                  />
+                  <input
+                    className="input-field py-2 text-sm flex-1"
+                    value={brandingForm.brand_color}
+                    onChange={(e) => setBrandingForm({ ...brandingForm, brand_color: e.target.value })}
+                    placeholder="#6366f1"
+                  />
+                  <div className="w-10 h-10 rounded-lg" style={{ background: brandingForm.brand_color }} />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: "var(--text-secondary)" }}>Description</label>
+                <textarea
+                  className="input-field text-sm h-20 resize-none w-full"
+                  placeholder="Organization description..."
+                  value={brandingForm.description}
+                  onChange={(e) => setBrandingForm({ ...brandingForm, description: e.target.value })}
+                />
+              </div>
+
+              {/* Save */}
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    setBrandingSaving(true);
+                    try {
+                      await api.updateOrganization(brandingOrg.id, {
+                        description: brandingForm.description,
+                        brand_color: brandingForm.brand_color,
+                      });
+                      toast.success("Branding updated");
+                      setBrandingOrg(null);
+                      loadData();
+                    } catch (err: any) {
+                      toast.error(err.message || "Update failed");
+                    } finally {
+                      setBrandingSaving(false);
+                    }
+                  }}
+                  disabled={brandingSaving}
+                  className="btn-primary text-sm flex-1 disabled:opacity-50"
+                >
+                  {brandingSaving ? "Saving..." : "Save Branding"}
+                </button>
+                <button onClick={() => setBrandingOrg(null)} className="btn-secondary text-sm">Cancel</button>
               </div>
             </div>
           </div>

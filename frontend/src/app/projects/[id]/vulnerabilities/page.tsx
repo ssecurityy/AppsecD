@@ -10,7 +10,7 @@ import Link from "next/link";
 import {
   ArrowLeft, Shield, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle,
   ChevronDown, ChevronUp, FileDown, Filter, RefreshCw, CheckCircle2, XCircle,
-  Calendar, User, MessageSquare, History, ExternalLink,
+  Calendar, User, MessageSquare, History, ExternalLink, Square, CheckSquare, Loader2,
 } from "lucide-react";
 
 const RECHECK_STATUSES = [
@@ -36,7 +36,7 @@ function getRecheckConfig(status: string) {
   return RECHECK_STATUSES.find(s => s.value === status) || RECHECK_STATUSES[0];
 }
 
-function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void }) {
+function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }: { finding: any; onUpdate: () => void; selectable?: boolean; selected?: boolean; onToggleSelect?: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [recheckNotes, setRecheckNotes] = useState("");
@@ -79,6 +79,21 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
         className="p-4 cursor-pointer flex items-start gap-3"
         onClick={() => setExpanded(!expanded)}
       >
+        {selectable && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect?.(finding.id);
+            }}
+            className="mt-0.5 shrink-0"
+          >
+            {selected ? (
+              <CheckSquare className="w-5 h-5 text-indigo-400" />
+            ) : (
+              <Square className="w-5 h-5" style={{ color: "var(--text-muted)" }} />
+            )}
+          </button>
+        )}
         <div className={`mt-0.5 p-1.5 rounded-lg border ${rc.color}`}>
           <RcIcon className="w-4 h-4" />
         </div>
@@ -91,6 +106,23 @@ function FindingCard({ finding, onUpdate }: { finding: any; onUpdate: () => void
             <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${rc.color}`}>
               {rc.label}
             </span>
+            {finding.jira_key && (
+              <a
+                href={finding.jira_url || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="text-xs px-2 py-0.5 rounded-full border border-blue-500/30 bg-blue-500/10 text-blue-400 font-medium hover:bg-blue-500/20 transition-colors flex items-center gap-1"
+              >
+                <ExternalLink className="w-2.5 h-2.5" />
+                {finding.jira_key}
+              </a>
+            )}
+            {finding.jira_status && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-500/20 bg-blue-500/5 text-blue-300 font-medium">
+                {finding.jira_status}
+              </span>
+            )}
             {finding.recheck_count > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ color: "var(--text-muted)", background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
                 {finding.recheck_count}x rechecked
@@ -301,6 +333,9 @@ export default function VulnerabilityManagement() {
   const [filterSeverity, setFilterSeverity] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [showFilters, setShowFilters] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCreating, setBulkCreating] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -373,6 +408,46 @@ export default function VulnerabilityManagement() {
             >
               <ArrowLeft className="w-3 h-3" /> Back to Testing
             </Link>
+            <button
+              onClick={() => {
+                setBulkMode(!bulkMode);
+                if (bulkMode) setSelectedIds(new Set());
+              }}
+              className={`text-xs flex items-center gap-1.5 px-3 py-1.5 rounded border transition-colors ${
+                bulkMode
+                  ? "border-blue-500/50 text-blue-400 bg-blue-500/10"
+                  : "border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+              }`}
+            >
+              <ExternalLink className="w-3 h-3" /> {bulkMode ? "Cancel Bulk" : "Bulk JIRA"}
+            </button>
+            {bulkMode && selectedIds.size > 0 && (
+              <button
+                onClick={async () => {
+                  setBulkCreating(true);
+                  try {
+                    const res = await api.bulkCreateJira({ finding_ids: Array.from(selectedIds) });
+                    toast.success(`Created ${res.created || selectedIds.size} JIRA tickets`);
+                    setBulkMode(false);
+                    setSelectedIds(new Set());
+                    loadData();
+                  } catch (err: unknown) {
+                    toast.error(err instanceof Error ? err.message : "Bulk JIRA creation failed");
+                  } finally {
+                    setBulkCreating(false);
+                  }
+                }}
+                disabled={bulkCreating}
+                className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {bulkCreating ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <ExternalLink className="w-3 h-3" />
+                )}
+                Create {selectedIds.size} JIRA Ticket{selectedIds.size !== 1 ? "s" : ""}
+              </button>
+            )}
             <button
               onClick={async () => {
                 try {
@@ -584,7 +659,18 @@ export default function VulnerabilityManagement() {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.03, duration: 0.3 }}
               >
-                <FindingCard finding={f} onUpdate={loadData} />
+                <FindingCard
+                  finding={f}
+                  onUpdate={loadData}
+                  selectable={bulkMode}
+                  selected={selectedIds.has(f.id)}
+                  onToggleSelect={(id) => {
+                    const next = new Set(selectedIds);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    setSelectedIds(next);
+                  }}
+                />
               </motion.div>
             ))
           )}

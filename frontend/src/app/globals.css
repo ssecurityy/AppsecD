@@ -235,9 +235,50 @@ body {
 [data-theme="light"] .severity-low { @apply text-emerald-700 bg-emerald-50 border-emerald-200; }
 [data-theme="light"] .severity-info { @apply text-sky-700 bg-sky-50 border-sky-200; }
 
+/* Light theme recheck status adjustments */
+[data-theme="light"] .recheck-pending { @apply text-yellow-700 bg-yellow-50 border-yellow-200; }
+[data-theme="light"] .recheck-resolved { @apply text-emerald-700 bg-emerald-50 border-emerald-200; }
+[data-theme="light"] .recheck-not_fixed { @apply text-red-700 bg-red-50 border-red-200; }
+[data-theme="light"] .recheck-partially_fixed { @apply text-orange-700 bg-orange-50 border-orange-200; }
+[data-theme="light"] .recheck-exception { @apply text-purple-700 bg-purple-50 border-purple-200; }
+[data-theme="light"] .recheck-deferred { @apply text-slate-700 bg-slate-50 border-slate-200; }
+[data-theme="light"] .recheck-retest_needed { @apply text-cyan-700 bg-cyan-50 border-cyan-200; }
+
+/* Theme-aware code/payload text */
+.themed-code { color: var(--text-code); }
+.themed-code-bg { background: var(--bg-tertiary); color: var(--text-code); }
+
+/* Light theme indicator adjustments */
+[data-theme="light"] .indicator-pass { @apply text-emerald-700 bg-emerald-50 border-emerald-200; }
+[data-theme="light"] .indicator-fail { @apply text-red-700 bg-red-50 border-red-200; }
+
 /* Status pill */
 .status-pill {
   @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+/* Light theme role badge adjustments */
+[data-theme="light"] .role-super_admin { @apply text-amber-700 bg-amber-50 border-amber-200; }
+[data-theme="light"] .role-admin { @apply text-emerald-700 bg-emerald-50 border-emerald-200; }
+[data-theme="light"] .role-lead { @apply text-blue-700 bg-blue-50 border-blue-200; }
+[data-theme="light"] .role-tester { @apply text-indigo-700 bg-indigo-50 border-indigo-200; }
+[data-theme="light"] .role-viewer { @apply text-slate-700 bg-slate-50 border-slate-200; }
+
+/* Light theme project status adjustments */
+[data-theme="light"] .status-completed { @apply text-emerald-700 bg-emerald-50 border-emerald-200; }
+[data-theme="light"] .status-in_progress { @apply text-indigo-700 bg-indigo-50 border-indigo-200; }
+[data-theme="light"] .status-review { @apply text-yellow-700 bg-yellow-50 border-yellow-200; }
+[data-theme="light"] .status-draft { @apply text-slate-700 bg-slate-50 border-slate-200; }
+
+/* Light theme link color adjustments */
+[data-theme="light"] a.hover\:text-white:hover { color: var(--accent-indigo) !important; }
+
+/* Light theme textarea and code readability */
+[data-theme="light"] pre, [data-theme="light"] code {
+  color: var(--text-code);
+}
+[data-theme="light"] .bg-gradient-to-r.from-indigo-500\/5 {
+  background: linear-gradient(to right, rgba(79,70,229,0.06), rgba(124,58,237,0.03));
 }
 
 /* Table styles */

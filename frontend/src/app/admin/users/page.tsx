@@ -16,7 +16,7 @@ const ROLE_COLORS: Record<string, string> = {
   admin: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
   lead: "text-blue-400 bg-blue-500/10 border-blue-500/20",
   tester: "text-indigo-400 bg-indigo-500/10 border-indigo-500/20",
-  viewer: "text-[#94a3b8] bg-[#161922] border-[#1e2330]",
+  viewer: "text-slate-400 bg-slate-500/10 border-slate-500/20",
 };
 
 const ROLE_LABELS: Record<string, string> = {

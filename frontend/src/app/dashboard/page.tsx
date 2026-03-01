@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import {
   Plus, FolderOpen, ShieldCheck, Target, AlertTriangle, TrendingUp,
   ChevronRight, Building2, Users, Crown, Zap, BookOpen, BarChart3,
-  Activity, Clock, Flame, Award
+  Activity, Clock, Flame, Award, Shield
 } from "lucide-react";
 import Link from "next/link";
 
@@ -57,6 +57,7 @@ export default function Dashboard() {
     { href: "/projects/new", label: "New Project", icon: Plus, color: "text-indigo-400 bg-indigo-500/10" },
     { href: "/payloads", label: "Wordlists", icon: BookOpen, color: "text-blue-400 bg-blue-500/10" },
     ...(isAdmin(user?.role) ? [
+      { href: "/dashboard/security-intel", label: "Security Intel", icon: Shield, color: "text-purple-400 bg-purple-500/10" },
       { href: "/admin/users", label: "Users", icon: Users, color: "text-emerald-400 bg-emerald-500/10" },
       { href: "/admin/audit", label: "Audit", icon: Activity, color: "text-amber-400 bg-amber-500/10" },
     ] : []),
@@ -72,7 +73,7 @@ export default function Dashboard() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
           className="relative overflow-hidden rounded-2xl border p-6"
-          style={{ borderColor: "var(--border-subtle)", background: "linear-gradient(135deg, rgba(99,102,241,0.08) 0%, rgba(139,92,246,0.04) 50%, rgba(14,16,24,1) 100%)" }}
+          style={{ borderColor: "var(--border-subtle)", background: "var(--gradient-brand-subtle)" }}
         >
           <div className="absolute top-0 right-0 w-[400px] h-[200px] bg-indigo-500/5 rounded-full blur-[80px]" />
           <div className="relative flex items-center justify-between">
@@ -297,7 +298,7 @@ export default function Dashboard() {
                             p.status === "completed" ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20" :
                             p.status === "in_progress" ? "text-indigo-400 bg-indigo-500/10 border border-indigo-500/20" :
                             p.status === "review" ? "text-yellow-400 bg-yellow-500/10 border border-yellow-500/20" :
-                            "text-[#64748b] bg-[#161922] border border-[#1e2330]"
+                            "bg-[var(--bg-elevated)] border border-[var(--border-subtle)]" + " " + "text-[var(--text-muted)]"
                           }`}>
                             {(p.status || "draft").replace("_", " ")}
                           </span>
@@ -327,7 +328,7 @@ export default function Dashboard() {
                         <div className="text-xs font-semibold text-red-400 tabular-nums">{p.failed_count || 0} findings</div>
                         <div className="text-[11px] text-emerald-500 mt-0.5 tabular-nums">{p.passed_count || 0} passed</div>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-[#334155] group-hover:text-indigo-400 transition-colors shrink-0" />
+                      <ChevronRight className="w-4 h-4 group-hover:text-indigo-400 transition-colors shrink-0" style={{ color: "var(--text-muted)" }} />
                     </Link>
                   </motion.div>
                 );

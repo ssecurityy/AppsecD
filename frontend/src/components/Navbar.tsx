@@ -1,9 +1,11 @@
 "use client";
-import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon, Shield } from "lucide-react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
 import { useTheme } from "@/components/ThemeProvider";
+import { api, getApiBase } from "@/lib/api";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 
@@ -23,6 +25,13 @@ export default function Navbar() {
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
+  const [branding, setBranding] = useState<any>(null);
+
+  useEffect(() => {
+    if (user) {
+      api.getMyBranding().then(setBranding).catch(() => {});
+    }
+  }, [user]);
 
   const logout = () => {
     clearAuth();
@@ -35,6 +44,7 @@ export default function Navbar() {
     { href: "/projects", icon: FolderOpen, label: "Projects" },
     { href: "/payloads", icon: BookOpen, label: "Wordlists" },
     ...(isAdmin(user?.role) ? [
+      { href: "/dashboard/security-intel", icon: Shield, label: "Intel" },
       { href: "/admin/users", icon: Users, label: "Users" },
       { href: "/admin/organizations", icon: Building2, label: "Orgs" },
       { href: "/admin/audit", icon: FileText, label: "Audit" },
@@ -47,12 +57,38 @@ export default function Navbar() {
       style={{ background: theme === "dark" ? "rgba(9,9,11,0.95)" : "rgba(255,255,255,0.95)", borderColor: "var(--border-subtle)" }}>
       {/* Brand */}
       <Link href="/dashboard" className="flex items-center gap-2.5 mr-6 group">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 group-hover:shadow-indigo-500/40 transition-shadow">
+        <div
+          className="w-8 h-8 rounded-lg flex items-center justify-center shadow-lg transition-shadow"
+          style={{
+            background: branding?.brand_color
+              ? `linear-gradient(135deg, ${branding.brand_color}, ${branding.brand_color}dd)`
+              : "linear-gradient(135deg, #6366f1, #9333ea)",
+            boxShadow: branding?.brand_color
+              ? `0 4px 14px ${branding.brand_color}33`
+              : "0 4px 14px rgba(99,102,241,0.2)",
+          }}
+        >
           <ShieldCheck className="w-4.5 h-4.5 text-white" />
         </div>
-        <span className="font-bold text-sm tracking-tight hidden sm:block" style={{ color: "var(--text-primary)" }}>
-          AppSec<span className="text-indigo-500">D</span>
-        </span>
+        {branding?.logo_url && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={branding.logo_url.startsWith("http") ? branding.logo_url : `${getApiBase()}${branding.logo_url}`}
+            alt="Org logo"
+            className="w-8 h-8 rounded-lg object-cover border"
+            style={{ borderColor: "var(--border-subtle)" }}
+          />
+        )}
+        <div className="hidden sm:block">
+          <span className="font-bold text-sm tracking-tight block" style={{ color: "var(--text-primary)" }}>
+            AppSec<span className="text-indigo-500">D</span>
+          </span>
+          {branding?.name && (
+            <span className="text-[10px] block leading-none" style={{ color: "var(--text-muted)" }}>
+              {branding.name}
+            </span>
+          )}
+        </div>
       </Link>
 
       {/* Nav links */}

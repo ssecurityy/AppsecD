@@ -8,7 +8,7 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy
 } from "lucide-react";
 import Link from "next/link";
 
@@ -72,7 +72,7 @@ function EvidenceItem({ e, onRemove, getApiBase }: { e: { filename: string; url:
   );
 }
 
-function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; projectId: string; applicationUrl: string; onUpdate: () => void }) {
+function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload, setCraftingPayload, craftedPayloads, setCraftedPayloads }: { tc: any; projectId: string; applicationUrl: string; onUpdate: () => void; craftingPayload: string | null; setCraftingPayload: (v: string | null) => void; craftedPayloads: Record<string, any[]>; setCraftedPayloads: (v: Record<string, any[]>) => void }) {
   const { setUser } = useAuthStore();
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -82,6 +82,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
   const [showFindingForm, setShowFindingForm] = useState(false);
   const [aiSuggesting, setAiSuggesting] = useState(false);
+  const [showCraftedPayloads, setShowCraftedPayloads] = useState(false);
   const [finding, setFinding] = useState({
     title: tc.title,
     severity: tc.severity,
@@ -228,13 +229,47 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
 
               {tc.payloads?.length > 0 && (
                 <div>
-                  <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mb-2">💉 Payloads (TARGET → your URL)</h4>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">💉 Payloads (TARGET → your URL)</h4>
+                    <button
+                      onClick={async () => {
+                        const tcId = tc.result_id || tc.id;
+                        setCraftingPayload(tcId);
+                        try {
+                          const res = await api.craftPayload({
+                            test_title: tc.title,
+                            test_description: tc.description || tc.how_to_test || "",
+                            existing_payloads: tc.payloads || [],
+                            target_url: applicationUrl || undefined,
+                            context: tc.owasp_id || tc.phase || "",
+                          });
+                          const payloads = res.payloads || res.enhanced_payloads || res.crafted_payloads || [];
+                          setCraftedPayloads({ ...craftedPayloads, [tcId]: payloads });
+                          setShowCraftedPayloads(true);
+                          toast.success(`AI generated ${payloads.length} enhanced payloads`);
+                        } catch (err: any) {
+                          toast.error(err.message || "AI payload crafting failed");
+                        } finally {
+                          setCraftingPayload(null);
+                        }
+                      }}
+                      disabled={craftingPayload === (tc.result_id || tc.id)}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-purple-500/30 text-purple-400 hover:bg-purple-500/10 transition-colors disabled:opacity-50"
+                    >
+                      {craftingPayload === (tc.result_id || tc.id) ? (
+                        <div className="w-3 h-3 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+                      ) : (
+                        <Wand2 className="w-3 h-3" />
+                      )}
+                      {craftingPayload === (tc.result_id || tc.id) ? "Crafting..." : "AI Enhance"}
+                    </button>
+                  </div>
                   <div className="space-y-1">
                     {tc.payloads.slice(0, 8).map((p: string, i: number) => {
                       const resolved = replaceTarget(p, applicationUrl);
                       return (
                         <div key={i} className="flex items-center gap-2">
-                          <code className="text-xs text-[#A5F3FC] bg-[var(--bg-tertiary)] px-2 py-1 rounded font-mono flex-1 overflow-x-auto">{resolved}</code>
+                          <code className="text-xs bg-[var(--bg-tertiary)] px-2 py-1 rounded font-mono flex-1 overflow-x-auto" style={{ color: "var(--text-code)" }}>{resolved}</code>
                           <button onClick={() => { navigator.clipboard.writeText(resolved); toast.success("Copied! Ready to paste."); }}
                             className="hover:text-white text-xs px-2 py-1 rounded shrink-0" style={{ color: "var(--text-muted)", background: "var(--bg-elevated)" }}>
                             Copy
@@ -243,6 +278,57 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                       );
                     })}
                   </div>
+
+                  {/* AI-Enhanced Payloads Section */}
+                  {craftedPayloads[tc.result_id || tc.id] && craftedPayloads[tc.result_id || tc.id].length > 0 && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() => setShowCraftedPayloads(!showCraftedPayloads)}
+                        className="flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-300 mb-2"
+                      >
+                        <Wand2 className="w-3 h-3" />
+                        {showCraftedPayloads ? "Hide" : "Show"} AI-Enhanced Payloads ({craftedPayloads[tc.result_id || tc.id].length})
+                        {showCraftedPayloads ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      </button>
+                      <AnimatePresence>
+                        {showCraftedPayloads && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="overflow-hidden"
+                          >
+                            <div className="space-y-2 rounded-lg p-3" style={{ background: "rgba(139,92,246,0.05)", border: "1px solid rgba(139,92,246,0.15)" }}>
+                              {craftedPayloads[tc.result_id || tc.id].map((cp: any, i: number) => {
+                                const payloadText = typeof cp === "string" ? cp : cp.payload || cp.text || "";
+                                const technique = typeof cp === "string" ? "" : cp.technique || cp.category || "";
+                                const resolved = replaceTarget(payloadText, applicationUrl);
+                                return (
+                                  <div key={i} className="flex items-start gap-2 rounded p-2" style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)" }}>
+                                    <div className="flex-1 min-w-0">
+                                      <code className="text-xs font-mono block overflow-x-auto whitespace-pre" style={{ color: "var(--text-code)" }}>{resolved}</code>
+                                      {technique && (
+                                        <span className="text-[10px] mt-1 inline-block px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                                          {technique}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <button
+                                      onClick={() => { navigator.clipboard.writeText(resolved); toast.success("AI payload copied!"); }}
+                                      className="shrink-0 p-1 rounded hover:bg-purple-500/10 text-purple-400 transition-colors"
+                                      title="Copy payload"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -263,7 +349,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                               Copy
                             </button>
                           </div>
-                          <code className="text-xs text-[#A5F3FC] font-mono block overflow-x-auto whitespace-pre">{resolvedCmd}</code>
+                          <code className="text-xs font-mono block overflow-x-auto whitespace-pre" style={{ color: "var(--text-code)" }}>{resolvedCmd}</code>
                           {cmd.description && <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>{cmd.description}</p>}
                         </div>
                       );
@@ -276,13 +362,13 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
                 {tc.pass_indicators && (
                   <div>
                     <h4 className="text-xs font-semibold text-green-400 uppercase tracking-wider mb-1">✅ Pass Indicators</h4>
-                    <p className="text-xs text-[#D1D5DB] bg-green-900/10 border border-green-900/30 p-2 rounded">{tc.pass_indicators}</p>
+                    <p className="text-xs p-2 rounded" style={{ color: "var(--text-secondary)", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>{tc.pass_indicators}</p>
                   </div>
                 )}
                 {tc.fail_indicators && (
                   <div>
                     <h4 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-1">❌ Fail Indicators</h4>
-                    <p className="text-xs text-[#D1D5DB] bg-red-900/10 border border-red-900/30 p-2 rounded">{tc.fail_indicators}</p>
+                    <p className="text-xs p-2 rounded" style={{ color: "var(--text-secondary)", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>{tc.fail_indicators}</p>
                   </div>
                 )}
               </div>
@@ -290,7 +376,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
               {tc.remediation && (
                 <div>
                   <h4 className="text-xs font-semibold text-purple-400 uppercase tracking-wider mb-1">🔧 Remediation</h4>
-                  <p className="text-xs text-[#D1D5DB] bg-purple-900/10 border border-purple-900/30 p-2 rounded">{tc.remediation}</p>
+                  <p className="text-xs p-2 rounded" style={{ color: "var(--text-secondary)", background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)" }}>{tc.remediation}</p>
                 </div>
               )}
 
@@ -437,6 +523,8 @@ export default function ProjectDetail() {
   const [findings, setFindings] = useState<any[]>([]);
   const [showFindings, setShowFindings] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [craftingPayload, setCraftingPayload] = useState<string | null>(null);
+  const [craftedPayloads, setCraftedPayloads] = useState<Record<string, any[]>>({});
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -841,6 +929,10 @@ export default function ProjectDetail() {
                         projectId={id}
                         applicationUrl={project?.application_url || ""}
                         onUpdate={handleUpdate}
+                        craftingPayload={craftingPayload}
+                        setCraftingPayload={setCraftingPayload}
+                        craftedPayloads={craftedPayloads}
+                        setCraftedPayloads={setCraftedPayloads}
                       />
                       </motion.div>
                     ))}

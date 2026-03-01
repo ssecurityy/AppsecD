@@ -1,5 +1,5 @@
 """Organization model for multi-tenant support."""
-from sqlalchemy import Column, String, DateTime, Boolean
+from sqlalchemy import Column, String, Text, DateTime, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import uuid
@@ -13,5 +13,8 @@ class Organization(Base):
     name = Column(String(255), nullable=False)
     slug = Column(String(100), unique=True, nullable=False)
     is_active = Column(Boolean, default=True)
+    logo_url = Column(Text, nullable=True)
+    brand_color = Column(String(20), nullable=True)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

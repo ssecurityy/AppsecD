@@ -46,6 +46,10 @@ def f_to_dict(f: Finding) -> dict:
         "impact": f.impact,
         "recommendation": f.recommendation,
         "created_at": f.created_at.isoformat() if f.created_at else "",
+        # JIRA integration fields
+        "jira_key": getattr(f, "jira_key", None),
+        "jira_url": getattr(f, "jira_url", None),
+        "jira_status": getattr(f, "jira_status", None),
         # Vulnerability Management fields
         "recheck_status": getattr(f, "recheck_status", None) or "pending",
         "recheck_notes": getattr(f, "recheck_notes", None),
@@ -358,7 +362,7 @@ async def create_jira_issue(
     current_user: User = Depends(require_tester_plus),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a JIRA issue from this finding."""
+    """Create a JIRA issue from this finding. Uses org-scoped JIRA config."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -366,9 +370,16 @@ async def create_jira_issue(
     if not await user_can_write_project(db, current_user, str(finding.project_id)):
         raise HTTPException(403, "Write access denied to this project")
 
+    # Get org-scoped JIRA config
+    from app.services.org_settings_service import get_jira_config
+    proj_result = await db.execute(select(Project).where(Project.id == finding.project_id))
+    proj = proj_result.scalar_one_or_none()
+    org_id = getattr(proj, "organization_id", None) or getattr(current_user, "organization_id", None)
+    jira_base, jira_email, jira_token, jira_key = await get_jira_config(db, org_id)
+
     from app.services.jira_service import create_jira_issue_from_finding, _jira_configured
-    if not _jira_configured():
-        raise HTTPException(503, "JIRA integration not configured. Set JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY.")
+    if not _jira_configured(base_url=jira_base or "", email=jira_email or "", token=jira_token or "", project_key=jira_key or ""):
+        raise HTTPException(503, "JIRA integration not configured. Configure JIRA in Admin Settings for your organization.")
 
     f_dict = {
         "title": finding.title,
@@ -377,13 +388,94 @@ async def create_jira_issue(
         "affected_url": finding.affected_url,
         "owasp_category": finding.owasp_category,
         "cwe_id": finding.cwe_id,
+        "cvss_score": finding.cvss_score,
         "reproduction_steps": finding.reproduction_steps,
+        "impact": finding.impact,
         "recommendation": finding.recommendation,
     }
-    out = create_jira_issue_from_finding(f_dict, project_key)
+    out = create_jira_issue_from_finding(
+        f_dict, project_key,
+        base_url=jira_base, email=jira_email, api_token=jira_token, default_project_key=jira_key,
+    )
     if not out:
         raise HTTPException(502, "Failed to create JIRA issue. Check JIRA configuration and connectivity.")
-    return {"jira_key": out["key"], "jira_url": out["url"]}
+
+    # Store JIRA ticket info on the finding
+    if hasattr(finding, "jira_key"):
+        finding.jira_key = out.get("key")
+    if hasattr(finding, "jira_url"):
+        finding.jira_url = out.get("url")
+    if hasattr(finding, "jira_status"):
+        finding.jira_status = "Open"
+    await db.commit()
+    await db.refresh(finding)
+
+    return {**f_to_dict(finding), "jira_key": out["key"], "jira_url": out["url"]}
+
+
+@router.post("/bulk-jira", response_model=dict)
+async def bulk_create_jira_issues(
+    payload: dict,
+    current_user: User = Depends(require_tester_plus),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk create JIRA issues for multiple findings."""
+    finding_ids = payload.get("finding_ids", [])
+    project_key_override = payload.get("project_key")
+    if not finding_ids:
+        raise HTTPException(400, "No finding IDs provided")
+
+    from app.services.org_settings_service import get_jira_config
+    from app.services.jira_service import create_jira_issue_from_finding, _jira_configured
+
+    created = []
+    failed = []
+    for fid in finding_ids:
+        result = await db.execute(select(Finding).where(Finding.id == fid))
+        finding = result.scalar_one_or_none()
+        if not finding:
+            failed.append({"id": fid, "error": "Not found"})
+            continue
+        if not await user_can_write_project(db, current_user, str(finding.project_id)):
+            failed.append({"id": fid, "error": "Access denied"})
+            continue
+        if getattr(finding, "jira_key", None):
+            failed.append({"id": fid, "error": f"Already has JIRA ticket: {finding.jira_key}"})
+            continue
+
+        proj_result = await db.execute(select(Project).where(Project.id == finding.project_id))
+        proj = proj_result.scalar_one_or_none()
+        org_id = getattr(proj, "organization_id", None) or getattr(current_user, "organization_id", None)
+        jira_base, jira_email, jira_token, jira_key = await get_jira_config(db, org_id)
+
+        if not _jira_configured(base_url=jira_base or "", email=jira_email or "", token=jira_token or "", project_key=jira_key or ""):
+            failed.append({"id": fid, "error": "JIRA not configured"})
+            continue
+
+        f_dict = {
+            "title": finding.title, "description": finding.description,
+            "severity": finding.severity, "affected_url": finding.affected_url,
+            "owasp_category": finding.owasp_category, "cwe_id": finding.cwe_id,
+            "cvss_score": finding.cvss_score, "reproduction_steps": finding.reproduction_steps,
+            "impact": finding.impact, "recommendation": finding.recommendation,
+        }
+        out = create_jira_issue_from_finding(
+            f_dict, project_key_override,
+            base_url=jira_base, email=jira_email, api_token=jira_token, default_project_key=jira_key,
+        )
+        if out:
+            if hasattr(finding, "jira_key"):
+                finding.jira_key = out.get("key")
+            if hasattr(finding, "jira_url"):
+                finding.jira_url = out.get("url")
+            if hasattr(finding, "jira_status"):
+                finding.jira_status = "Open"
+            created.append({"id": fid, "jira_key": out["key"], "jira_url": out["url"]})
+        else:
+            failed.append({"id": fid, "error": "Failed to create issue"})
+
+    await db.commit()
+    return {"created": len(created), "failed": len(failed), "results": created, "errors": failed}
 
 
 @router.post("/import/burp")

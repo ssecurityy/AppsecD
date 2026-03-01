@@ -54,12 +54,12 @@ export default function ProjectsPage() {
                         <span className={`text-xs px-2 py-0.5 rounded border ${
                           p.status === "completed" ? "text-green-400 bg-green-900/20 border-green-800" :
                           p.status === "in_progress" ? "text-indigo-400 bg-indigo-500/10 border-indigo-500/30" :
-                          "text-[#64748b] bg-[#1F2937] border-[#374151]"
+                          "text-[var(--text-muted)] bg-[var(--bg-elevated)] border-[var(--border-subtle)]"
                         }`}>{p.status.replace("_", " ")}</span>
                       </div>
                       <p className="text-xs" style={{ color: "var(--text-muted)" }}>{p.application_url}</p>
                       <div className="flex items-center gap-3 mt-2">
-                        <div className="flex-1 h-1.5 bg-[#374151] rounded-full overflow-hidden">
+                        <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
                           <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }}
                             className={`h-full rounded-full ${pct === 100 ? "bg-green-500" : "bg-indigo-500"}`} />
                         </div>

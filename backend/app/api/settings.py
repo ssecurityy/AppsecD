@@ -421,47 +421,79 @@ async def test_smtp_notification(
 
 @router.post("/llm/test")
 async def test_llm_connection(
+    org_id: str | None = Query(None),
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Test the configured LLM API key by making a small API call."""
-    _provider, model, api_key = await get_llm_config(db)
+    """Test the configured LLM API key by making a small API call. Uses org-scoped config."""
+    org_uuid, _ = await _resolve_org_id(current_user, org_id, db)
+    provider, model, api_key = await get_llm_config(db, org_uuid)
     if not api_key:
-        return {"ok": False, "error": "No API key configured", "mode": "rule_based"}
+        return {"ok": False, "error": "No API key configured. Save your API key first, then test.", "mode": "rule_based"}
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=model or "gpt-4o-mini",
-            messages=[{"role": "user", "content": "Say 'ok' in one word."}],
-            max_tokens=5,
-            temperature=0,
-        )
-        text = (response.choices[0].message.content or "").strip()
-        return {"ok": True, "model": model, "response": text, "mode": "llm"}
+        if provider == "anthropic":
+            from anthropic import Anthropic
+            client = Anthropic(api_key=api_key)
+            r = client.messages.create(
+                model=model or "claude-sonnet-4-20250514",
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Say 'ok' in one word."}],
+            )
+            text = (r.content[0].text if r.content else "").strip()
+            return {"ok": True, "model": model, "response": text, "mode": "llm", "provider": provider}
+        elif provider == "google":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            m = genai.GenerativeModel(model or "gemini-1.5-flash")
+            r = m.generate_content("Say 'ok' in one word.")
+            text = (r.text or "").strip()
+            return {"ok": True, "model": model, "response": text, "mode": "llm", "provider": provider}
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=model or "gpt-4o-mini",
+                messages=[{"role": "user", "content": "Say 'ok' in one word."}],
+                max_tokens=5,
+                temperature=0,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            return {"ok": True, "model": model, "response": text, "mode": "llm", "provider": provider}
     except Exception as e:
-        return {"ok": False, "error": str(e), "model": model, "mode": "llm"}
+        return {"ok": False, "error": str(e), "model": model, "mode": "llm", "provider": provider}
 
 
 @router.post("/jira/test")
 async def test_jira_connection(
+    org_id: str | None = Query(None),
     current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Test the configured JIRA connection."""
-    s = get_settings()
-    if not (s.jira_base_url and s.jira_email and s.jira_api_token):
-        return {"ok": False, "error": "JIRA not configured. Set env variables."}
+    """Test the configured JIRA connection. Uses org-scoped config first, then env fallback."""
+    org_uuid, _ = await _resolve_org_id(current_user, org_id, db)
+    jira_base, jira_email, jira_token, jira_key = await get_jira_config(db, org_uuid)
+
+    # Fallback to env vars if org config not set
+    if not (jira_base and jira_email and jira_token):
+        s = get_settings()
+        jira_base = jira_base or s.jira_base_url
+        jira_email = jira_email or s.jira_email
+        jira_token = jira_token or s.jira_api_token
+        jira_key = jira_key or s.jira_project_key
+
+    if not (jira_base and jira_email and jira_token):
+        return {"ok": False, "error": "JIRA not configured. Save JIRA URL, email, and API token first."}
     try:
         import httpx
-        base = s.jira_base_url.rstrip("/")
+        base = jira_base.rstrip("/")
         with httpx.Client(timeout=10) as client:
             r = client.get(
                 f"{base}/rest/api/3/myself",
-                auth=(s.jira_email, s.jira_api_token),
+                auth=(jira_email, jira_token),
             )
             if r.status_code == 200:
                 data = r.json()
-                return {"ok": True, "user": data.get("displayName", "Unknown"), "email": data.get("emailAddress", "")}
+                return {"ok": True, "user": data.get("displayName", "Unknown"), "email": data.get("emailAddress", ""), "project_key": jira_key}
             else:
                 return {"ok": False, "error": f"JIRA returned {r.status_code}: {r.text[:200]}"}
     except Exception as e:
