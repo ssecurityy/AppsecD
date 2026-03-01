@@ -227,10 +227,8 @@ async def upload_org_logo(
 @router.get("/{org_id}/logo")
 async def get_org_logo(
     org_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    """Serve the organization logo file."""
+    """Serve the organization logo file. Public endpoint — logos are not sensitive."""
     # Find any logo file for this org
     if not LOGO_UPLOAD_DIR.exists():
         raise HTTPException(404, "Logo not found")
