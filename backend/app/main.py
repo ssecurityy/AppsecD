@@ -27,6 +27,7 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(api_router, prefix="/api")  # /api/auth, /api/projects — Nginx proxy, no path conflict with frontend
 
 
 @app.get("/")

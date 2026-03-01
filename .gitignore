@@ -9,6 +9,9 @@ __pycache__/
 .env
 *.pem
 
+# SSL (Cloudflare certs - keep server-side only)
+ssl/*.key
+
 # Build
 .next/
 dist/

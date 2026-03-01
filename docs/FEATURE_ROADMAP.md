@@ -1,6 +1,6 @@
 # VAPT Navigator — Feature Roadmap & Advisor
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-01
 
 This document outlines implemented features, planned enhancements, and future ideas. Status reflects actual codebase verification. Acts as a comprehensive master plan for achieving a world-class VAPT platform.
 
@@ -17,7 +17,7 @@ This document outlines implemented features, planned enhancements, and future id
 | **Table of contents**             | ✅ Done | —      | —        |
 | **Live report view**              | ✅ Done | —      | —        |
 | **Evidence/screenshot embedding** | ✅ Done | —      | —        |
-| **Signed report hash (SHA-256)**  | ❌ Not  | Low    | Medium   |
+| **Signed report hash (SHA-256)**  | ✅ Done | —      | —        |
 | **Custom report templates**       | ❌ Not  | High   | Low      |
 | **Report scheduling**             | ❌ Not  | Medium | Medium   |
 | **Executive dashboard PDF**       | ❌ Not  | Medium | Medium   |
@@ -27,7 +27,7 @@ This document outlines implemented features, planned enhancements, and future id
 **Notes:**
 
 - Evidence upload (images, PDF, etc.) and embedding in HTML/DOCX/PDF reports is implemented.
-- SHA-256 hash for report integrity verification is not yet added.
+- SHA-256 hash in HTML report footer (report_service.py).
 
 ---
 
@@ -43,7 +43,7 @@ This document outlines implemented features, planned enhancements, and future id
 | **Payload sources UI**                   | ✅ Done | —      | —        |
 | **Skill tree**                           | ❌ Not  | High   | Medium   |
 | **Organization leaderboard**             | ❌ Not  | Medium | Medium   |
-| **Burp XML import**                      | ❌ Not  | Medium | High     |
+| **Burp XML import**                      | ✅ Done | —      | —        |
 | **CI/CD webhook**                        | ❌ Not  | Medium | High     |
 | **Time tracking**                        | ❌ Not  | Low    | Medium   |
 | **Test case templates**                  | ❌ Not  | Medium | Low      |
@@ -86,10 +86,11 @@ This document outlines implemented features, planned enhancements, and future id
 | ---------------------------- | ------ | ------ | -------- |
 | **JIRA**                     | ✅ Done | —      | —        |
 | **JIRA per-org config**      | ✅ Done | —      | —        |
-| **Slack notifications**      | ❌ Not  | Medium | Medium   |
+| **Slack notifications**      | ✅ Done | —      | —        |
 | **Microsoft Teams**          | ❌ Not  | Medium | Medium   |
-| **SMTP/Email notifications** | ❌ Not  | Medium | High     |
+| **SMTP/Email notifications** | ✅ Done | —      | —        |
 | **DefectDojo**               | ❌ Not  | High   | Medium   |
+| **Generic webhook (outgoing)** | ✅ Done | —      | —        |
 | **GitHub Issues**            | ❌ Not  | Medium | Medium   |
 | **ServiceNow**               | ❌ Not  | High   | Low      |
 | **Nuclei results import**    | ❌ Not  | High   | Medium   |
@@ -99,7 +100,7 @@ This document outlines implemented features, planned enhancements, and future id
 **Notes:**
 
 - JIRA: env vars + per-org settings; create issues from findings.
-- **Future:** SMTP for critical finding alerts, digest emails; Slack/Teams webhooks for real-time notifications.
+- Slack, SMTP, generic webhook on critical/high findings (notification_service); configurable per-org in Admin Settings. Teams not implemented.
 
 ---
 
@@ -154,7 +155,7 @@ This document outlines implemented features, planned enhancements, and future id
 
 **Notes:**
 
-- MFA backend ready; login flow enforcement for admin may need tightening.
+- MFA: full flow (setup, verify, login step, admin enable/disable). Login enforces MFA when enabled.
 
 ---
 
@@ -166,15 +167,17 @@ This document outlines implemented features, planned enhancements, and future id
 | **WebSocket**      | ✅ Done     | —      | —        |
 | **Celery async**   | ✅ Done     | —      | —        |
 | **Redis (broker)** | ✅ Done     | —      | —        |
-| **Redis caching**  | ❌ Not      | Medium | Medium   |
-| **Pagination**     | ⚠️ Partial | Low    | Medium   |
+| **Redis caching**  | ✅ Done     | —      | —        |
+| **Pagination**     | ✅ Done     | —      | —        |
+| **Health endpoints** | ✅ Done   | —      | —        |
 | **Lazy loading**   | ⚠️ Partial | Low    | Medium   |
 | **CDN for assets** | ❌ Not      | Low    | Low      |
 
 
 **Notes:**
 
-- Redis used for Celery; `redis_client.py` exists but caching not yet applied to project list, report metadata, etc.
+- Redis: Celery broker + project list caching (60s TTL, cache_service); cache invalidation on project changes.
+- Health: `/health` (liveness), `/health/ready` (DB + Redis).
 
 ---
 
@@ -199,11 +202,11 @@ This document outlines implemented features, planned enhancements, and future id
 | Live report link                  | ✅ Done |
 | Charts in HTML report             | ✅ Done |
 | Table of contents in report       | ✅ Done |
-| MFA login UI enforcement          | ❌ Not  |
+| MFA login UI enforcement          | ✅ Done |
 | Organization leaderboard          | ❌ Not  |
-| Slack webhook on critical finding | ❌ Not  |
-| SMTP/email on critical finding    | ❌ Not  |
-| Report SHA-256 hash in footer     | ❌ Not  |
+| Slack webhook on critical finding | ✅ Done |
+| SMTP/email on critical finding    | ✅ Done |
+| Report SHA-256 hash in footer     | ✅ Done |
 
 
 ---
@@ -289,14 +292,14 @@ This document outlines implemented features, planned enhancements, and future id
 
 ## 13. Notifications & Alerting
 
-| Feature | Description | Effort | Priority |
-|---------|-------------|--------|----------|
-| **SMTP/Email** | Critical finding alert, remediation complete, weekly digest | Medium | High |
-| **Slack webhook** | Incoming webhook on critical finding, phase complete | Low | High |
-| **Microsoft Teams** | Incoming webhook for Teams channels | Low | Medium |
-| **PagerDuty** | Critical severity → PagerDuty incident | Medium | Medium |
-| **Webhook (generic)** | Configurable outgoing webhook with JSON payload | Low | High |
-| **In-app notifications** | Bell icon, unread count, mark as read | Medium | Medium |
+| Feature | Status | Description | Effort | Priority |
+|---------|--------|-------------|--------|----------|
+| **SMTP/Email** | ✅ Done | Critical finding alert (configurable per-org) | — | — |
+| **Slack webhook** | ✅ Done | Webhook on critical finding | — | — |
+| **Microsoft Teams** | ❌ Not | Incoming webhook for Teams channels | Low | Medium |
+| **PagerDuty** | ❌ Not | Critical severity → PagerDuty incident | Medium | Medium |
+| **Webhook (generic)** | ✅ Done | Configurable outgoing webhook with JSON payload on finding created | — | — |
+| **In-app notifications** | ❌ Not | Bell icon, unread count, mark as read | Medium | Medium |
 
 ---
 
@@ -315,13 +318,13 @@ This document outlines implemented features, planned enhancements, and future id
 
 ## 15. API & Extensibility
 
-| Feature | Description | Effort | Priority |
-|---------|-------------|--------|----------|
-| **REST API (full)** | CRUD projects, findings, test results, reports; API key auth | High | Critical |
-| **API versioning** | `/api/v1/` for backward compatibility | Low | High |
-| **Webhooks (outgoing)** | Notify external systems on events (finding created, project complete) | Medium | High |
-| **Plugin system** | Load custom Python modules for tool runners, parsers | High | Low |
-| **Custom fields** | Org-defined custom fields on findings/projects | Medium | Medium |
+| Feature | Status | Description | Effort | Priority |
+|---------|--------|-------------|--------|----------|
+| **REST API (full)** | ⚠️ Partial | CRUD projects, findings, test results, reports; API key auth | High | Critical |
+| **API versioning** | ✅ Done | `/api/v1/` for backward compatibility | — | — |
+| **Webhooks (outgoing)** | ✅ Done | Generic webhook on finding created (notification_service) | — | — |
+| **Plugin system** | ❌ Not | Load custom Python modules for tool runners, parsers | High | Low |
+| **Custom fields** | ❌ Not | Org-defined custom fields on findings/projects | Medium | Medium |
 
 ---
 
@@ -364,14 +367,14 @@ This document outlines implemented features, planned enhancements, and future id
 
 ## 19. UX Enhancements
 
-| Feature | Description | Effort | Priority |
-|---------|-------------|--------|----------|
-| **Keyboard shortcuts** | Power-user shortcuts (e.g., j/k navigation) | Low | Medium |
-| **Bulk actions** | Bulk update status, bulk assign, bulk export | Medium | High |
-| **Advanced filters** | Filter findings by date, severity, status, assignee, CWE | Low | High |
-| **Saved views** | Save filter presets (e.g., "My critical findings") | Medium | Medium |
-| **Dark/light theme toggle** | User preference | Low | Low |
-| **Reduced motion** | Accessibility: respect prefers-reduced-motion | Low | Low |
+| Feature | Status | Description | Effort | Priority |
+|---------|--------|-------------|--------|----------|
+| **Keyboard shortcuts** | ❌ Not | Power-user shortcuts (e.g., j/k navigation) | Low | Medium |
+| **Bulk actions** | ❌ Not | Bulk update status, bulk assign, bulk export | Medium | High |
+| **Advanced filters** | ⚠️ Partial | Backend: severity, recheck_status, status, date; frontend: severity/recheck in API, client filters in vulnerabilities page | — | — |
+| **Saved views** | ❌ Not | Save filter presets (e.g., "My critical findings") | Medium | Medium |
+| **Dark/light theme toggle** | ✅ Done | User preference (theme in layout) | — | — |
+| **Reduced motion** | ❌ Not | Accessibility: respect prefers-reduced-motion | Low | Low |
 
 ---
 
@@ -390,20 +393,20 @@ This document outlines implemented features, planned enhancements, and future id
 
 ## 21. Future Roadmap (Proposed Additions)
 
-| Feature | Description | Effort | Priority |
-|---------|-------------|--------|----------|
-| **SMTP notifications** | Email alerts on critical findings, remediation complete, weekly digest | Medium | High |
-| **Slack webhook** | Webhook URL on critical finding, project phase complete | Low | High |
-| **Microsoft Teams** | Incoming webhook for Teams channels | Low | Medium |
-| **Burp XML import** | Import findings from Burp Suite XML export | Medium | High |
-| **CI/CD webhook** | Outgoing webhook on project completion; API key for automated runs | Medium | High |
-| **Nuclei integration** | Run Nuclei, import results as findings | High | Critical |
-| **ZAP integration** | Import OWASP ZAP scan results | Medium | High |
-| **DefectDojo sync** | Push findings to DefectDojo for compliance | High | Medium |
-| **GitHub Issues** | Create GitHub issue from finding | Medium | Medium |
-| **Signed report hash** | SHA-256 in report footer for integrity | Low | Medium |
-| **Report scheduling** | Weekly/monthly digest | Medium | Medium |
-| **Redis caching** | Cache project list, report metadata | Medium | Medium |
+| Feature | Status | Description | Effort | Priority |
+|---------|--------|-------------|--------|----------|
+| **SMTP notifications** | ✅ Done | Email alerts on critical findings | — | — |
+| **Slack webhook** | ✅ Done | Webhook on critical finding | — | — |
+| **Microsoft Teams** | ❌ Not | Incoming webhook for Teams channels | Low | Medium |
+| **Burp XML import** | ✅ Done | Import findings from Burp Suite XML export | — | — |
+| **CI/CD webhook** | ❌ Not | Outgoing webhook on project completion; API key for automated runs | Medium | High |
+| **Nuclei integration** | ❌ Not | Run Nuclei, import results as findings | High | Critical |
+| **ZAP integration** | ❌ Not | Import OWASP ZAP scan results | Medium | High |
+| **DefectDojo sync** | ❌ Not | Push findings to DefectDojo for compliance | High | Medium |
+| **GitHub Issues** | ❌ Not | Create GitHub issue from finding | Medium | Medium |
+| **Signed report hash** | ✅ Done | SHA-256 in report footer for integrity | — | — |
+| **Report scheduling** | ❌ Not | Weekly/monthly digest | Medium | Medium |
+| **Redis caching** | ✅ Done | Cache project list (60s TTL) | — | — |
 | **Custom test case library** | Org-specific test cases | Medium | Medium |
 | **API-first** | Full REST API for CI/CD, third-party tools | High | Critical |
 
@@ -502,14 +505,15 @@ This document outlines implemented features, planned enhancements, and future id
 
 **Implemented (✅):**
 
-- Reports: Charts, TOC, live view, evidence embedding.
-- Testing: WSTG test cases, payloads in DB, payload sources UI.
+- Reports: Charts, TOC, live view, evidence embedding, **signed report hash (SHA-256)**.
+- Testing: WSTG test cases, payloads in DB, payload sources UI, **Burp XML import**.
 - AI: Rule-based + LLM (multi-provider), severity recommendation.
-- Integrations: JIRA (env + per-org).
+- Integrations: JIRA (env + per-org), **Slack**, **SMTP**, **generic webhook** on critical findings.
 - Vulnerability Management: Remediation, recheck workflow, vulnerabilities page.
-- Security: MFA, audit logs, rate limiting.
-- Infra: WebSocket, Celery, Redis broker.
+- Security: MFA (full login flow), audit logs, rate limiting.
+- Infra: WebSocket, Celery, Redis broker, **Redis caching** (project list).
 - Org: Organizations, super admin, org-scoped settings.
+- API: **Versioning** (`/api/v1/`), webhook on finding created.
 
 **Priority next steps (Test Automation):**
 
@@ -521,10 +525,9 @@ This document outlines implemented features, planned enhancements, and future id
 
 **Priority next steps (Platform):**
 
-1. Notifications: SMTP, Slack webhook.
-2. REST API (full).
-3. Signed report hash.
-4. Redis caching.
+1. REST API (full) with API key auth.
+2. Microsoft Teams webhook.
+3. Report scheduling.
 
 ---
 

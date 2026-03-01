@@ -1,16 +1,14 @@
 /**
  * VAPT Navigator - PM2 Ecosystem Config
+ * Production: appsecd.com behind Nginx
  * Usage: pm2 start ecosystem.config.cjs
- *        pm2 stop all
- *        pm2 restart all
- *        pm2 logs
  */
 module.exports = {
   apps: [
     {
       name: "navigator-backend",
       script: "/opt/navigator/backend/venv/bin/uvicorn",
-      args: "app.main:app --host 0.0.0.0 --port 5001",
+      args: "app.main:app --host 0.0.0.0 --port 5001 --workers 2",
       cwd: "/opt/navigator/backend",
       interpreter: "none",
       instances: 1,
@@ -35,7 +33,7 @@ module.exports = {
       max_memory_restart: "1G",
       env: {
         NODE_ENV: "production",
-        NEXT_PUBLIC_API_URL: "http://31.97.239.245:5001",
+        NEXT_PUBLIC_API_URL: "https://appsecd.com/api",
       },
       error_file: "/opt/navigator/logs/frontend-error.log",
       out_file: "/opt/navigator/logs/frontend-out.log",

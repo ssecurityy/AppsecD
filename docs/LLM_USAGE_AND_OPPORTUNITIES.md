@@ -2,7 +2,13 @@
 
 **Last updated:** 2026-03-01
 
-This document maps where LLMs are used in the application, and where they could add value with documented benefits.
+This document maps where LLMs are used, with verified implementation status.
+
+**Status legend:** **Done** = Implemented (backend + frontend); **Pending** = Partially implemented; **Not implemented** = Not built.
+
+| Done | Pending | Not implemented |
+|------|---------|-----------------|
+| 10   | 2       | 18              |
 
 ---
 
@@ -69,16 +75,16 @@ This document maps where LLMs are used in the application, and where they could 
 **Location:**  
 
 - Backend: `reports.py` → `POST /projects/{id}/report/summarize`  
-- Frontend: `summarizeReport()` in api.ts — **not currently used in the report UI**
+- Frontend: Report page → "AI Summary" button, `handleSummarize()` → `summarizeReport()`
 
 **Flow:**
 
-1. API takes project + findings.
-2. If LLM configured: generates 3–4 sentence executive summary.
-3. Fallback: Static template with counts.
+1. User clicks "AI Summary" on report page.
+2. API takes project + findings, LLM generates 3–4 sentence executive summary.
+3. Fallback: Static template with counts when no LLM configured.
+4. Summary displayed in report UI.
 
-**Benefit:** Professional, project-specific executive summaries for stakeholders.  
-**Gap:** Endpoint exists but report page shows static summary; UI does not call `summarizeReport()`.
+**Benefit:** Professional, project-specific executive summaries for stakeholders.
 
 ---
 
@@ -99,13 +105,13 @@ This document maps where LLMs are used in the application, and where they could 
 
 ## Summary: Where LLM Is Used Today
 
-
-| Use Case               | Backend | Frontend | Fallback        |
-| ---------------------- | ------- | -------- | --------------- |
-| Finding suggestions    | ✅       | ✅        | Rule-based      |
-| Auto-suggest from fail | ✅       | ✅        | Rule-based      |
-| Payload crafting       | ✅       | ✅        | Original list   |
-| Report summary         | ✅       | ❌        | Static template |
+| Use Case               | Status  | Backend | Frontend | Fallback        |
+| ---------------------- | ------- | ------- | -------- | --------------- |
+| Finding suggestions    | Done    | ✅      | ✅       | Rule-based      |
+| Auto-suggest from fail | Done    | ✅      | ✅       | Rule-based      |
+| Payload crafting       | Done    | ✅      | ✅       | Original list   |
+| Report summary         | Done    | ✅      | ✅       | Static template |
+| LLM config & test      | Done    | ✅      | ✅       | —               |
 
 
 ---
@@ -115,40 +121,40 @@ This document maps where LLMs are used in the application, and where they could 
 ### High Impact, Medium Effort
 
 
-| Opportunity                     | Description                                                          | Benefit                                                       |
-| ------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Wire report summary to UI       | Add "Generate Summary" button and display LLM summary in report page | Makes existing backend feature usable; better exec summaries. |
-| Natural language findings query | "Show me all SQLi findings" → LLM maps to filters                    | Power users can query without learning filters.               |
-| Remediation text enrichment     | LLM augments rule-based remediation with app context                 | More actionable, context-specific guidance.                   |
+| Opportunity                     | Status | Description                                                          |
+| ------------------------------- | ------ | -------------------------------------------------------------------- |
+| Wire report summary to UI       | Done   | "AI Summary" button on report page; calls summarizeReport            |
+| Natural language findings query | Not implemented | "Show me all SQLi findings" → LLM maps to filters            |
+| Remediation text enrichment     | Not implemented | LLM augments rule-based remediation with app context         |
 
 
 ### Medium Impact, Medium Effort
 
 
-| Opportunity                        | Description                                                          | Benefit                                       |
-| ---------------------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
-| AI result interpretation           | Parse tool output (nuclei, ZAP, etc.) → suggest pass/fail or finding | Automates triage of ambiguous scanner output. |
-| Report summarization (full report) | LLM summary of full report, not just exec summary                    | One-paragraph summary for stakeholders.       |
-| Chat-style security assistant      | "How do I test for IDOR?" → step-by-step guidance                    | Training and knowledge sharing.               |
+| Opportunity                        | Status | Description                                                          |
+| ---------------------------------- | ------ | -------------------------------------------------------------------- |
+| AI result interpretation           | Not implemented | Parse tool output (nuclei, ZAP, etc.) → suggest pass/fail or finding |
+| Report summarization (full report) | Not implemented | LLM summary of full report, not just exec summary                    |
+| Chat-style security assistant      | Done   | Security Intel assistant — "How do I test for X?" with context        |
 
 
 ### High Impact, Higher Effort
 
 
-| Opportunity                    | Description                                        | Benefit                                         |
-| ------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
-| Auto-findings from tool output | Parse nuclei/ZAP/Burp JSON → LLM suggests findings | Less manual import; smarter mapping.            |
-| Vulnerability trend analysis   | LLM identifies patterns across projects            | Strategic insights (e.g. "XSS in 60% of apps"). |
-| Finding deduplication          | LLM compares findings → suggest merge/similar      | Cleaner, less noisy findings.                   |
+| Opportunity                    | Status | Description                                        |
+| ------------------------------ | ------ | -------------------------------------------------- |
+| Auto-findings from tool output | Not implemented | Parse nuclei/ZAP/Burp JSON → LLM suggests findings |
+| Vulnerability trend analysis   | Not implemented | LLM identifies patterns across projects            |
+| Finding deduplication          | Not implemented | LLM compares findings → suggest merge/similar      |
 
 
 ### Low Effort, Quick Wins
 
 
-| Opportunity                         | Description                                                        | Benefit                         |
-| ----------------------------------- | ------------------------------------------------------------------ | ------------------------------- |
-| Wire summarizeReport to report page | Call `summarizeReport` and show result in exec summary section     | No new backend; better reports. |
-| LLM for Burp import mapping         | When importing Burp XML, use LLM to improve severity/title mapping | Smarter imports.                |
+| Opportunity                         | Status | Description                                                        |
+| ----------------------------------- | ------ | ------------------------------------------------------------------ |
+| Wire summarizeReport to report page | Done   | Report page has "AI Summary" button; calls summarizeReport          |
+| LLM for Burp import mapping         | Not implemented | When importing Burp XML, use LLM to improve severity/title mapping |
 
 
 ---
@@ -233,54 +239,57 @@ User describes functionality (endpoint, request/response, framework, etc.) → L
 
 ---
 
-## All LLM Possibilities (What Is Possible)
+## All LLM Possibilities — Status (Done | Pending | Not implemented)
 
 ### Test Case & Methodology
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Generate test cases from description | Proposed | User describes functionality + request/response → LLM outputs full test cases |
-| Save in extra field, same format | Proposed | Project/org custom tests; identical schema to WSTG |
-| "How to test X?" assistant | Proposed | Uses our payloads, WSTG, latest CVE |
-| Latest CVE for framework | Proposed | When user asks → inject CVE context; generate test to verify |
-| Vulnerable endpoint analysis | Proposed | Request/response → suggested tests and payloads |
-| Similar test generation | Proposed | From existing test → variants for related functionality |
-| Missing test suggestion | Proposed | Compare scope vs library → "Add tests for X" |
-| Framework-specific expansion | Proposed | e.g. GraphQL → generate tests from public + our data |
+| Generate test cases (app_type, tech_stack, focus_areas) | Done | `POST /security-intel/generate-test-cases` — LLM generates test cases; Security Intel UI |
+| Save test cases to project | Done | `POST /security-intel/save-test-cases` — saves to project, ai-generated category |
+| "How to test X?" chat assistant | Done | `POST /security-intel/assistant` — chat with test cases, CVEs, project context; can suggest test cases |
+| Add suggested test cases from assistant | Done | `POST /security-intel/assistant/add-test-cases` — add assistant-suggested tests to project |
+| CVE context in assistant | Done | Injects relevant CVEs from StoredCVE into assistant context |
+| Generate from endpoint + request/response | Pending | Current flow uses app_type/focus_areas; not full "describe endpoint + req/res" |
+| Latest CVE for framework (live NVD) | Pending | Uses stored CVEs; not real-time CVE lookup per question |
+| Vulnerable endpoint analysis | Not implemented | Request/response → suggested tests and payloads |
+| Similar test generation | Not implemented | From existing test → variants for related functionality |
+| Missing test suggestion | Not implemented | Compare scope vs library → "Add tests for X" |
+| Framework-specific expansion | Not implemented | e.g. GraphQL → generate tests from public + our data |
 
 ### Findings & Remediation
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Finding suggestions | Done | CWE, CVSS, impact, remediation |
-| Auto-suggest from failed test | Done | Pre-filled from test failure |
-| Remediation enrichment | Proposed | App-specific remediation |
-| Finding deduplication | Proposed | LLM suggests merge |
-| Auto-findings from tool output | Proposed | Parse nuclei/ZAP/Burp → LLM suggests |
+| Finding suggestions | Done | CWE, CVSS, impact, remediation — `/ai-assist/suggest` |
+| Auto-suggest from failed test | Done | `/findings/auto-suggest` — pre-filled from test failure |
+| Remediation enrichment | Not implemented | App-specific remediation |
+| Finding deduplication | Not implemented | LLM suggests merge |
+| Auto-findings from tool output | Not implemented | Parse nuclei/ZAP/Burp → LLM suggests |
 
 ### Payloads & Tools
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Payload crafting | Done | WAF bypass, obfuscation |
-| Payload from CVE | Proposed | CVE → PoC payloads |
-| Tool command generation | Proposed | "Run SQLMap here" → full command with our paths |
+| Payload crafting | Done | WAF bypass, obfuscation — `/ai-assist/craft-payload` |
+| Payload from CVE | Not implemented | CVE → PoC payloads |
+| Tool command generation | Not implemented | "Run SQLMap here" → full command with our paths |
 
 ### Reports & Queries
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Report summary | Backend done | Wire to UI |
-| Natural language query | Proposed | "SQLi findings last 30 days" → filters |
-| Vulnerability trends | Proposed | Patterns across projects |
-| Chat-style assistant | Proposed | General security Q&A |
+| Report summary | Done | Backend + frontend; "AI Summary" button on report page |
+| Natural language query | Not implemented | "SQLi findings last 30 days" → filters |
+| Vulnerability trends | Not implemented | Patterns across projects |
+| Chat-style assistant | Done | Security Intel assistant — `/security-intel/assistant` |
 
 ### Integrations
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| Burp import + LLM mapping | Proposed | Improve severity/title on import |
-| AI result interpretation | Proposed | Tool output → pass/fail or finding |
+| Burp import + LLM mapping | Not implemented | Improve severity/title on import |
+| AI result interpretation | Not implemented | Tool output → pass/fail or finding |
 
 ---
 

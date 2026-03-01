@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # App
     app_name: str = "AppSecD"
     debug: bool = False
-    allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://appsecd.com,https://www.appsecd.com,http://appsecd.com,http://www.appsecd.com"
 
     # Paths
     payloads_path: str = "/opt/navigator/data/PayloadsAllTheThings"
