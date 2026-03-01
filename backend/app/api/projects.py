@@ -56,6 +56,13 @@ DAST_CHECK_TO_PHASE = {
     "DAST-ENV-01": "recon",      # .env/.git exposure
     "DAST-CT-01": "pre_auth",    # Content-Type sniffing
     "DAST-FRAME-01": "pre_auth", # Clickjacking
+    "DAST-TRACE-01": "pre_auth", "DAST-ECT-01": "transport", "DAST-PERM-01": "pre_auth",
+    "DAST-XSSP-01": "client", "DAST-CSPR-01": "pre_auth", "DAST-ST-01": "recon",
+    "DAST-VIA-01": "recon", "DAST-XFF-01": "recon", "DAST-ALLOW-01": "pre_auth",
+    "DAST-CORP-01": "pre_auth", "DAST-CSD-01": "auth", "DAST-AGE-01": "pre_auth",
+    "DAST-UIR-01": "transport", "DAST-COOKP-01": "auth", "DAST-REDIR-03": "pre_auth",
+    "DAST-TAO-01": "recon", "DAST-ALTSVC-01": "transport", "DAST-HSTS-02": "transport",
+    "DAST-CD-01": "pre_auth", "DAST-PRAGMA-01": "pre_auth",
 }
 from datetime import datetime, date
 import uuid

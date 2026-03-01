@@ -9,7 +9,8 @@ import {
   Shield, Play, CheckCircle, XCircle, AlertTriangle, Loader2, 
   ArrowLeft, ChevronDown, ChevronUp, Globe, Lock,
   Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
-  Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput
+  Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput,
+  History, Calendar
 } from "lucide-react";
 import Link from "next/link";
 
@@ -27,6 +28,12 @@ const CHECK_ICONS: Record<string, any> = {
   security_txt: FileText, http_redirect_https: ExternalLink, hsts_preload: Lock,
   version_headers: Server, coop_coep: Shield, weak_referrer: Globe, debug_response: Wrench,
   dotenv_git: HardDrive, content_type_sniffing: Code, clickjacking: Shield,
+  trace_xst: Zap, expect_ct: Lock, permissions_policy: Shield, xss_protection_header: Code,
+  csp_reporting: Shield, server_timing: Server, via_header: Server, x_forwarded_disclosure: Server,
+  allow_dangerous: Zap, corp: Shield, clear_site_data: Cookie, cache_age: Clock,
+  upgrade_insecure: Lock, cookie_prefix: Cookie, redirect_chain: ExternalLink,
+  timing_allow_origin: Clock, alt_svc: Lock, hsts_subdomains: Lock,
+  content_disposition: FileText, pragma_no_cache: Clock,
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -46,6 +53,7 @@ export default function DastScanPage() {
   const [selectedChecks, setSelectedChecks] = useState<string[]>([]);
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
   const [initialExpandDone, setInitialExpandDone] = useState(false);
+  const [scanHistory, setScanHistory] = useState<any[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -67,6 +75,10 @@ export default function DastScanPage() {
           if (saved) setScanResult(JSON.parse(saved));
         } catch {}
       });
+      // Load scan history
+      api.dastProjectHistory(id as string).then((r: any) => {
+        setScanHistory(r?.scans ?? []);
+      }).catch(() => {});
       // If a scan is still running for this project, resume polling
       api.dastScans().then((r: any) => {
         const active = (r?.scans ?? []).find((s: any) => s.project_id === id && s.status === "running");
@@ -171,6 +183,13 @@ export default function DastScanPage() {
             setScanResult(result);
             setInitialExpandDone(false);
             try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(result)); } catch {}
+            api.dastProjectHistory(id as string).then((r: any) => setScanHistory(r?.scans ?? [])).catch(() => {});
+            setTimeout(() => {
+              api.dastProjectLatest(id as string).then((r: any) => {
+                setScanResult(r);
+                try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(r)); } catch {}
+              }).catch(() => {});
+            }, 800);
             if (result.findings_created > 0) {
               toast.success(`Scan complete! ${result.findings_created} finding(s) auto-created.`);
             } else if (result.failed === 0) {
@@ -250,6 +269,61 @@ export default function DastScanPage() {
             {scanning ? "Scanning..." : "Run Scan"}
           </button>
         </div>
+
+        {/* Previous Scan Summary & History */}
+        {(scanResult || scanHistory.length > 0) && (
+          <div className="grid gap-4 md:grid-cols-2">
+            {scanResult && (
+              <div className="rounded-xl p-4 flex items-center gap-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                <div className="flex items-center gap-2">
+                  <History className="w-5 h-5" style={{ color: "var(--accent-indigo)" }} />
+                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Last Scan</span>
+                </div>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  {scanResult.created_at && (
+                    <span className="flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
+                      <Calendar className="w-4 h-4" />
+                      {new Date(scanResult.created_at).toLocaleString()}
+                    </span>
+                  )}
+                  {scanResult.duration_seconds != null && (
+                    <span style={{ color: "var(--text-secondary)" }}>{scanResult.duration_seconds}s</span>
+                  )}
+                  <span className="flex items-center gap-1">
+                    <CheckCircle className="w-4 h-4 text-emerald-500" />
+                    <span style={{ color: "#16a34a" }}>{scanResult.passed ?? 0} Passed</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <XCircle className="w-4 h-4 text-red-500" />
+                    <span style={{ color: "#dc2626" }}>{scanResult.failed ?? 0} Failed</span>
+                  </span>
+                </div>
+              </div>
+            )}
+            {scanHistory.length > 0 && (
+              <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <History className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
+                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Scan History</span>
+                </div>
+                <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                  {scanHistory.slice(0, 5).map((s: any) => (
+                    <div key={s.id || s.scan_id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {s.created_at ? new Date(s.created_at).toLocaleString() : "—"}
+                      </span>
+                      <span className="flex gap-2">
+                        <span style={{ color: "#16a34a" }}>{s.passed ?? 0}P</span>
+                        <span style={{ color: "#dc2626" }}>{s.failed ?? 0}F</span>
+                        <span style={{ color: "var(--text-muted)" }}>{s.duration_seconds ?? 0}s</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Check Selection */}
         <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>

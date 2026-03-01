@@ -1604,6 +1604,653 @@ def check_clickjacking(target_url: str) -> DastResult:
     return result
 
 
+# ─── Check 32: TRACE Method (XST) ───
+
+def check_trace_xst(target_url: str) -> DastResult:
+    """Check if TRACE method is enabled (Cross-Site Tracing)."""
+    result = DastResult(
+        check_id="DAST-TRACE-01",
+        title="TRACE Method (XST)",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-693",
+    )
+    resp = _safe_request("TRACE", target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    parsed = urlparse(target_url)
+    result.request_raw = f"TRACE {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if resp.status_code == 200 and (resp.text or "").strip():
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "TRACE method enabled; reflects request back (XST)"
+        result.remediation = "Disable TRACE method on web server"
+    else:
+        result.status = "passed"
+        result.description = "TRACE method disabled or not reflecting"
+    return result
+
+
+# ─── Check 33: Expect-CT ───
+
+def check_expect_ct(target_url: str) -> DastResult:
+    """Check for Expect-CT header (certificate transparency)."""
+    result = DastResult(
+        check_id="DAST-ECT-01",
+        title="Expect-CT Header",
+        owasp_ref="A02:2021",
+        cwe_id="CWE-295",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    parsed = urlparse(target_url)
+    if parsed.scheme != "https":
+        result.status = "passed"
+        result.description = "Target is HTTP; Expect-CT N/A"
+        return result
+    ect = resp.headers.get("expect-ct", "")
+    result.details = {"expect_ct": ect or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not ect:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "Expect-CT header missing"
+        result.remediation = "Consider Expect-CT: max-age=86400 for certificate transparency"
+    else:
+        result.status = "passed"
+        result.description = "Expect-CT header present"
+    return result
+
+
+# ─── Check 34: Permissions-Policy ───
+
+def check_permissions_policy(target_url: str) -> DastResult:
+    """Check Permissions-Policy (formerly Feature-Policy)."""
+    result = DastResult(
+        check_id="DAST-PERM-01",
+        title="Permissions-Policy",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-1021",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    headers = {k.lower(): v for k, v in resp.headers.items()}
+    pp = headers.get("permissions-policy", headers.get("feature-policy", ""))
+    result.details = {"value": pp or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not pp or not pp.strip():
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "Permissions-Policy (or Feature-Policy) not set"
+        result.remediation = "Add Permissions-Policy to restrict browser features (camera, geolocation, etc.)"
+    else:
+        result.status = "passed"
+        result.description = "Permissions-Policy present"
+    return result
+
+
+# ─── Check 35: X-XSS-Protection ───
+
+def check_xss_protection_header(target_url: str) -> DastResult:
+    """Check X-XSS-Protection header (legacy; 0 = disabled is bad)."""
+    result = DastResult(
+        check_id="DAST-XSSP-01",
+        title="X-XSS-Protection Header",
+        owasp_ref="A03:2021",
+        cwe_id="CWE-79",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    xxss = resp.headers.get("x-xss-protection", "")
+    result.details = {"value": xxss or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if "0" in xxss:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "X-XSS-Protection: 0 (explicitly disabled)"
+        result.remediation = "Remove X-XSS-Protection: 0 or set to 1; prefer CSP for XSS protection"
+    elif not xxss:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "X-XSS-Protection header missing"
+        result.remediation = "Consider X-XSS-Protection: 1; mode=block (or rely on CSP)"
+    else:
+        result.status = "passed"
+        result.description = "X-XSS-Protection adequate"
+    return result
+
+
+# ─── Check 36: CSP Report-URI ───
+
+def check_csp_reporting(target_url: str) -> DastResult:
+    """Check CSP has report-uri or report-to for violation reporting."""
+    result = DastResult(
+        check_id="DAST-CSPR-01",
+        title="CSP Report-URI / report-to",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-755",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    csp = resp.headers.get("content-security-policy", "") or resp.headers.get("content-security-policy-report-only", "")
+    csp_lower = csp.lower()
+    has_report = "report-uri" in csp_lower or "report-to" in csp_lower
+    result.details = {"csp_length": len(csp), "has_reporting": has_report}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if csp and not has_report:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "CSP present but no report-uri or report-to"
+        result.remediation = "Add report-uri or report-to to CSP for violation monitoring"
+    elif not csp:
+        result.status = "passed"
+        result.description = "No CSP; reporting N/A"
+    else:
+        result.status = "passed"
+        result.description = "CSP with reporting configured"
+    return result
+
+
+# ─── Check 37: Server-Timing ───
+
+def check_server_timing(target_url: str) -> DastResult:
+    """Check Server-Timing header (may leak internal metrics)."""
+    result = DastResult(
+        check_id="DAST-ST-01",
+        title="Server-Timing Header",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    st = resp.headers.get("server-timing", "")
+    result.details = {"value": st[:300] if st else "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if st:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "Server-Timing header exposes internal metrics"
+        result.remediation = "Remove Server-Timing in production or restrict to debug mode"
+    else:
+        result.status = "passed"
+        result.description = "No Server-Timing header"
+    return result
+
+
+# ─── Check 38: Via Header ───
+
+def check_via_header(target_url: str) -> DastResult:
+    """Check Via header (proxy disclosure)."""
+    result = DastResult(
+        check_id="DAST-VIA-01",
+        title="Via Header Disclosure",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    via = resp.headers.get("via", "")
+    result.details = {"value": via[:200] if via else "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if via:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "Via header discloses proxy/CDN"
+        result.remediation = "Configure proxy to strip or anonymize Via header"
+    else:
+        result.status = "passed"
+        result.description = "No Via header"
+    return result
+
+
+# ─── Check 39: X-Forwarded Disclosure ───
+
+def check_x_forwarded_disclosure(target_url: str) -> DastResult:
+    """Check X-Forwarded-For, X-Real-IP headers (internal IP disclosure)."""
+    result = DastResult(
+        check_id="DAST-XFF-01",
+        title="X-Forwarded-For / X-Real-IP",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    headers = {k.lower(): v for k, v in resp.headers.items()}
+    xff = headers.get("x-forwarded-for", "")
+    xri = headers.get("x-real-ip", "")
+    result.details = {"x_forwarded_for": xff[:100] if xff else "(not set)", "x_real_ip": xri or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if xff or xri:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "X-Forwarded-For or X-Real-IP header present"
+        result.remediation = "Ensure app does not trust/reflect client-controlled forwarding headers"
+    else:
+        result.status = "passed"
+        result.description = "No X-Forwarded-For or X-Real-IP in response"
+    return result
+
+
+# ─── Check 40: Allow Header Dangerous Methods ───
+
+def check_allow_dangerous(target_url: str) -> DastResult:
+    """Check Allow header for dangerous methods."""
+    result = DastResult(
+        check_id="DAST-ALLOW-01",
+        title="Allow Header Dangerous Methods",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-749",
+    )
+    resp = _safe_request("OPTIONS", target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    allow = resp.headers.get("allow", "").upper()
+    dangerous = ["TRACE", "PUT", "DELETE", "CONNECT"]
+    found = [m for m in dangerous if m in allow]
+    result.details = {"allow": allow or "(not set)", "dangerous_found": found}
+    result.request_raw = f"OPTIONS {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if found:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Allow header includes dangerous methods: {', '.join(found)}"
+        result.remediation = "Restrict Allow header to safe methods (GET, POST, HEAD)"
+    else:
+        result.status = "passed"
+        result.description = "Allow header does not expose dangerous methods"
+    return result
+
+
+# ─── Check 41: Cross-Origin-Resource-Policy ───
+
+def check_corp(target_url: str) -> DastResult:
+    """Check Cross-Origin-Resource-Policy header."""
+    result = DastResult(
+        check_id="DAST-CORP-01",
+        title="Cross-Origin-Resource-Policy",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-942",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    corp = resp.headers.get("cross-origin-resource-policy", "")
+    result.details = {"value": corp or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not corp or corp.strip() == "":
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "Cross-Origin-Resource-Policy not set"
+        result.remediation = "Consider Cross-Origin-Resource-Policy: same-origin for sensitive resources"
+    else:
+        result.status = "passed"
+        result.description = f"Cross-Origin-Resource-Policy: {corp}"
+    return result
+
+
+# ─── Check 42: Clear-Site-Data ───
+
+def check_clear_site_data(target_url: str) -> DastResult:
+    """Check Clear-Site-Data on logout/sensitive paths (best practice)."""
+    result = DastResult(
+        check_id="DAST-CSD-01",
+        title="Clear-Site-Data Header",
+        owasp_ref="A07:2021",
+        cwe_id="CWE-613",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    csd = resp.headers.get("clear-site-data", "")
+    result.details = {"value": csd or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    result.status = "passed"
+    result.description = "Clear-Site-Data check (informational; typically on logout)"
+    return result
+
+
+# ─── Check 43: Cache Age ───
+
+def check_cache_age(target_url: str) -> DastResult:
+    """Check Age header for overly long cache (stale content)."""
+    result = DastResult(
+        check_id="DAST-AGE-01",
+        title="Cache Age Header",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-525",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    age_val = resp.headers.get("age", "")
+    age_int = int(age_val) if age_val and age_val.isdigit() else 0
+    result.details = {"age": age_val or "(not set)", "seconds": age_int}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if age_int > 86400:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Age header very high ({age_int}s) — content may be stale"
+        result.remediation = "Reduce cache TTL for dynamic content"
+    else:
+        result.status = "passed"
+        result.description = "Cache age acceptable"
+    return result
+
+
+# ─── Check 44: Upgrade-Insecure-Requests ───
+
+def check_upgrade_insecure(target_url: str) -> DastResult:
+    """Check CSP upgrade-insecure-requests for mixed content mitigation."""
+    result = DastResult(
+        check_id="DAST-UIR-01",
+        title="Upgrade-Insecure-Requests",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-319",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    parsed = urlparse(target_url)
+    if parsed.scheme != "https":
+        result.status = "passed"
+        result.description = "Target is HTTP; upgrade N/A"
+        return result
+    csp = resp.headers.get("content-security-policy", "").lower()
+    has_uir = "upgrade-insecure-requests" in csp
+    result.details = {"has_upgrade_insecure_requests": has_uir}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not csp:
+        result.status = "passed"
+        result.description = "No CSP; upgrade-insecure-requests N/A"
+    elif has_uir:
+        result.status = "passed"
+        result.description = "CSP upgrade-insecure-requests present"
+    else:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "CSP present but no upgrade-insecure-requests"
+        result.remediation = "Add upgrade-insecure-requests to CSP for mixed content mitigation"
+    return result
+
+
+# ─── Check 45: Cookie __Host- __Secure- Prefix ───
+
+def check_cookie_prefix(target_url: str) -> DastResult:
+    """Check if cookies use __Host- or __Secure- prefix on HTTPS."""
+    result = DastResult(
+        check_id="DAST-COOKP-01",
+        title="Cookie __Host- / __Secure- Prefix",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-614",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    parsed = urlparse(target_url)
+    if parsed.scheme != "https":
+        result.status = "passed"
+        result.description = "Target is HTTP; cookie prefix N/A"
+        return result
+    cookies = resp.headers.get_list("set-cookie")
+    if not cookies:
+        result.status = "passed"
+        result.description = "No cookies set"
+        return result
+    sensitive_names = ["session", "auth", "token", "jwt", "sid", "csrf"]
+    missing_prefix = []
+    for c in cookies:
+        name = c.split("=")[0].strip() if "=" in c else ""
+        lower = name.lower()
+        if any(s in lower for s in sensitive_names) and not (name.startswith("__Host-") or name.startswith("__Secure-")):
+            missing_prefix.append(name)
+    result.details = {"cookies": len(cookies), "missing_prefix": missing_prefix[:5]}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if missing_prefix:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Sensitive cookies missing __Host-/__Secure- prefix: {', '.join(missing_prefix[:3])}"
+        result.remediation = "Use __Host- or __Secure- prefix for sensitive cookies on HTTPS"
+    else:
+        result.status = "passed"
+        result.description = "Sensitive cookies use appropriate prefix or no sensitive cookies"
+    return result
+
+
+# ─── Check 46: Redirect Chain Length ───
+
+def check_redirect_chain(target_url: str) -> DastResult:
+    """Check for excessive redirect chain."""
+    result = DastResult(
+        check_id="DAST-REDIR-03",
+        title="Redirect Chain Length",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-601",
+    )
+    parsed = urlparse(target_url)
+    url = target_url
+    seen = set()
+    chain = []
+    for _ in range(10):
+        if url in seen:
+            break
+        seen.add(url)
+        r = _safe_request("GET", url)
+        if not r:
+            break
+        chain.append({"url": url[:80], "status": r.status_code})
+        if r.status_code not in (301, 302, 307, 308):
+            break
+        loc = r.headers.get("location", "")
+        if not loc:
+            break
+        url = urljoin(url, loc)
+    result.details = {"chain_length": len(chain), "chain": chain}
+    result.request_raw = f"GET {target_url}\nChain: {len(chain)} redirects"
+    result.response_raw = str(chain)[:500]
+    if len(chain) > 5:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Redirect chain length {len(chain)} (excessive)"
+        result.remediation = "Reduce redirect chain; use direct URLs"
+    else:
+        result.status = "passed"
+        result.description = f"Redirect chain length {len(chain)} (acceptable)"
+    return result
+
+
+# ─── Check 47: Timing-Allow-Origin ───
+
+def check_timing_allow_origin(target_url: str) -> DastResult:
+    """Check Timing-Allow-Origin for resource timing API."""
+    result = DastResult(
+        check_id="DAST-TAO-01",
+        title="Timing-Allow-Origin",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    tao = resp.headers.get("timing-allow-origin", "")
+    result.details = {"value": tao or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    result.status = "passed"
+    result.description = "Timing-Allow-Origin check (informational)"
+    return result
+
+
+# ─── Check 48: Alt-Svc Header ───
+
+def check_alt_svc(target_url: str) -> DastResult:
+    """Check Alt-Svc header (protocol upgrade)."""
+    result = DastResult(
+        check_id="DAST-ALTSVC-01",
+        title="Alt-Svc Header",
+        owasp_ref="A02:2021",
+        cwe_id="CWE-319",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    alt = resp.headers.get("alt-svc", "")
+    result.details = {"value": alt[:200] if alt else "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    result.status = "passed"
+    result.description = "Alt-Svc check (informational)"
+    return result
+
+
+# ─── Check 49: Strict-Transport-Security includeSubDomains ───
+
+def check_hsts_subdomains(target_url: str) -> DastResult:
+    """Check HSTS includeSubDomains directive."""
+    result = DastResult(
+        check_id="DAST-HSTS-02",
+        title="HSTS includeSubDomains",
+        owasp_ref="A02:2021",
+        cwe_id="CWE-319",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    parsed = urlparse(target_url)
+    if parsed.scheme != "https":
+        result.status = "passed"
+        result.description = "Target is HTTP; HSTS N/A"
+        return result
+    hsts = resp.headers.get("strict-transport-security", "").lower()
+    has_sub = "includesubdomains" in hsts
+    result.details = {"hsts": hsts[:150], "has_include_subdomains": has_sub}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not hsts:
+        result.status = "passed"
+        result.description = "No HSTS; see hsts_preload check"
+    elif not has_sub:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "HSTS missing includeSubDomains"
+        result.remediation = "Add includeSubDomains to Strict-Transport-Security"
+    else:
+        result.status = "passed"
+        result.description = "HSTS includeSubDomains present"
+    return result
+
+
+# ─── Check 50: Content-Disposition ───
+
+def check_content_disposition(target_url: str) -> DastResult:
+    """Check Content-Disposition for download/inline security."""
+    result = DastResult(
+        check_id="DAST-CD-01",
+        title="Content-Disposition",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-434",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    cd = resp.headers.get("content-disposition", "")
+    result.details = {"value": cd[:150] if cd else "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    result.status = "passed"
+    result.description = "Content-Disposition check (informational)"
+    return result
+
+
+# ─── Check 51: Pragma No-Cache ───
+
+def check_pragma_no_cache(target_url: str) -> DastResult:
+    """Check Pragma: no-cache on sensitive responses."""
+    result = DastResult(
+        check_id="DAST-PRAGMA-01",
+        title="Pragma No-Cache",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-525",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    cc = resp.headers.get("cache-control", "").lower()
+    pragma = resp.headers.get("pragma", "").lower()
+    has_no_store = "no-store" in cc or "no-cache" in cc
+    has_pragma = "no-cache" in pragma
+    result.details = {"cache_control": cc[:100], "pragma": pragma[:50]}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    ct = resp.headers.get("content-type", "").lower()
+    is_html = "text/html" in ct
+    if is_html and not has_no_store and not has_pragma:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "HTML page lacks Cache-Control no-store and Pragma no-cache"
+        result.remediation = "Add Cache-Control: no-store or Pragma: no-cache for dynamic HTML"
+    else:
+        result.status = "passed"
+        result.description = "Caching headers adequate"
+    return result
+
+
 # ─── DAST Runner ───
 
 ALL_CHECKS = [
@@ -1638,6 +2285,26 @@ ALL_CHECKS = [
     ("dotenv_git", check_dotenv_git),
     ("content_type_sniffing", check_content_type_sniffing),
     ("clickjacking", check_clickjacking),
+    ("trace_xst", check_trace_xst),
+    ("expect_ct", check_expect_ct),
+    ("permissions_policy", check_permissions_policy),
+    ("xss_protection_header", check_xss_protection_header),
+    ("csp_reporting", check_csp_reporting),
+    ("server_timing", check_server_timing),
+    ("via_header", check_via_header),
+    ("x_forwarded_disclosure", check_x_forwarded_disclosure),
+    ("allow_dangerous", check_allow_dangerous),
+    ("corp", check_corp),
+    ("clear_site_data", check_clear_site_data),
+    ("cache_age", check_cache_age),
+    ("upgrade_insecure", check_upgrade_insecure),
+    ("cookie_prefix", check_cookie_prefix),
+    ("redirect_chain", check_redirect_chain),
+    ("timing_allow_origin", check_timing_allow_origin),
+    ("alt_svc", check_alt_svc),
+    ("hsts_subdomains", check_hsts_subdomains),
+    ("content_disposition", check_content_disposition),
+    ("pragma_no_cache", check_pragma_no_cache),
 ]
 
 

@@ -194,6 +194,42 @@ async def run_scan(
     return {"scan_id": scan_id, "project_id": payload.project_id, "target_url": target_url}
 
 
+@router.get("/project/{project_id}/history")
+async def get_scan_history(
+    project_id: str,
+    limit: int = 20,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return scan history for this project (last N scans)."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied to this project")
+    from sqlalchemy import desc
+    r = await db.execute(
+        select(DastScanResult)
+        .where(DastScanResult.project_id == uuid.UUID(project_id), DastScanResult.status == "completed")
+        .order_by(desc(DastScanResult.created_at))
+        .limit(min(limit, 50))
+    )
+    rows = r.scalars().all()
+    return {
+        "scans": [
+            {
+                "id": str(row.id),
+                "scan_id": row.scan_id,
+                "target_url": row.target_url,
+                "passed": row.passed,
+                "failed": row.failed,
+                "errors_count": row.errors_count,
+                "duration_seconds": row.duration_seconds,
+                "findings_created": row.findings_created,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ],
+    }
+
+
 @router.get("/project/{project_id}/latest")
 async def get_latest_scan(
     project_id: str,
