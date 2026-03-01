@@ -832,6 +832,18 @@ def generate_html(data: dict) -> str:
             border-radius: var(--radius-xs);
             box-shadow: var(--shadow-md);
         }}
+        .evidence-pre {{
+            margin: 0.5rem 0;
+            padding: 1rem;
+            background: #f1f5f9;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xs);
+            font-size: 11px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }}
 
         /* ============================================================
            Compliance Tag
@@ -1307,6 +1319,12 @@ def generate_html(data: dict) -> str:
         sev_lower = f.get("severity", "").lower()
         cvss_val = f.get("cvss_score") or "N/A"
 
+        req_resp_html = ""
+        if f.get("request"):
+            req_resp_html += f'<div class="finding-field"><div class="finding-field-label">Request (Automated Evidence)</div><pre class="evidence-pre">{_html_escape(str(f.get("request", "")))}</pre></div>'
+        if f.get("response"):
+            req_resp_html += f'<div class="finding-field"><div class="finding-field-label">Response (Automated Evidence)</div><pre class="evidence-pre">{_html_escape(str(f.get("response", "")))}</pre></div>'
+
         html += f"""
             <div class="finding-block" id="finding-{i}">
                 <div class="finding-block-header sev-bg-{sev_lower}">
@@ -1345,6 +1363,7 @@ def generate_html(data: dict) -> str:
                         <div class="finding-field-value">{_html_escape(f.get('reproduction_steps') or '-').replace(chr(10), '<br>')}</div>
                     </div>
                     {evidence_html}
+                    {req_resp_html}
                     <div class="finding-field">
                         <div class="finding-field-label">Recommendation</div>
                         <div class="finding-field-value">{_html_escape(f.get('recommendation') or '-').replace(chr(10), '<br>')}</div>
@@ -1898,6 +1917,12 @@ def generate_docx(data: dict) -> bytes:
                         doc.add_paragraph()
                     except Exception:
                         pass
+
+        # Request/Response (Automated Evidence)
+        if f.get("request"):
+            _add_field_para(doc, "Request (Automated Evidence)", f.get("request") or "-")
+        if f.get("response"):
+            _add_field_para(doc, "Response (Automated Evidence)", f.get("response") or "-")
 
         # Recommendation
         _add_field_para(doc, "Recommendation", f.get("recommendation") or "-")
@@ -2492,6 +2517,24 @@ def generate_pdf(data: dict) -> bytes:
                         pdf.ln(3)
                     except Exception:
                         pass
+
+        # Request/Response (Automated Evidence)
+        if f.get("request"):
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*primary_color)
+            pdf.cell(0, 6, "Request (Automated Evidence)", ln=True)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.multi_cell(w, 5, safe_text(f.get("request"), 600))
+            pdf.ln(2)
+        if f.get("response"):
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*primary_color)
+            pdf.cell(0, 6, "Response (Automated Evidence)", ln=True)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.multi_cell(w, 5, safe_text(f.get("response"), 600))
+            pdf.ln(2)
 
         # Recommendation
         pdf.set_font("Helvetica", "B", 9)

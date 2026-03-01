@@ -160,6 +160,9 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
           <StatusIcon className={`w-5 h-5 mt-0.5 shrink-0 ${statusConf.color}`} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs px-1.5 py-0.5 rounded border shrink-0" title={(tc.is_automated === true) ? "Can be automated via AppSecD DAST" : "Manual testing required"} style={(tc.is_automated === true) ? { background: "rgba(16, 185, 129, 0.15)", borderColor: "rgba(16, 185, 129, 0.4)", color: "#10b981" } : { background: "var(--bg-tertiary)", borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>
+                {(tc.is_automated === true) ? "Automated" : "Manual"}
+              </span>
               <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{tc.title}</span>
               <span className={`text-xs px-1.5 py-0.5 rounded border ${SEVERITY_BADGE[tc.severity] || SEVERITY_BADGE.info}`}>
                 {tc.severity}
@@ -799,24 +802,25 @@ export default function ProjectDetail() {
         </div>
 
         {/* Main content */}
-        <div className="flex-1 min-w-0">
-          <div className="card p-4 mb-4 !overflow-visible">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <div className="card p-4 mb-4 overflow-hidden">
+            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 overflow-hidden">
+              <div className="min-w-0 flex-1 overflow-hidden">
                 <h1 className="text-xl font-bold truncate" style={{ color: "var(--text-primary)" }}>{project.application_name}</h1>
                 <p className="text-sm truncate max-w-md" style={{ color: "var(--text-secondary)" }} title={project.application_url}>{project.application_url}</p>
-                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className="text-xs" style={{ color: "var(--text-secondary)" }}>Owner: {project.app_owner_name || "—"}</span>
-                  <span className="text-[#374151]">•</span>
-                  <span className="text-xs" style={{ color: "var(--text-secondary)" }}>SPOC: {project.app_spoc_name || "—"}</span>
-                  <span className="text-[#374151]">•</span>
-                  <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{project.testing_type}</span>
+                <div className="flex items-center gap-2 mt-2 flex-wrap overflow-hidden">
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>Owner: {project.app_owner_name || "—"}</span>
+                  <span className="text-[#374151] shrink-0">•</span>
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>SPOC: {project.app_spoc_name || "—"}</span>
+                  <span className="text-[#374151] shrink-0">•</span>
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>{project.testing_type}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <div className="flex flex-wrap items-center gap-2 shrink-0 min-w-0">
                 <Link
                   href={`/projects/${id}/report`}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm shrink-0"
+                  title="View live HTML report"
                 >
                   <FileText className="w-4 h-4" /> Live Report
                 </Link>
@@ -849,21 +853,24 @@ export default function ProjectDetail() {
                 </div>
                 <Link
                   href={`/projects/${id}/vulnerabilities`}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm shrink-0"
+                  title="Manage vulnerabilities, recheck status, create JIRA tickets"
                 >
                   <ShieldCheck className="w-4 h-4" /> Vuln Management
                 </Link>
                 <Link
                   href={`/projects/${id}/dast`}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0"
                   style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981", border: "1px solid rgba(16, 185, 129, 0.3)" }}
+                  title="Run automated DAST security scan"
                 >
                   <Zap className="w-3.5 h-3.5" /> DAST Scan
                 </Link>
                 <button
                   onClick={openFindingsPanel}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm shrink-0"
                   style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
+                  title="View findings only — remediation tracking panel"
                 >
                   <AlertTriangle className="w-4 h-4" /> Findings ({findings.length})
                 </button>
@@ -876,14 +883,15 @@ export default function ProjectDetail() {
                 </label>
                 <button
                   onClick={openMembersModal}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm shrink-0"
                   style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
+                  title="View and manage project team members"
                 >
                   <Users className="w-4 h-4" /> Team
                 </button>
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-red-400">{findings.length}</div>
-                  <div className="text-xs" style={{ color: "var(--text-secondary)" }}>findings</div>
+                <div className="text-right shrink-0 min-w-[3rem]">
+                  <div className="text-2xl font-bold text-red-400 truncate" title={`${findings.length} findings`}>{findings.length}</div>
+                  <div className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>findings</div>
                 </div>
               </div>
             </div>
@@ -937,13 +945,29 @@ export default function ProjectDetail() {
                 </div>
                 <button onClick={() => setShowFindings(false)} className="hover:text-white" style={{ color: "var(--text-secondary)" }}>×</button>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 overflow-x-auto">
                 {findings.map((f) => (
-                  <div key={f.id} className="flex items-center gap-3 p-3 rounded" style={{ background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate" style={{ color: "var(--text-primary)" }}>{f.title}</div>
-                      <div className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{f.severity} • {f.affected_url || "-"}</div>
+                  <div key={f.id} className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded overflow-hidden" style={{ background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
+                    <div className="flex-1 min-w-0 order-1">
+                      <div className="font-medium truncate" style={{ color: "var(--text-primary)" }} title={f.title}>{f.title}</div>
+                      <div className="text-xs truncate mt-0.5" style={{ color: "var(--text-secondary)" }}>{f.severity} • {f.affected_url || "-"}</div>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {f.jira_key && (
+                          <a href={f.jira_url || "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20">
+                            Ticket: {f.jira_key}
+                          </a>
+                        )}
+                        {f.jira_status && (
+                          <span className="text-xs px-2 py-0.5 rounded border" style={{ background: "var(--bg-elevated)", borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
+                            JIRA: {f.jira_status}
+                          </span>
+                        )}
+                        {!f.jira_key && !f.jira_status && (
+                          <span className="text-xs" style={{ color: "var(--text-muted)" }}>No ticket yet</span>
+                        )}
+                      </div>
                     </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:shrink-0 order-2">
                     <select
                       value={f.status || "open"}
                       onChange={async (e) => {
@@ -1002,16 +1026,18 @@ export default function ProjectDetail() {
                           const res = await api.createJiraIssue(f.id);
                           toast.success(`Created ${res.jira_key}`);
                           if (res.jira_url) window.open(res.jira_url, "_blank");
+                          loadFindings();
                         } catch (err: any) {
                           toast.error(err.message || "JIRA integration not configured");
                         }
                       }}
                       className="text-xs px-2 py-1 rounded border hover:text-indigo-400 hover:border-indigo-500 transition-colors"
                       style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
-                      title="Create JIRA issue"
+                      title="Create or link JIRA issue"
                     >
-                      JIRA
+                      {f.jira_key ? "View JIRA" : "Create JIRA"}
                     </button>
+                    </div>
                   </div>
                 ))}
                 {findings.length === 0 && <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No findings yet</p>}
@@ -1019,6 +1045,9 @@ export default function ProjectDetail() {
             </div>
           )}
 
+          {/* Test cases — shown only when Findings panel is closed */}
+          {!showFindings && (
+          <div>
           {/* Phase selector mobile */}
           <div className="md:hidden flex gap-2 overflow-x-auto pb-2 mb-4">
             {(progress?.phases || []).map((phase: any) => {
@@ -1095,6 +1124,8 @@ export default function ProjectDetail() {
                 </div>
               )}
             </div>
+          )}
+          </div>
           )}
         </div>
       </div>

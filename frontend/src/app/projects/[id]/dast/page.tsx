@@ -215,6 +215,21 @@ export default function DastScanPage() {
                       {check.evidence && (
                         <div><strong style={{ color: "var(--text-primary)" }}>Evidence:</strong><pre className="mt-1 p-2 rounded text-xs overflow-x-auto" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{check.evidence}</pre></div>
                       )}
+                      {check.request_raw && (
+                        <div>
+                          <strong style={{ color: "var(--text-primary)" }}>Request:</strong>
+                          <pre className="mt-1 p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "3px solid #dc2626" : undefined }}>{check.request_raw}</pre>
+                        </div>
+                      )}
+                      {check.response_raw && (
+                        <div>
+                          <strong style={{ color: "var(--text-primary)" }}>Response:</strong>
+                          <pre className="mt-1 p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-48 overflow-y-auto" style={{ background: check.status === "failed" ? "rgba(220, 38, 38, 0.08)" : "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "3px solid #dc2626" : undefined }}>{check.response_raw}</pre>
+                          {check.status === "failed" && (
+                            <span className="text-xs font-medium mt-1 inline-block" style={{ color: "#dc2626" }}>Anomaly detected — review response above</span>
+                          )}
+                        </div>
+                      )}
                       {check.reproduction_steps && (
                         <div><strong style={{ color: "var(--text-primary)" }}>Steps to Reproduce:</strong><pre className="mt-1 p-2 rounded text-xs whitespace-pre-wrap" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{check.reproduction_steps}</pre></div>
                       )}

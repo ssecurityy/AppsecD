@@ -23,7 +23,8 @@ class DastResult:
     def __init__(self, check_id: str, title: str, status: str = "not_started",
                  severity: str = "info", description: str = "", details: dict = None,
                  evidence: str = "", remediation: str = "", cwe_id: str = "",
-                 owasp_ref: str = "", reproduction_steps: str = ""):
+                 owasp_ref: str = "", reproduction_steps: str = "",
+                 request_raw: str = "", response_raw: str = ""):
         self.check_id = check_id
         self.title = title
         self.status = status  # passed, failed, error, not_started
@@ -35,6 +36,8 @@ class DastResult:
         self.cwe_id = cwe_id
         self.owasp_ref = owasp_ref
         self.reproduction_steps = reproduction_steps
+        self.request_raw = request_raw
+        self.response_raw = response_raw
 
     def to_dict(self) -> dict:
         return {
@@ -49,6 +52,8 @@ class DastResult:
             "cwe_id": self.cwe_id,
             "owasp_ref": self.owasp_ref,
             "reproduction_steps": self.reproduction_steps,
+            "request_raw": self.request_raw,
+            "response_raw": self.response_raw,
         }
 
 
@@ -126,6 +131,8 @@ def check_security_headers(target_url: str) -> DastResult:
         result.description = "All security headers present"
 
     result.details = {"missing": missing, "present": findings, "dangerous": dangerous, "response_code": resp.status_code}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}\nUser-Agent: {HEADERS.get('User-Agent', '')}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code} {resp.reason_phrase}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
     return result
 
 
@@ -229,6 +236,8 @@ def check_cookie_security(target_url: str) -> DastResult:
         cookie_details.append(cookie_info)
 
     result.details = {"cookies": cookie_details, "total_cookies": len(cookies)}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:1500] if resp.text else "")
     if issues:
         result.status = "failed"
         result.severity = "medium"
@@ -271,6 +280,8 @@ def check_cors(target_url: str) -> DastResult:
         issues.append("Credentials allowed with permissive origin — critical")
 
     result.details = {"acao": acao, "acac": acac, "tested_origin": evil_origin}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nOrigin: {evil_origin}\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:1500] if resp.text else "")
     if issues:
         sev = "critical" if "critical" in " ".join(issues) else "high"
         result.status = "failed"
@@ -324,6 +335,8 @@ def check_info_disclosure(target_url: str) -> DastResult:
                 break
 
     result.details = {"server_header": headers.get("server", ""), "powered_by": headers.get("x-powered-by", ""), "issue_count": len(issues)}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
     if issues:
         result.status = "failed"
         result.severity = "low"
@@ -364,6 +377,9 @@ def check_http_methods(target_url: str) -> DastResult:
 
     dangerous_found = [m for m in allowed if m in dangerous_methods]
     result.details = {"allowed_methods": allowed, "dangerous": dangerous_found}
+    if options_resp:
+        result.request_raw = f"OPTIONS {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+        result.response_raw = f"HTTP/1.1 {options_resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in options_resp.headers.items()) + "\nAllow: " + (options_resp.headers.get("allow", "") or "")
     
     if dangerous_found:
         result.status = "failed"
@@ -400,6 +416,9 @@ def check_robots_txt(target_url: str) -> DastResult:
     sensitive_found = [d for d in disallowed if any(p in d.lower() for p in sensitive_patterns)]
 
     result.details = {"disallowed_paths": disallowed, "sensitive_paths": sensitive_found, "raw_content": content[:2000]}
+    if resp:
+        result.request_raw = f"GET {robots_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+        result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (content[:1500] if content else "")
     if sensitive_found:
         result.status = "failed"
         result.severity = "low"
@@ -435,6 +454,10 @@ def check_directory_listing(target_url: str) -> DastResult:
                 listing_found.append(d)
 
     result.details = {"checked_dirs": common_dirs, "listing_enabled": listing_found}
+    first_resp = _safe_get(urljoin(target_url, common_dirs[0])) if common_dirs else None
+    if first_resp:
+        result.request_raw = f"GET {urljoin(target_url, common_dirs[0])} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+        result.response_raw = f"HTTP/1.1 {first_resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in first_resp.headers.items()) + "\n\n" + (first_resp.text[:1500] if first_resp.text else "")
     if listing_found:
         result.status = "failed"
         result.severity = "medium"
@@ -514,6 +537,13 @@ def check_rate_limiting(target_url: str) -> DastResult:
 
     rate_limited = 429 in statuses
     result.details = {"requests_sent": len(statuses), "rate_limited": rate_limited, "status_codes": list(set(statuses))}
+    try:
+        with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False) as client:
+            r = client.get(target_url)
+            result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+            result.response_raw = f"HTTP/1.1 {r.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in r.headers.items()) + "\n\n" + (r.text[:1000] if r.text else "")
+    except Exception:
+        pass
     if rate_limited:
         result.status = "passed"
         result.description = f"Rate limiting active (429 after {statuses.index(429) + 1} requests)"

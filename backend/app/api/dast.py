@@ -71,7 +71,12 @@ async def run_scan(
             # Set evidence from check details
             if check.get("evidence"):
                 finding.description += f"\n\nEvidence:\n{check['evidence']}"
-            
+            # Store request/response for automated evidence in report
+            if check.get("request_raw"):
+                finding.request = check["request_raw"]
+            if check.get("response_raw"):
+                finding.response = check["response_raw"]
+
             db.add(finding)
             findings_created.append(check["title"])
     

@@ -19,7 +19,13 @@ import uuid
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
 
+AUTOMATION_TAGS = frozenset({"automated", "nuclei", "sqlmap", "nikto", "zap", "burp", "cve-scanning", "server-scan", "sqli"})
+
+
 def tc_to_dict(tc: TestCase, cat: Category) -> dict:
+    tags = tc.tags or []
+    tags_lower = {t.lower() for t in tags if isinstance(t, str)}
+    is_automated = bool(tags_lower & AUTOMATION_TAGS)
     return {
         "id": str(tc.id),
         "category_id": str(tc.category_id),
@@ -41,8 +47,9 @@ def tc_to_dict(tc: TestCase, cat: Category) -> dict:
         "fail_indicators": tc.fail_indicators,
         "remediation": tc.remediation,
         "references": tc.references or [],
-        "tags": tc.tags or [],
+        "tags": tags,
         "applicability_conditions": tc.applicability_conditions or {},
+        "is_automated": is_automated,
     }
 
 

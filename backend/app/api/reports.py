@@ -28,7 +28,7 @@ def finding_to_dict(f, evidence_from_result=None):
     ev = evidence_from_result if evidence_from_result else []
     if not ev and getattr(f, "evidence_urls", None):
         ev = [{"url": u, "filename": u.split("/")[-1] if "/" in str(u) else str(u)} for u in (f.evidence_urls or [])]
-    return {
+    d = {
         "id": str(f.id),
         "title": f.title,
         "description": f.description,
@@ -43,6 +43,12 @@ def finding_to_dict(f, evidence_from_result=None):
         "recommendation": f.recommendation,
         "evidence": ev,
     }
+    # Include request/response for automated findings (DAST, Burp import)
+    if getattr(f, "request", None):
+        d["request"] = f.request
+    if getattr(f, "response", None):
+        d["response"] = f.response
+    return d
 
 
 def project_to_dict(p):
