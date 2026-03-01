@@ -7,10 +7,10 @@ import { api } from "@/lib/api";
 import toast from "react-hot-toast";
 import { 
   Shield, Play, CheckCircle, XCircle, AlertTriangle, Loader2, 
-  ArrowLeft, ChevronDown, ChevronUp, Globe, Lock,
+  ArrowLeft, ChevronDown, Globe, Lock,
   Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
   Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput,
-  History, Calendar, Filter, ChevronRight
+  History, Calendar, Filter, ChevronRight, Search, LayoutGrid
 } from "lucide-react";
 import Link from "next/link";
 
@@ -55,7 +55,9 @@ export default function DastScanPage() {
   const [initialExpandDone, setInitialExpandDone] = useState(false);
   const [scanHistory, setScanHistory] = useState<any[]>([]);
   const [checksSectionExpanded, setChecksSectionExpanded] = useState(false);
+  const [checksSearch, setChecksSearch] = useState("");
   const [resultFilter, setResultFilter] = useState<"failed" | "passed" | "all" | "error">("failed");
+  const [resultSearch, setResultSearch] = useState("");
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -257,12 +259,20 @@ export default function DastScanPage() {
   const failedCount = results.filter((r: any) => r.status === "failed").length;
   const passedCount = results.filter((r: any) => r.status === "passed").length;
   const errorCount = results.filter((r: any) => r.status === "error").length;
-  const filteredResults = results.filter((r: any) => {
+  const statusFiltered = results.filter((r: any) => {
     if (resultFilter === "failed") return r.status === "failed";
     if (resultFilter === "passed") return r.status === "passed";
     if (resultFilter === "error") return r.status === "error";
     return true;
   });
+  const q = resultSearch.trim().toLowerCase();
+  const filteredResults = q
+    ? statusFiltered.filter((r: any) =>
+        (r.title || "").toLowerCase().includes(q) ||
+        (r.description || "").toLowerCase().includes(q) ||
+        (r.check_id || "").toLowerCase().includes(q)
+      )
+    : statusFiltered;
 
 
   if (!user) return null;
@@ -353,39 +363,58 @@ export default function DastScanPage() {
           </div>
         )}
 
-        {/* Collapsible Security Checks */}
+        {/* Collapsible Security Checks - Compact, folded by default */}
         <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-          <button onClick={() => setChecksSectionExpanded(!checksSectionExpanded)} className="w-full flex items-center justify-between p-3 text-left hover:bg-white/5">
-            <div className="flex items-center gap-2">
-              <ChevronRight className={`w-4 h-4 transition-transform ${checksSectionExpanded ? "rotate-90" : ""}`} style={{ color: "var(--text-muted)" }} />
-              <Shield className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
-              <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Security Checks</span>
-              <span className="text-xs px-1.5 py-0.5 rounded font-medium" style={{ background: "rgba(37, 99, 235, 0.2)", color: "var(--accent-indigo)" }}>
+          <button onClick={() => setChecksSectionExpanded(!checksSectionExpanded)} className="w-full flex items-center justify-between p-2.5 text-left hover:bg-white/5 transition-colors">
+            <div className="flex items-center gap-2 min-w-0">
+              <ChevronRight className={`w-4 h-4 flex-shrink-0 transition-transform ${checksSectionExpanded ? "rotate-90" : ""}`} style={{ color: "var(--text-muted)" }} />
+              <LayoutGrid className="w-4 h-4 flex-shrink-0" style={{ color: "var(--accent-indigo)" }} />
+              <span className="text-sm font-medium truncate" style={{ color: "var(--text-primary)" }}>Security Checks</span>
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0" style={{ background: "rgba(37, 99, 235, 0.15)", color: "var(--accent-indigo)" }}>
                 {selectedChecks.length}/{availableChecks.length} selected
               </span>
             </div>
           </button>
           {checksSectionExpanded && (
-            <div className="px-3 pb-4 pt-0 border-t" style={{ borderColor: "var(--border-subtle)" }}>
-              <div className="flex items-center justify-between mt-3 mb-2">
-                <span className="text-xs" style={{ color: "var(--text-muted)" }}>Select checks to run</span>
-                <button onClick={() => setSelectedChecks(selectedChecks.length === availableChecks.length ? [] : availableChecks.map((c: any) => c.id))} className="text-xs px-2 py-1 rounded" style={{ color: "var(--accent-indigo)" }}>
+            <div className="px-3 pb-3 pt-0" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+              <div className="flex flex-col sm:flex-row gap-2 mt-2 mb-2">
+                <div className="relative flex-1 min-w-0">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
+                  <input
+                    type="text"
+                    placeholder="Search checks..."
+                    value={checksSearch}
+                    onChange={(e) => setChecksSearch(e.target.value)}
+                    className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs"
+                    style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}
+                  />
+                </div>
+                <button onClick={() => setSelectedChecks(selectedChecks.length === availableChecks.length ? [] : availableChecks.map((c: any) => c.id))} className="text-xs px-3 py-1.5 rounded-lg font-medium whitespace-nowrap" style={{ background: "var(--bg-elevated)", color: "var(--accent-indigo)", border: "1px solid var(--border-subtle)" }}>
                   {selectedChecks.length === availableChecks.length ? "Deselect All" : "Select All"}
                 </button>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 max-h-64 overflow-y-auto">
-                {availableChecks.map((check: any) => {
-                  const Icon = CHECK_ICONS[check.id] || Shield;
-                  const selected = selectedChecks.includes(check.id);
-                  return (
-                    <button key={check.id} onClick={() => toggleCheck(check.id)} className="flex items-center gap-2 p-2 rounded-lg text-xs transition-all text-left"
-                      style={{ background: selected ? "rgba(37, 99, 235, 0.15)" : "var(--bg-elevated)", border: `1px solid ${selected ? "rgba(37, 99, 235, 0.4)" : "var(--border-subtle)"}`, color: selected ? "var(--accent-indigo)" : "var(--text-secondary)" }}>
-                      <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span className="truncate">{check.title.replace("Check for ", "").replace("Check ", "")}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              {(() => {
+                const q = checksSearch.trim().toLowerCase();
+                const filtered = q ? availableChecks.filter((c: any) => (c.title || "").toLowerCase().includes(q) || (c.description || "").toLowerCase().includes(q)) : availableChecks;
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 max-h-56 overflow-y-auto pr-1">
+                    {filtered.map((check: any) => {
+                      const Icon = CHECK_ICONS[check.id] || Shield;
+                      const selected = selectedChecks.includes(check.id);
+                      return (
+                        <button key={check.id} onClick={() => toggleCheck(check.id)} className="flex items-center gap-2 p-1.5 rounded-lg text-xs transition-all text-left"
+                          style={{ background: selected ? "rgba(37, 99, 235, 0.12)" : "var(--bg-elevated)", border: `1px solid ${selected ? "rgba(37, 99, 235, 0.35)" : "var(--border-subtle)"}`, color: selected ? "var(--accent-indigo)" : "var(--text-secondary)" }}>
+                          <Icon className="w-3 h-3 flex-shrink-0 opacity-80" />
+                          <span className="truncate flex-1 min-w-0">{check.title?.replace("Check for ", "").replace("Check ", "") || check.id}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+              {checksSearch.trim() && availableChecks.filter((c: any) => (c.title || "").toLowerCase().includes(checksSearch.trim().toLowerCase()) || (c.description || "").toLowerCase().includes(checksSearch.trim().toLowerCase())).length === 0 && (
+                <p className="text-xs py-4 text-center" style={{ color: "var(--text-muted)" }}>No checks match &quot;{checksSearch}&quot;</p>
+              )}
             </div>
           )}
         </div>
@@ -459,32 +488,47 @@ export default function DastScanPage() {
         {scanResult && (
           <div className="space-y-4">
             {/* Filter & Summary Bar */}
-            <div className="rounded-xl p-3 flex flex-wrap items-center gap-3" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-              <div className="flex items-center gap-1.5">
-                <Filter className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
-                <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Show:</span>
+            <div className="rounded-xl p-3 space-y-2" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Filter className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+                  <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Show:</span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {(["failed", "passed", "error", "all"] as const).map((f) => (
+                    <button key={f} onClick={() => setResultFilter(f)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        resultFilter === f ? "text-white" : ""
+                      }`}
+                      style={{
+                        background: resultFilter === f ? (f === "failed" ? "#dc2626" : f === "passed" ? "#16a34a" : f === "error" ? "#ca8a04" : "#6366f1") : "var(--bg-elevated)",
+                        color: resultFilter === f ? "white" : "var(--text-secondary)",
+                        border: resultFilter === f ? "none" : "1px solid var(--border-subtle)",
+                      }}>
+                      {f === "failed" && <XCircle className="w-3 h-3 inline mr-1 align-middle" />}
+                      {f === "passed" && <CheckCircle className="w-3 h-3 inline mr-1 align-middle" />}
+                      {f === "error" && <AlertTriangle className="w-3 h-3 inline mr-1 align-middle" />}
+                      {f.charAt(0).toUpperCase() + f.slice(1)} {f === "failed" ? `(${failedCount})` : f === "passed" ? `(${passedCount})` : f === "error" ? `(${errorCount})` : `(${results.length})`}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-xs ml-auto" style={{ color: "var(--text-muted)" }}>
+                  {filteredResults.length} of {results.length}
+                </span>
               </div>
-              <div className="flex flex-wrap gap-1">
-                {(["failed", "passed", "error", "all"] as const).map((f) => (
-                  <button key={f} onClick={() => setResultFilter(f)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                      resultFilter === f ? "text-white" : ""
-                    }`}
-                    style={{
-                      background: resultFilter === f ? (f === "failed" ? "#dc2626" : f === "passed" ? "#16a34a" : f === "error" ? "#ca8a04" : "#6366f1") : "var(--bg-elevated)",
-                      color: resultFilter === f ? "white" : "var(--text-secondary)",
-                      border: resultFilter === f ? "none" : "1px solid var(--border-subtle)",
-                    }}>
-                    {f === "failed" && <XCircle className="w-3 h-3 inline mr-1 align-middle" />}
-                    {f === "passed" && <CheckCircle className="w-3 h-3 inline mr-1 align-middle" />}
-                    {f === "error" && <AlertTriangle className="w-3 h-3 inline mr-1 align-middle" />}
-                    {f.charAt(0).toUpperCase() + f.slice(1)} {f === "failed" ? `(${failedCount})` : f === "passed" ? `(${passedCount})` : f === "error" ? `(${errorCount})` : `(${results.length})`}
-                  </button>
-                ))}
-              </div>
-              <span className="text-xs ml-auto" style={{ color: "var(--text-muted)" }}>
-                Showing {filteredResults.length} of {results.length}
-              </span>
+              {results.length > 8 && (
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
+                  <input
+                    type="text"
+                    placeholder="Search results by title or description..."
+                    value={resultSearch}
+                    onChange={(e) => setResultSearch(e.target.value)}
+                    className="w-full sm:w-64 pl-8 pr-3 py-1.5 rounded-lg text-xs"
+                    style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Individual Results - Compact & Segregated */}
