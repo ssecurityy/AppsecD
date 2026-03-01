@@ -21,6 +21,7 @@ const CHECK_ICONS: Record<string, any> = {
   security_headers: Shield, ssl_tls: Lock, cookie_security: Cookie,
   cors: Globe, info_disclosure: Server, http_methods: Zap,
   robots_txt: FileText, directory_listing: Folder, open_redirect: ExternalLink,
+  tech_fingerprint: Layers, sitemap_xml: FileText,
   rate_limiting: Clock, xss_basic: Code, sqli_error: Database,
   api_docs_exposure: BookOpen, host_header_injection: Layers, crlf_injection: Wrench,
   sensitive_data: HardDrive, sri: Shield, cache_control: Clock,
@@ -59,6 +60,9 @@ export default function DastScanPage() {
   const [resultFilter, setResultFilter] = useState<"failed" | "passed" | "all" | "error">("failed");
   const [resultSearch, setResultSearch] = useState("");
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [dirsSectionExpanded, setDirsSectionExpanded] = useState(false);
+  const [ffufScanning, setFfufScanning] = useState<string | null>(null);
+  const [ffufResults, setFfufResults] = useState<Record<string, { discovered: { path: string; status: number }[]; wordlist_used: string }>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -242,6 +246,34 @@ export default function DastScanPage() {
       if (next.has(checkId)) next.delete(checkId); else next.add(checkId);
       return next;
     });
+  };
+
+  const discoveredPaths = (() => {
+    const dirCheck = (scanResult?.results || []).find((r: any) => r.check_id === "DAST-DIR-02");
+    return (dirCheck?.details?.discovered || []) as { path: string; status: number }[];
+  })();
+
+  const handleRunFullWordlist = async (basePath: string) => {
+    const target = scanResult?.target_url || project?.application_url;
+    if (!target) return;
+    setFfufScanning(basePath);
+    try {
+      const res = await api.dastFfufScan({
+        target_url: target,
+        base_path: basePath,
+        wordlist: "small",
+      }) as { success: boolean; discovered: { path: string; status: number }[]; wordlist_used: string; error?: string };
+      if (res.success) {
+        setFfufResults(prev => ({ ...prev, [basePath]: { discovered: res.discovered, wordlist_used: res.wordlist_used } }));
+        toast.success(`Found ${res.discovered.length} path(s) under ${basePath}`);
+      } else {
+        toast.error(res.error || "ffuf scan failed");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "ffuf scan failed");
+    } finally {
+      setFfufScanning(null);
+    }
   };
 
   // Auto-expand failed checks when results first load; default filter to failed
@@ -530,6 +562,73 @@ export default function DastScanPage() {
                 </div>
               )}
             </div>
+
+            {/* Discovered Directories - Run Full Wordlist */}
+            {discoveredPaths.length > 0 && (
+              <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                <button onClick={() => setDirsSectionExpanded(!dirsSectionExpanded)} className="w-full flex items-center justify-between p-2.5 text-left hover:bg-white/5">
+                  <div className="flex items-center gap-2">
+                    <ChevronRight className={`w-4 h-4 transition-transform ${dirsSectionExpanded ? "rotate-90" : ""}`} style={{ color: "var(--text-muted)" }} />
+                    <Folder className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
+                    <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Discovered Directories</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(37, 99, 235, 0.15)", color: "var(--accent-indigo)" }}>{discoveredPaths.length} paths</span>
+                  </div>
+                </button>
+                {dirsSectionExpanded && (
+                  <div className="px-3 pb-3 pt-0 border-t" style={{ borderColor: "var(--border-subtle)" }}>
+                    <p className="text-xs mt-2 mb-2" style={{ color: "var(--text-muted)" }}>Run full ffuf wordlist on any path for deeper discovery</p>
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {discoveredPaths.map((d: { path: string; status: number }) => {
+                        const path = d.path.replace(/\/$/, "") || "/";
+                        const key = path || "/";
+                        const isScanning = ffufScanning === key;
+                        const subResults = ffufResults[key];
+                        return (
+                          <div key={key} className="flex items-center justify-between gap-2 p-2 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                            <div className="min-w-0 flex-1">
+                              <span className="text-xs font-mono truncate block" style={{ color: "var(--text-primary)" }}>{path || "/"}</span>
+                              <span className="text-xs" style={{ color: "var(--text-muted)" }}>HTTP {d.status}</span>
+                              {subResults && (
+                                <p className="text-xs mt-0.5" style={{ color: "#16a34a" }}>
+                                  +{subResults.discovered.length} subpaths (wordlist: {subResults.wordlist_used})
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => handleRunFullWordlist(key)}
+                              disabled={isScanning}
+                              className="px-2 py-1 rounded text-xs font-medium whitespace-nowrap flex items-center gap-1"
+                              style={{ background: "var(--accent-indigo)", color: "white", opacity: isScanning ? 0.7 : 1 }}
+                            >
+                              {isScanning ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                              {isScanning ? "Scanning..." : "Run Full Wordlist"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {Object.keys(ffufResults).length > 0 && (
+                      <details className="mt-2">
+                        <summary className="text-xs cursor-pointer" style={{ color: "var(--accent-indigo)" }}>View ffuf subpath results</summary>
+                        <div className="mt-1 space-y-2 max-h-32 overflow-y-auto">
+                          {Object.entries(ffufResults).map(([base, data]) => (
+                            <div key={base} className="text-xs">
+                              <p className="font-medium mb-0.5" style={{ color: "var(--text-primary)" }}>{base}</p>
+                              <div className="flex flex-wrap gap-1">
+                                {data.discovered.slice(0, 20).map((s: { path: string; status: number }) => (
+                                  <span key={s.path} className="px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{s.path} ({s.status})</span>
+                                ))}
+                                {data.discovered.length > 20 && <span style={{ color: "var(--text-muted)" }}>+{data.discovered.length - 20} more</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Individual Results - Compact & Segregated */}
             <div className="space-y-2">

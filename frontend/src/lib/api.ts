@@ -402,4 +402,6 @@ export const api = {
   dastCheck: (data: { target_url: string; check: string }) =>
     request("/dast/check", { method: "POST", body: JSON.stringify(data) }),
   dastChecks: () => request("/dast/checks"),
+  dastFfufScan: (data: { target_url: string; base_path?: string; wordlist?: string }) =>
+    request("/dast/ffuf-scan", { method: "POST", body: JSON.stringify(data) }),
 };

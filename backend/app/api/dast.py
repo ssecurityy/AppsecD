@@ -30,6 +30,12 @@ class DastSingleCheckRequest(BaseModel):
     check: str  # security_headers, ssl_tls, etc.
 
 
+class DastFfufScanRequest(BaseModel):
+    target_url: str
+    base_path: str = "/"  # e.g. /api, /admin
+    wordlist: str = "small"  # small, medium, dirbuster-dirs, api-common
+
+
 async def _run_scan_background(
     scan_id: str,
     project_id: str,
@@ -307,3 +313,20 @@ async def list_available_checks(current_user=Depends(get_current_user)):
             for name, fn in ALL_CHECKS
         ]
     }
+
+
+@router.post("/ffuf-scan")
+async def run_ffuf_scan(
+    payload: DastFfufScanRequest,
+    current_user=Depends(get_current_user),
+):
+    """Run full ffuf wordlist scan on a base path (e.g. /api). For Directories Run Full Wordlist button."""
+    from app.services.dast_service import run_ffuf_full_scan
+    result = await asyncio.to_thread(
+        run_ffuf_full_scan,
+        payload.target_url,
+        payload.base_path,
+        payload.wordlist,
+        300,
+    )
+    return result

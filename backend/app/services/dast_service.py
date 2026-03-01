@@ -39,22 +39,51 @@ BROWSER_HEADERS = {
 HEADERS = {**BROWSER_HEADERS, "User-Agent": USER_AGENTS[0]}
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
+
+# Multiple wordlists for full recon coverage — quick first, then comprehensive
 WORDLIST_PATHS = [
     DATA_ROOT / "IntruderPayloads" / "FuzzLists" / "dirbuster-quick.txt",
     DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "DirBuster-2007_directory-list-2.3-small.txt",
     DATA_ROOT / "IntruderPayloads" / "FuzzLists" / "dirbuster-top1000.txt",
+    DATA_ROOT / "IntruderPayloads" / "FuzzLists" / "dirbuster-dirs.txt",
+    DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "DirBuster-2007_directory-list-lowercase-2.3-small.txt",
+    DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "Common-DB-Backups.txt",
+    DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "Logins.fuzz.txt",
 ]
 
-def _load_discovery_wordlist(max_paths: int = 150) -> list[str]:
-    """Load directory discovery wordlist from SecLists/IntruderPayloads."""
+# Full wordlists for "Run Full Wordlist" button (large files)
+FULL_WORDLIST_PATHS = [
+    ("small", DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "DirBuster-2007_directory-list-2.3-small.txt"),
+    ("medium", DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "DirBuster-2007_directory-list-2.3-medium.txt"),
+    ("dirbuster-dirs", DATA_ROOT / "IntruderPayloads" / "FuzzLists" / "dirbuster-dirs.txt"),
+    ("api-common", DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "Logins.fuzz.txt"),
+]
+
+
+def _load_discovery_wordlist(max_paths: int = 400) -> list[str]:
+    """Load and merge from multiple wordlists for full recon coverage."""
+    seen = set()
+    merged: list[str] = []
     for p in WORDLIST_PATHS:
-        if p.exists():
-            try:
-                lines = [ln.strip() for ln in open(p, encoding="utf-8", errors="ignore").readlines() if ln.strip() and not ln.startswith("#")]
-                return list(dict.fromkeys(lines))[:max_paths]  # dedupe, limit
-            except Exception as e:
-                logger.debug("Could not load wordlist %s: %s", p, e)
-    return ["admin", "login", "api", "config", "backup", "static", "assets", "uploads", "images", "css", "js", "wp-admin", ".git", ".env", "debug", "test", "dev", "staging", "dashboard", "panel"]
+        if not p.exists():
+            continue
+        try:
+            with open(p, encoding="utf-8", errors="ignore") as f:
+                for ln in f:
+                    w = ln.strip()
+                    if not w or w.startswith("#"):
+                        continue
+                    w = w.lstrip("/")
+                    if w and w not in seen:
+                        seen.add(w)
+                        merged.append(w)
+                        if len(merged) >= max_paths:
+                            return merged
+        except Exception as e:
+            logger.debug("Could not load wordlist %s: %s", p, e)
+    if not merged:
+        merged = ["admin", "login", "api", "config", "backup", "static", "assets", "uploads", "images", "css", "js", "wp-admin", ".git", ".env", "debug", "test", "dev", "staging", "dashboard", "panel"]
+    return merged
 
 TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 MIN_DELAY_BETWEEN_REQUESTS = 1.2
@@ -581,6 +610,90 @@ def check_http_methods(target_url: str) -> DastResult:
     else:
         result.status = "passed"
         result.description = "No dangerous HTTP methods enabled"
+    return result
+
+
+# ─── Check 6b: Tech Fingerprint (Wappalyzer/WhatWeb-style) ───
+
+def check_tech_fingerprint(target_url: str) -> DastResult:
+    """Technology fingerprinting (Wappalyzer/WhatWeb-style) — detect frameworks, server, WAF."""
+    result = DastResult(
+        check_id="DAST-RECON-01",
+        title="Tech Fingerprint",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    try:
+        from app.services.tech_detection_service import detect_technology
+        stack = detect_technology(target_url)
+    except Exception as e:
+        logger.debug("Tech fingerprint failed: %s", e)
+        result.status = "error"
+        result.description = "Technology detection unavailable"
+        return result
+
+    detected = stack.get("stack_profile", {}) or {}
+    flat = []
+    for cat, items in detected.items():
+        if isinstance(items, list):
+            flat.extend(str(x) for x in items if x)
+        elif isinstance(items, str) and items:
+            flat.append(items)
+    flat = list(dict.fromkeys(flat))
+    waf = detected.get("waf") or []
+
+    result.details = {"stack_profile": detected, "technologies": flat, "waf": waf}
+    if stack.get("effective_url"):
+        result.request_raw = f"GET {stack['effective_url']} — Tech scan"
+    if flat or waf:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = f"Detected: {', '.join(flat[:12])}" + (f" | WAF: {', '.join(waf)}" if waf else "")
+        result.evidence = f"Technologies: {', '.join(flat)}\nWAF: {', '.join(waf) or 'None'}"
+        result.remediation = "Minimize technology disclosure in headers and HTML"
+    else:
+        result.status = "passed"
+        result.description = "Minimal technology disclosure"
+    return result
+
+
+# ─── Check 6c: sitemap.xml ───
+
+def check_sitemap_xml(target_url: str) -> DastResult:
+    """Check sitemap.xml for sensitive paths and indexability."""
+    result = DastResult(
+        check_id="DAST-RECON-02",
+        title="sitemap.xml Analysis",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    parsed = urlparse(target_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    sitemap_url = urljoin(base, "/sitemap.xml")
+    resp = _safe_get(sitemap_url)
+    if not resp or resp.status_code != 200:
+        result.status = "passed"
+        result.description = "No sitemap.xml found"
+        return result
+
+    content = resp.text or ""
+    sensitive = ["admin", "login", "config", "backup", "api/", "internal", "debug", "test"]
+    urls_found = re.findall(r"<loc>([^<]+)</loc>", content, re.I)
+    sensitive_found = [u for u in urls_found if any(s in u.lower() for s in sensitive)]
+
+    result.details = {"urls_count": len(urls_found), "sensitive_paths": sensitive_found}
+    if resp:
+        result.request_raw = f"GET {sitemap_url} HTTP/1.1\nHost: {parsed.netloc}"
+        result.response_raw = f"HTTP/1.1 {resp.status_code}\n\n{content[:2000]}"
+    if sensitive_found:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"sitemap.xml exposes {len(sensitive_found)} sensitive path(s)"
+        result.evidence = ", ".join(sensitive_found[:8])
+        result.remediation = "Exclude sensitive URLs from sitemap.xml"
+    else:
+        result.status = "passed"
+        result.description = f"sitemap.xml found with {len(urls_found)} URL(s), no sensitive paths"
     return result
 
 
@@ -1133,6 +1246,63 @@ def _run_ffuf_discovery(target_url: str, wordlist_path: str, max_paths: int) -> 
         return []
 
 
+def run_ffuf_full_scan(target_url: str, base_path: str = "/", wordlist_key: str = "small", max_results: int = 200) -> dict:
+    """
+    Run full ffuf wordlist scan on a base path. For "Run Full Wordlist" button.
+    Returns {success, discovered, wordlist_used, error}.
+    """
+    import subprocess
+    import tempfile
+    parsed = urlparse(target_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    path = (base_path or "/").rstrip("/")
+    base_url = f"{base}{path}/"
+    fuzz_url = f"{base_url.rstrip('/')}/FUZZ"
+
+    wordlist_path = None
+    for key, wp in FULL_WORDLIST_PATHS:
+        if key == wordlist_key and wp.exists():
+            wordlist_path = str(wp)
+            break
+    if not wordlist_path:
+        for key, wp in FULL_WORDLIST_PATHS:
+            if wp.exists():
+                wordlist_path = str(wp)
+                wordlist_key = key
+                break
+    if not wordlist_path:
+        return {"success": False, "discovered": [], "wordlist_used": "", "error": "No wordlist available"}
+
+    fd, outpath = None, None
+    try:
+        fd, outpath = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        proc = subprocess.run(
+            ["ffuf", "-u", fuzz_url, "-w", wordlist_path, "-mc", "200,201,204,301,302,307,401,403,405", "-fc", "404", "-t", "25", "-o", outpath, "-of", "json"],
+            capture_output=True, timeout=180, env={**os.environ}
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stderr or b"").decode("utf-8", errors="ignore")[:500]
+            return {"success": False, "discovered": [], "wordlist_used": wordlist_key, "error": f"ffuf exit {proc.returncode}: {stderr}"}
+        with open(outpath, "rb") as f:
+            data = json.loads(f.read().decode("utf-8", errors="ignore"))
+        results = data.get("results", [])[:max_results]
+        discovered = [{"path": f"{path}/{r.get('input', {}).get('FUZZ', '')}".replace("//", "/"), "status": r.get("status", 0)} for r in results]
+        return {"success": True, "discovered": discovered, "wordlist_used": wordlist_key, "error": ""}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "discovered": [], "wordlist_used": wordlist_key, "error": "ffuf timeout (180s)"}
+    except FileNotFoundError:
+        return {"success": False, "discovered": [], "wordlist_used": "", "error": "ffuf not installed"}
+    except Exception as e:
+        return {"success": False, "discovered": [], "wordlist_used": "", "error": str(e)}
+    finally:
+        if outpath and os.path.exists(outpath):
+            try:
+                os.unlink(outpath)
+            except OSError:
+                pass
+
+
 def check_directory_discovery(target_url: str) -> DastResult:
     """Discover hidden paths using SecLists/IntruderPayloads (httpx) or ffuf when available."""
     result = DastResult(
@@ -1150,17 +1320,26 @@ def check_directory_discovery(target_url: str) -> DastResult:
     base = urlparse(target_url)
     root = f"{base.scheme}://{base.netloc}"
     discovered = []
-    wordlist = _load_discovery_wordlist(100)
-    wordlist_source = "SecLists/IntruderPayloads"
+    wordlist = _load_discovery_wordlist(400)
+    wordlist_source = "SecLists/IntruderPayloads (merged)"
 
-    # Try ffuf first if wordlist file exists
+    # Try ffuf first with multiple wordlists for full coverage
     for wp in WORDLIST_PATHS:
         if wp.exists():
-            ffuf_results = _run_ffuf_discovery(target_url, str(wp), 50)
+            ffuf_results = _run_ffuf_discovery(target_url, str(wp), 80)
             if ffuf_results:
-                discovered = ffuf_results
+                discovered.extend(ffuf_results)
                 wordlist_source = f"ffuf+{wp.name}"
                 break
+
+    # Dedupe by path
+    if discovered:
+        by_path: dict[str, dict] = {}
+        for d in discovered:
+            p = d.get("path", "")
+            if p and p not in by_path:
+                by_path[p] = d
+        discovered = list(by_path.values())
 
     # Fallback: httpx-based discovery (throttled to avoid WAF/rate limit)
     if not discovered:
@@ -1179,7 +1358,7 @@ def check_directory_discovery(target_url: str) -> DastResult:
                 continue
             if r.status_code not in discard_codes:
                 discovered.append({"path": f"/{path}", "status": r.status_code})
-            if len(discovered) >= 25:
+            if len(discovered) >= 50:
                 break
 
     result.details = {"paths_checked": len(wordlist), "discovered": discovered, "wordlist_source": wordlist_source}
@@ -2259,6 +2438,8 @@ ALL_CHECKS = [
     ("cookie_security", check_cookie_security),
     ("cors", check_cors),
     ("info_disclosure", check_info_disclosure),
+    ("tech_fingerprint", check_tech_fingerprint),
+    ("sitemap_xml", check_sitemap_xml),
     ("http_methods", check_http_methods),
     ("robots_txt", check_robots_txt),
     ("directory_listing", check_directory_listing),
