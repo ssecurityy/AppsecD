@@ -105,7 +105,7 @@ async def list_available_checks(current_user=Depends(get_current_user)):
     from app.services.dast_service import ALL_CHECKS
     return {
         "checks": [
-            {"id": name, "title": fn.__doc__.strip().split("\n")[0] if fn.__doc__ else name}
+            {"id": name, "title": fn.__doc__.strip().split("\n")[0] if fn.__doc__ else name, "is_automated": True}
             for name, fn in ALL_CHECKS
         ]
     }

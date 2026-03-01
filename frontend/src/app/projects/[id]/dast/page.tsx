@@ -20,7 +20,7 @@ const CHECK_ICONS: Record<string, any> = {
   rate_limiting: Clock, xss_basic: Code, sqli_error: Database,
   api_docs_exposure: BookOpen, host_header_injection: Layers, crlf_injection: Wrench,
   sensitive_data: HardDrive, sri: Shield, cache_control: Clock,
-  form_autocomplete: FormInput, backup_files: FileText,
+  form_autocomplete: FormInput, backup_files: FileText, directory_discovery: Folder, dir: Folder,
 };
 
 const SEVERITY_COLORS: Record<string, string> = {

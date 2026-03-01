@@ -1,7 +1,7 @@
-"""DAST Automation Engine — HTTP-based security checks without external tools.
+"""DAST Automation Engine — HTTP-based security checks.
 
-Runs automated security checks using only HTTP requests (httpx).
-No external tools (Burp, ZAP, nuclei) required.
+Runs automated security checks using httpx. Optional ffuf for directory discovery.
+Uses SecLists/IntruderPayloads wordlists when available.
 """
 import httpx
 import ssl
@@ -9,12 +9,32 @@ import json
 import time
 import logging
 import re
+import os
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urljoin
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
+WORDLIST_PATHS = [
+    DATA_ROOT / "IntruderPayloads" / "FuzzLists" / "dirbuster-quick.txt",
+    DATA_ROOT / "SecLists" / "Discovery" / "Web-Content" / "DirBuster-2007_directory-list-2.3-small.txt",
+    DATA_ROOT / "IntruderPayloads" / "FuzzLists" / "dirbuster-top1000.txt",
+]
+
+def _load_discovery_wordlist(max_paths: int = 150) -> list[str]:
+    """Load directory discovery wordlist from SecLists/IntruderPayloads."""
+    for p in WORDLIST_PATHS:
+        if p.exists():
+            try:
+                lines = [ln.strip() for ln in open(p, encoding="utf-8", errors="ignore").readlines() if ln.strip() and not ln.startswith("#")]
+                return list(dict.fromkeys(lines))[:max_paths]  # dedupe, limit
+            except Exception as e:
+                logger.debug("Could not load wordlist %s: %s", p, e)
+    return ["admin", "login", "api", "config", "backup", "static", "assets", "uploads", "images", "css", "js", "wp-admin", ".git", ".env", "debug", "test", "dev", "staging", "dashboard", "panel"]
+
+TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 HEADERS = {"User-Agent": "AppSecD-DAST/1.0 (Automated Security Testing)"}
 
 
@@ -58,22 +78,26 @@ class DastResult:
 
 
 def _url_variants(url: str) -> list[str]:
-    """Return URL and fallbacks (https/http, www/non-www) for reachability."""
+    """Return URL and fallbacks. Try scheme flip early (http before www) for dev/staging."""
     parsed = urlparse(url)
-    urls = [url]
     base = f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}{parsed.query and '?' + parsed.query or ''}"
-    if "www." not in (parsed.netloc or ""):
-        alt = base.replace(parsed.netloc or "", f"www.{parsed.netloc}" if parsed.netloc else "www.")
-        if alt != base and alt not in urls:
-            urls.append(alt)
+    urls = [url]
+    # Try opposite scheme early — many targets use HTTP only (dev/staging)
     if parsed.scheme == "https":
-        alt2 = base.replace("https://", "http://")
-        if alt2 not in urls:
-            urls.append(alt2)
+        u2 = base.replace("https://", "http://")
+        if u2 not in urls:
+            urls.append(u2)
     elif parsed.scheme == "http":
-        alt2 = base.replace("http://", "https://")
-        if alt2 not in urls:
-            urls.append(alt2)
+        u2 = base.replace("http://", "https://")
+        if u2 not in urls:
+            urls.append(u2)
+    # www variants
+    netloc = parsed.netloc or ""
+    if "www." not in netloc and netloc:
+        for u in list(urls):
+            u_www = u.replace(netloc, f"www.{netloc}", 1)
+            if u_www not in urls:
+                urls.append(u_www)
     return urls
 
 
@@ -936,6 +960,103 @@ def check_backup_files(target_url: str) -> DastResult:
     return result
 
 
+# ─── Check 21: Directory/Path Discovery ───
+
+def _run_ffuf_discovery(target_url: str, wordlist_path: str, max_paths: int) -> list[dict]:
+    """Run ffuf for directory discovery if available. Returns list of {path, status}."""
+    import subprocess
+    import tempfile
+    try:
+        parsed = urlparse(target_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        u = f"{base.rstrip('/')}/FUZZ"
+        fd, outpath = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            proc = subprocess.run(
+                ["ffuf", "-u", u, "-w", wordlist_path, "-mc", "200,201,301,302,401,403", "-fc", "404", "-t", "20", "-o", outpath, "-of", "json"],
+                capture_output=True, timeout=90, env={**os.environ}
+            )
+            if proc.returncode != 0:
+                return []
+            with open(outpath, "rb") as f:
+                data = json.loads(f.read().decode("utf-8", errors="ignore"))
+        finally:
+            try:
+                os.unlink(outpath)
+            except OSError:
+                pass
+        results = data.get("results", [])[:max_paths]
+        return [{"path": "/" + str(r.get("input", {}).get("FUZZ", "")), "status": r.get("status", 0)} for r in results]
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError) as e:
+        logger.debug("ffuf discovery skipped: %s", e)
+        return []
+
+
+def check_directory_discovery(target_url: str) -> DastResult:
+    """Discover hidden paths using SecLists/IntruderPayloads (httpx) or ffuf when available."""
+    result = DastResult(
+        check_id="DAST-DIR-02",
+        title="Directory & Path Discovery",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-548",
+    )
+    base_resp = _safe_get(target_url)
+    if not base_resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+
+    base = urlparse(target_url)
+    root = f"{base.scheme}://{base.netloc}"
+    discovered = []
+    wordlist = _load_discovery_wordlist(100)
+    wordlist_source = "SecLists/IntruderPayloads"
+
+    # Try ffuf first if wordlist file exists
+    for wp in WORDLIST_PATHS:
+        if wp.exists():
+            ffuf_results = _run_ffuf_discovery(target_url, str(wp), 50)
+            if ffuf_results:
+                discovered = ffuf_results
+                wordlist_source = f"ffuf+{wp.name}"
+                break
+
+    # Fallback: httpx-based discovery
+    if not discovered:
+        discard_codes = {404, 410}
+        for path in wordlist:
+            path = path.strip().lstrip("/")
+            if not path:
+                continue
+            test_url = urljoin(root + "/", path)
+            try:
+                with httpx.Client(timeout=httpx.Timeout(4.0, connect=3.0), headers=HEADERS, verify=False, follow_redirects=True) as client:
+                    r = client.get(test_url)
+            except Exception:
+                continue
+            if r.status_code not in discard_codes:
+                discovered.append({"path": f"/{path}", "status": r.status_code})
+            if len(discovered) >= 25:
+                break
+
+    result.details = {"paths_checked": len(wordlist), "discovered": discovered, "wordlist_source": wordlist_source}
+    if base_resp:
+        result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {base.netloc}"
+        result.response_raw = f"HTTP/1.1 {base_resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in base_resp.headers.items()) + "\n\n" + (base_resp.text[:1500] if base_resp.text else "")
+    if discovered:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Discovered {len(discovered)} path(s) on target"
+        result.evidence = ", ".join(f"{d['path']} ({d['status']})" for d in discovered[:10])
+        result.remediation = "Restrict access to sensitive paths. Disable directory listing."
+        result.reproduction_steps = f"1. Fuzz base URL with wordlist\n2. Paths found: {', '.join(d['path'] for d in discovered[:8])}"
+    else:
+        result.status = "passed"
+        result.description = f"No additional paths discovered ({len(wordlist)} paths checked)"
+    return result
+
+
 # ─── DAST Runner ───
 
 ALL_CHECKS = [
@@ -959,6 +1080,7 @@ ALL_CHECKS = [
     ("cache_control", check_cache_control),
     ("form_autocomplete", check_form_autocomplete),
     ("backup_files", check_backup_files),
+    ("directory_discovery", check_directory_discovery),
 ]
 
 
