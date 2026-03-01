@@ -284,3 +284,61 @@ async def get_async_report_status(
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@router.post("/{project_id}/report/summarize")
+async def summarize_report(
+    project_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate an LLM-powered executive summary for the report."""
+    from app.services.admin_settings_service import get_llm_config
+    import uuid
+
+    project_result = await db.execute(select(Project).where(Project.id == uuid.UUID(project_id)))
+    project = project_result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    findings_result = await db.execute(select(Finding).where(Finding.project_id == uuid.UUID(project_id)))
+    findings = findings_result.scalars().all()
+
+    _provider, model, api_key = await get_llm_config(db)
+
+    if not api_key:
+        finding_count = len(findings)
+        critical_high = sum(1 for f in findings if (f.severity or "").lower() in ("critical", "high"))
+        summary = f"Security assessment of {project.application_name} identified {finding_count} finding(s). "
+        if critical_high:
+            summary += f"{critical_high} are Critical/High severity requiring immediate attention. "
+        summary += f"Testing covered {project.tested_count or 0} of {project.total_test_cases or 0} test cases."
+        return {"summary": summary, "mode": "rule_based"}
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+
+        findings_text = "\n".join([
+            f"- [{f.severity}] {f.title}: {(f.description or '')[:100]}"
+            for f in findings[:20]
+        ])
+
+        prompt = f"""Write a brief executive summary (3-4 sentences) for a security assessment report:
+Application: {project.application_name}
+URL: {project.application_url}
+Test Cases: {project.tested_count or 0}/{project.total_test_cases or 0} executed
+Findings:
+{findings_text}
+Be professional, concise, and actionable."""
+
+        response = client.chat.completions.create(
+            model=model or "gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        summary = (response.choices[0].message.content or "").strip()
+        return {"summary": summary, "mode": "llm"}
+    except Exception as e:
+        return {"summary": f"Failed to generate LLM summary: {str(e)}", "mode": "error"}
