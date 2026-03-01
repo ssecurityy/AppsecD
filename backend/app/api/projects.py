@@ -1,7 +1,7 @@
 """Projects API — with Redis caching and pagination for enterprise load."""
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.core.rbac import require_roles
@@ -19,6 +19,7 @@ from app.services.audit_service import log_audit
 from app.models.test_case import TestCase
 from app.models.result import ProjectTestResult
 from app.models.category import Category
+from app.models.finding import Finding
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, ProjectMemberCreate, ProjectMemberUpdate, ProjectMemberOut
 from datetime import datetime, date
 import uuid
@@ -27,8 +28,8 @@ require_tester_plus = require_roles(get_current_user, "super_admin", "admin", "l
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-def project_to_dict(p: Project, organization_name: str | None = None) -> dict:
-    return {
+def project_to_dict(p: Project, organization_name: str | None = None, finding_count: int | None = None) -> dict:
+    d = {
         "id": str(p.id),
         "organization_id": str(p.organization_id) if p.organization_id else None,
         "organization_name": organization_name,
@@ -58,6 +59,32 @@ def project_to_dict(p: Project, organization_name: str | None = None) -> dict:
         "started_at": p.started_at.isoformat() if p.started_at else None,
         "completed_at": p.completed_at.isoformat() if p.completed_at else None,
     }
+    if finding_count is not None:
+        d["finding_count"] = finding_count
+    return d
+
+
+@router.post("/detect-tech", response_model=dict)
+async def detect_technology(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+):
+    """Detect technology stack from URL. Returns stack_profile for project onboarding."""
+    from app.services.tech_detection_service import detect_technology as _detect
+    url = payload.get("url") or payload.get("application_url") or ""
+    if not url:
+        return {"stack_profile": {}, "_error": "URL required", "_detected": False}
+    result = _detect(url)
+    stack_profile = {k: v for k, v in result.items() if not k.startswith("_")}
+    if result.get("frontend"):
+        stack_profile["frontend"] = result["frontend"]
+    if result.get("backend"):
+        stack_profile["backend"] = result["backend"]
+    if result.get("server"):
+        stack_profile["server"] = result.get("server", [])
+    if result.get("cms"):
+        stack_profile["cms"] = result.get("cms", [])
+    return {"stack_profile": stack_profile, "_detected": result.get("_detected", False), "_error": result.get("_error")}
 
 
 @router.post("", response_model=dict)
@@ -136,7 +163,7 @@ async def create_project(
     await invalidate_project_list(str(current_user.id))
     await db.commit()
     await db.refresh(project)
-    return project_to_dict(project)
+    return project_to_dict(project, finding_count=0)
 
 
 async def _apply_test_cases(project: Project, db: AsyncSession) -> int:
@@ -196,19 +223,73 @@ async def list_projects(
     query = base.limit(limit).offset(offset)
     result = await db.execute(query)
     projects = result.scalars().all()
+    project_ids = [p.id for p in projects]
+    finding_counts: dict = {}
+    if project_ids:
+        fc_result = await db.execute(
+            select(Finding.project_id, func.count()).where(Finding.project_id.in_(project_ids)).group_by(Finding.project_id)
+        )
+        finding_counts = {str(row[0]): row[1] for row in fc_result.all()}
     org_ids = {p.organization_id for p in projects if p.organization_id}
     orgs = {}
     if org_ids:
         r = await db.execute(select(Organization).where(Organization.id.in_(org_ids)))
         orgs = {str(o.id): o.name for o in r.scalars().all()}
     items = [
-        project_to_dict(p, orgs.get(str(p.organization_id)) if p.organization_id else None)
+        project_to_dict(
+            p,
+            orgs.get(str(p.organization_id)) if p.organization_id else None,
+            finding_count=finding_counts.get(str(p.id), 0),
+        )
         for p in projects
     ]
     out = {"items": items, "total": total, "limit": limit, "offset": offset}
     if getattr(settings, "cache_enabled", True):
         await set_cached_json(cache_key, out, ttl=60)
     return out
+
+
+@router.get("/trend/findings", response_model=dict)
+async def get_all_projects_findings_trend(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Findings trend across all visible projects (for dashboard)."""
+    visible = await get_visible_project_ids(db, current_user)
+    if visible is not None and len(visible) == 0:
+        return {"by_date": [], "by_severity": {}}
+
+    date_col = func.date(Finding.created_at)
+    dast_case = case((Finding.title.like("[DAST]%"), 1), else_=0)
+    manual_case = case((~Finding.title.like("[DAST]%"), 1), else_=0)
+
+    by_date_q = (
+        select(
+            date_col.label("date"),
+            func.count().label("total"),
+            func.sum(dast_case).label("dast"),
+            func.sum(manual_case).label("manual"),
+        )
+        .select_from(Finding)
+        .group_by(date_col)
+        .order_by(date_col)
+    )
+    if visible is not None:
+        by_date_q = by_date_q.where(Finding.project_id.in_(visible))
+    date_rows = (await db.execute(by_date_q)).all()
+
+    by_date = [
+        {"date": row.date.isoformat() if hasattr(row.date, "isoformat") else str(row.date), "total": row.total or 0, "dast": int(row.dast or 0), "manual": int(row.manual or 0)}
+        for row in date_rows
+    ]
+
+    sev_q = select(Finding.severity, func.count()).select_from(Finding).group_by(Finding.severity)
+    if visible is not None:
+        sev_q = sev_q.where(Finding.project_id.in_(visible))
+    sev_rows = (await db.execute(sev_q)).all()
+    by_severity = {str(row[0] or "unknown"): row[1] for row in sev_rows}
+
+    return {"by_date": by_date, "by_severity": by_severity}
 
 
 @router.get("/{project_id}", response_model=dict)
@@ -223,7 +304,11 @@ async def get_project(
         raise HTTPException(404, "Project not found")
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
-    return project_to_dict(project)
+    fc_result = await db.execute(
+        select(func.count()).where(Finding.project_id == project_id)
+    )
+    finding_count = fc_result.scalar() or 0
+    return project_to_dict(project, finding_count=finding_count)
 
 
 @router.patch("/{project_id}", response_model=dict)
@@ -247,7 +332,9 @@ async def update_project(
         project.risk_rating = payload.risk_rating
     await db.commit()
     await db.refresh(project)
-    return project_to_dict(project)
+    fc_result = await db.execute(select(func.count()).where(Finding.project_id == project_id))
+    finding_count = fc_result.scalar() or 0
+    return project_to_dict(project, finding_count=finding_count)
 
 
 @router.get("/{project_id}/progress", response_model=dict)
@@ -312,6 +399,56 @@ async def get_project_progress(
         "completion_pct": pct,
         "phases": phase_list,
     }
+
+
+@router.get("/{project_id}/findings/trend", response_model=dict)
+async def get_project_findings_trend(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Findings trend: by date (with dast vs manual) and by severity. DAST findings have title starting with '[DAST]'."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied to this project")
+
+    # by_date: date, total, dast, manual
+    date_col = func.date(Finding.created_at)
+    dast_case = case((Finding.title.like("[DAST]%"), 1), else_=0)
+    manual_case = case((~Finding.title.like("[DAST]%"), 1), else_=0)
+
+    by_date_q = (
+        select(
+            date_col.label("date"),
+            func.count().label("total"),
+            func.sum(dast_case).label("dast"),
+            func.sum(manual_case).label("manual"),
+        )
+        .where(Finding.project_id == project_id)
+        .group_by(date_col)
+        .order_by(date_col)
+    )
+    date_rows = (await db.execute(by_date_q)).all()
+
+    by_date = [
+        {
+            "date": row.date.isoformat() if hasattr(row.date, "isoformat") else str(row.date),
+            "total": row.total or 0,
+            "dast": int(row.dast or 0),
+            "manual": int(row.manual or 0),
+        }
+        for row in date_rows
+    ]
+
+    # by_severity
+    sev_q = (
+        select(Finding.severity, func.count())
+        .where(Finding.project_id == project_id)
+        .group_by(Finding.severity)
+    )
+    sev_rows = (await db.execute(sev_q)).all()
+    by_severity = {str(row[0] or "unknown"): row[1] for row in sev_rows}
+
+    return {"by_date": by_date, "by_severity": by_severity}
 
 
 # --- Project members (admin or project manager) ---

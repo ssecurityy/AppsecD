@@ -8,8 +8,9 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy, TrendingUp
 } from "lucide-react";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import Link from "next/link";
 
 const PHASE_INFO: Record<string, { label: string; color: string }> = {
@@ -615,6 +616,7 @@ export default function ProjectDetail() {
   const [craftedPayloads, setCraftedPayloads] = useState<Record<string, any[]>>({});
   const [enrichingFinding, setEnrichingFinding] = useState<string | null>(null);
   const [deduplicating, setDeduplicating] = useState(false);
+  const [findingsTrend, setFindingsTrend] = useState<{ by_date: { date: string; total: number; dast: number; manual: number }[]; by_severity: Record<string, number> } | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -632,8 +634,12 @@ export default function ProjectDetail() {
 
   const loadFindings = async () => {
     try {
-      const r = await api.getFindings(id);
+      const [r, trend] = await Promise.all([
+        api.getFindings(id),
+        api.getProjectFindingsTrend(id).catch(() => ({ by_date: [], by_severity: {} })),
+      ]);
       setFindings(r?.items ?? (Array.isArray(r) ? r : []));
+      setFindingsTrend(trend);
     } catch {}
   };
 
@@ -911,6 +917,80 @@ export default function ProjectDetail() {
               ))}
             </div>
           </div>
+
+          {/* Findings trend chart */}
+          {findingsTrend && (findingsTrend.by_date?.length > 0 || Object.keys(findingsTrend.by_severity || {}).length > 0) && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="card p-4 mb-4 overflow-hidden"
+            >
+              <h3 className="text-sm font-semibold flex items-center gap-2 mb-4" style={{ color: "var(--text-primary)" }}>
+                <TrendingUp className="w-4 h-4 text-indigo-400" /> Findings Trend
+              </h3>
+              <div className="grid md:grid-cols-2 gap-4">
+                {findingsTrend.by_date && findingsTrend.by_date.length > 0 && (
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={findingsTrend.by_date} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="dastGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#10b981" stopOpacity={0.4} />
+                            <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                          </linearGradient>
+                          <linearGradient id="manualGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.4} />
+                            <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                        <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--text-muted)" />
+                        <YAxis tick={{ fontSize: 10 }} stroke="var(--text-muted)" />
+                        <Tooltip
+                          contentStyle={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)", borderRadius: 8 }}
+                          labelStyle={{ color: "var(--text-primary)" }}
+                          formatter={(value: number) => [value, ""]}
+                          labelFormatter={(label) => `Date: ${label}`}
+                        />
+                        <Legend />
+                        <Area type="monotone" dataKey="dast" name="DAST" stackId="1" stroke="#10b981" fill="url(#dastGrad)" strokeWidth={2} />
+                        <Area type="monotone" dataKey="manual" name="Manual" stackId="1" stroke="#6366f1" fill="url(#manualGrad)" strokeWidth={2} />
+                        <Area type="monotone" dataKey="total" name="Total" stroke="#f59e0b" strokeWidth={2} fill="transparent" strokeDasharray="4 4" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {findingsTrend.by_severity && Object.keys(findingsTrend.by_severity).length > 0 && (
+                  <div className="space-y-2 p-4" style={{ background: "var(--bg-tertiary)", borderRadius: 8 }}>
+                    <div className="text-xs font-semibold mb-2" style={{ color: "var(--text-secondary)" }}>By Severity</div>
+                    {["critical", "high", "medium", "low", "info"].filter(s => (findingsTrend?.by_severity || {})[s] > 0).map((sev, i) => {
+                      const count = (findingsTrend?.by_severity || {})[sev] || 0;
+                      const totalSev = Object.values(findingsTrend?.by_severity || {}).reduce((a, b) => a + b, 0) || 1;
+                      const pct = (count / totalSev) * 100;
+                      const colors: Record<string, string> = { critical: "#dc2626", high: "#ea580c", medium: "#ca8a04", low: "#16a34a", info: "#3b82f6" };
+                      return (
+                        <motion.div key={sev} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs capitalize w-16" style={{ color: "var(--text-muted)" }}>{sev}</span>
+                            <div className="flex-1 h-5 rounded overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: `${pct}%` }}
+                                transition={{ delay: i * 0.05 + 0.2, duration: 0.5 }}
+                                className="h-full rounded"
+                                style={{ background: colors[sev] }}
+                              />
+                            </div>
+                            <span className="text-xs font-bold w-6" style={{ color: colors[sev] }}>{count}</span>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
 
           {/* Findings panel */}
           {showFindings && (

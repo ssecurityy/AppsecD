@@ -68,7 +68,7 @@ export default function ProjectsPage() {
                     </div>
                     <div className="text-right shrink-0">
                       <div className="text-sm" style={{ color: "var(--text-muted)" }}>{p.total_test_cases} cases</div>
-                      <div className="text-red-400 text-sm">{p.failed_count || 0} findings</div>
+                      <div className="text-red-400 text-sm">{p.finding_count ?? p.failed_count ?? 0} findings</div>
                     </div>
                     <ArrowRight className="w-5 h-5 text-[#374151] group-hover:text-indigo-400 transition-colors" />
                   </Link>

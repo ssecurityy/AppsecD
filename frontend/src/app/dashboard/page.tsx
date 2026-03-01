@@ -11,6 +11,8 @@ import {
   Activity, Clock, Flame, Award, Shield
 } from "lucide-react";
 import Link from "next/link";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: "bg-red-500", high: "bg-orange-500",
@@ -24,6 +26,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [orgs, setOrgs] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [trendData, setTrendData] = useState<{ by_date: { date: string; total: number; dast: number; manual: number }[]; by_severity: Record<string, number> } | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -35,6 +38,7 @@ export default function Dashboard() {
       .then((r: any) => setProjects(r?.items ?? (Array.isArray(r) ? r : [])))
       .catch(() => {})
       .finally(() => setLoading(false));
+    api.getDashboardFindingsTrend().then(setTrendData).catch(() => setTrendData(null));
 
     if (isAdmin(user?.role)) {
       api.listOrganizations().then(setOrgs).catch(() => {});
@@ -46,7 +50,7 @@ export default function Dashboard() {
     total: projects.length,
     active: projects.filter(p => p.status === "in_progress").length,
     completed: projects.filter(p => p.status === "completed").length,
-    findings: projects.reduce((s, p) => s + (p.failed_count || 0), 0),
+    findings: projects.reduce((s, p) => s + (p.finding_count ?? p.failed_count ?? 0), 0),
     review: projects.filter(p => p.status === "review").length,
     draft: projects.filter(p => p.status === "draft").length,
   };
@@ -207,43 +211,83 @@ export default function Dashboard() {
           </motion.div>
         )}
 
-        {/* Severity breakdown */}
-        {stats.findings > 0 && (
+        {/* Vulnerability & Findings Trend Charts */}
+        {(stats.findings > 0 || (trendData?.by_date?.length ?? 0) > 0) && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-            className="card p-5" style={{ borderColor: "var(--border-subtle)" }}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-                <TrendingUp className="w-4 h-4 text-indigo-400" />
-                Vulnerability Distribution
-              </h3>
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stats.findings} total findings</span>
-            </div>
-            <div className="flex gap-1 h-2.5 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
-              {(() => {
-                const sevCounts: Record<string, number> = {};
-                projects.forEach(p => {
-                  if (p.failed_count > 0) {
-                    sevCounts["high"] = (sevCounts["high"] || 0) + Math.ceil(p.failed_count * 0.3);
-                    sevCounts["medium"] = (sevCounts["medium"] || 0) + Math.ceil(p.failed_count * 0.4);
-                    sevCounts["low"] = (sevCounts["low"] || 0) + Math.ceil(p.failed_count * 0.3);
-                  }
-                });
-                const total = Object.values(sevCounts).reduce((a, b) => a + b, 0) || 1;
-                return Object.entries(sevCounts).map(([sev, count]) => (
-                  <div key={sev} className={`${SEVERITY_COLORS[sev] || "bg-gray-500"} transition-all`}
-                    style={{ width: `${(count / total) * 100}%` }}
-                    title={`${sev}: ${count}`} />
-                ));
-              })()}
-            </div>
-            <div className="flex gap-4 mt-3 flex-wrap">
-              {["critical", "high", "medium", "low", "info"].map(sev => (
-                <div key={sev} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
-                  <div className={`w-2 h-2 rounded-full ${SEVERITY_COLORS[sev]}`} />
-                  <span className="capitalize">{sev}</span>
+            className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {trendData?.by_date && trendData.by_date.length > 0 && (
+              <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
+                className="card p-5 overflow-hidden" style={{ borderColor: "var(--border-subtle)" }}>
+                <h3 className="text-sm font-semibold flex items-center gap-2 mb-4" style={{ color: "var(--text-primary)" }}>
+                  <TrendingUp className="w-4 h-4 text-indigo-400" /> Issues Trend
+                </h3>
+                <div className="h-48">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={trendData.by_date} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="dastGradDash" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#10b981" stopOpacity={0.5} />
+                          <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="manualGradDash" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#6366f1" stopOpacity={0.5} />
+                          <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--text-muted)" />
+                      <YAxis tick={{ fontSize: 10 }} stroke="var(--text-muted)" />
+                      <Tooltip contentStyle={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)", borderRadius: 8 }} labelFormatter={(l) => `Date: ${l}`} />
+                      <Legend />
+                      <Area type="monotone" dataKey="dast" name="DAST" stackId="1" stroke="#10b981" fill="url(#dastGradDash)" strokeWidth={2} />
+                      <Area type="monotone" dataKey="manual" name="Manual" stackId="1" stroke="#6366f1" fill="url(#manualGradDash)" strokeWidth={2} />
+                    </AreaChart>
+                  </ResponsiveContainer>
                 </div>
-              ))}
-            </div>
+              </motion.div>
+            )}
+            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
+              className="card p-5" style={{ borderColor: "var(--border-subtle)" }}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                  <BarChart3 className="w-4 h-4 text-indigo-400" /> Vulnerability Distribution
+                </h3>
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>{stats.findings} total findings</span>
+              </div>
+              <div className="flex gap-1 h-2.5 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
+                {(() => {
+                  const sevCounts: Record<string, number> = trendData?.by_severity && Object.keys(trendData.by_severity).length > 0
+                    ? { critical: 0, high: 0, medium: 0, low: 0, info: 0, ...trendData.by_severity }
+                    : {};
+                  if (Object.keys(sevCounts).length === 0) {
+                    const fc = (p: any) => p.finding_count ?? p.failed_count ?? 0;
+                    projects.forEach(p => {
+                      const cnt = fc(p);
+                      if (cnt > 0) {
+                        sevCounts["high"] = (sevCounts["high"] || 0) + Math.ceil(cnt * 0.3);
+                        sevCounts["medium"] = (sevCounts["medium"] || 0) + Math.ceil(cnt * 0.4);
+                        sevCounts["low"] = (sevCounts["low"] || 0) + Math.ceil(cnt * 0.3);
+                      }
+                    });
+                  }
+                  const total = Object.values(sevCounts).reduce((a, b) => a + b, 0) || 1;
+                  const order = ["critical", "high", "medium", "low", "info"];
+                  return order.filter(s => (sevCounts[s] || 0) > 0).map((sev, i) => (
+                    <motion.div key={sev} initial={{ width: 0 }} animate={{ width: `${((sevCounts[sev] || 0) / total) * 100}%` }}
+                      transition={{ delay: 0.5 + i * 0.05, duration: 0.6 }}
+                      className={`${SEVERITY_COLORS[sev] || "bg-gray-500"}`} title={`${sev}: ${sevCounts[sev]}`} />
+                  ));
+                })()}
+              </div>
+              <div className="flex gap-4 mt-3 flex-wrap">
+                {["critical", "high", "medium", "low", "info"].map(sev => (
+                  <div key={sev} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    <div className={`w-2 h-2 rounded-full ${SEVERITY_COLORS[sev]}`} />
+                    <span className="capitalize">{sev}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
           </motion.div>
         )}
 
@@ -325,7 +369,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                       <div className="text-right shrink-0 hidden sm:block">
-                        <div className="text-xs font-semibold text-red-400 tabular-nums">{p.failed_count || 0} findings</div>
+                        <div className="text-xs font-semibold text-red-400 tabular-nums">{p.finding_count ?? p.failed_count ?? 0} findings</div>
                         <div className="text-[11px] text-emerald-500 mt-0.5 tabular-nums">{p.passed_count || 0} passed</div>
                       </div>
                       <ChevronRight className="w-4 h-4 group-hover:text-indigo-400 transition-colors shrink-0" style={{ color: "var(--text-muted)" }} />

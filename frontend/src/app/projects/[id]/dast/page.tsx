@@ -8,7 +8,8 @@ import toast from "react-hot-toast";
 import { 
   Shield, Play, CheckCircle, XCircle, AlertTriangle, Loader2, 
   ArrowLeft, RefreshCw, ChevronDown, ChevronUp, Globe, Lock,
-  Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock
+  Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
+  Code, Database, BookOpen, Header, Wrench, HardDrive, FormInput
 } from "lucide-react";
 import Link from "next/link";
 
@@ -16,7 +17,10 @@ const CHECK_ICONS: Record<string, any> = {
   security_headers: Shield, ssl_tls: Lock, cookie_security: Cookie,
   cors: Globe, info_disclosure: Server, http_methods: Zap,
   robots_txt: FileText, directory_listing: Folder, open_redirect: ExternalLink,
-  rate_limiting: Clock,
+  rate_limiting: Clock, xss_basic: Code, sqli_error: Database,
+  api_docs_exposure: BookOpen, host_header_injection: Header, crlf_injection: Wrench,
+  sensitive_data: HardDrive, sri: Shield, cache_control: Clock,
+  form_autocomplete: FormInput, backup_files: FileText,
 };
 
 const SEVERITY_COLORS: Record<string, string> = {

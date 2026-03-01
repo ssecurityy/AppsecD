@@ -57,22 +57,46 @@ class DastResult:
         }
 
 
+def _url_variants(url: str) -> list[str]:
+    """Return URL and fallbacks (https/http, www/non-www) for reachability."""
+    parsed = urlparse(url)
+    urls = [url]
+    base = f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}{parsed.query and '?' + parsed.query or ''}"
+    if "www." not in (parsed.netloc or ""):
+        alt = base.replace(parsed.netloc or "", f"www.{parsed.netloc}" if parsed.netloc else "www.")
+        if alt != base and alt not in urls:
+            urls.append(alt)
+    if parsed.scheme == "https":
+        alt2 = base.replace("https://", "http://")
+        if alt2 not in urls:
+            urls.append(alt2)
+    elif parsed.scheme == "http":
+        alt2 = base.replace("http://", "https://")
+        if alt2 not in urls:
+            urls.append(alt2)
+    return urls
+
+
 def _safe_get(url: str, **kwargs) -> httpx.Response | None:
-    try:
-        with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=True) as client:
-            return client.get(url, **kwargs)
-    except Exception as e:
-        logger.warning("DAST request failed for %s: %s", url, e)
-        return None
+    for u in _url_variants(url):
+        try:
+            with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=True) as client:
+                return client.get(u, **kwargs)
+        except Exception as e:
+            logger.debug("DAST GET %s failed: %s", u, e)
+    logger.warning("DAST request failed for all variants of %s", url)
+    return None
 
 
 def _safe_request(method: str, url: str, **kwargs) -> httpx.Response | None:
-    try:
-        with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=False) as client:
-            return client.request(method, url, **kwargs)
-    except Exception as e:
-        logger.warning("DAST %s request failed for %s: %s", method, url, e)
-        return None
+    for u in _url_variants(url):
+        try:
+            with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=False) as client:
+                return client.request(method, u, **kwargs)
+        except Exception as e:
+            logger.debug("DAST %s %s failed: %s", method, u, e)
+    logger.warning("DAST %s request failed for all variants of %s", method, url)
+    return None
 
 
 # ─── Check 1: Security Headers ───
@@ -309,6 +333,7 @@ def check_info_disclosure(target_url: str) -> DastResult:
     resp = _safe_get(target_url)
     if not resp:
         result.status = "error"
+        result.description = "Could not reach target"
         return result
 
     issues = []
@@ -364,13 +389,17 @@ def check_http_methods(target_url: str) -> DastResult:
     allowed = []
     
     options_resp = _safe_request("OPTIONS", target_url)
+    trace_resp = _safe_request("TRACE", target_url)
+    if not options_resp and not trace_resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
     if options_resp:
         allow_header = options_resp.headers.get("allow", "")
         if allow_header:
             allowed = [m.strip().upper() for m in allow_header.split(",")]
 
     # Also test TRACE directly
-    trace_resp = _safe_request("TRACE", target_url)
     if trace_resp and trace_resp.status_code == 200:
         if "TRACE" not in allowed:
             allowed.append("TRACE")
@@ -556,6 +585,357 @@ def check_rate_limiting(target_url: str) -> DastResult:
     return result
 
 
+# ─── Check 11: Basic Reflected XSS ───
+
+def check_xss_basic(target_url: str) -> DastResult:
+    """Check for reflected XSS in common query parameters."""
+    result = DastResult(
+        check_id="DAST-XSS-01",
+        title="Basic Reflected XSS Check",
+        owasp_ref="A03:2021",
+        cwe_id="CWE-79",
+    )
+    parsed = urlparse(target_url)
+    base = f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}"
+    payload = '<script>alert(1)</script>'
+    params = ["q", "search", "query", "keyword", "s", "name", "id", "ref", "redirect"]
+    reflected = []
+    resp = None
+    for param in params:
+        test_url = f"{base}?{param}={payload}"
+        r = _safe_get(test_url)
+        if r and payload in (r.text or ""):
+            reflected.append({"param": param, "url": test_url})
+            if not resp:
+                resp = r
+    result.details = {"tested_params": params, "reflected_unencoded": reflected}
+    if resp:
+        result.request_raw = f"GET {base}?q={payload} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+        result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
+    if reflected:
+        result.status = "failed"
+        result.severity = "high"
+        result.description = f"Reflected XSS: input reflected unencoded in {len(reflected)} param(s)"
+        result.evidence = f"Param(s): {', '.join(r['param'] for r in reflected)}"
+        result.remediation = "Encode all user input in HTML context. Use CSP to mitigate."
+    else:
+        result.status = "passed"
+        result.description = "No reflected XSS in common params (basic check)"
+    return result
+
+
+# ─── Check 12: SQL Error Detection ───
+
+def check_sqli_error(target_url: str) -> DastResult:
+    """Check for SQL error messages in response indicating potential injection."""
+    result = DastResult(
+        check_id="DAST-SQLI-01",
+        title="SQL Error Detection",
+        owasp_ref="A03:2021",
+        cwe_id="CWE-89",
+    )
+    payloads = ["'", "1'", "1 OR 1=1", "1' OR '1'='1"]
+    errors = ["sql syntax", "mysql_fetch", "pg_query", "sqlite", "ora-01", "sqlstate", "unclosed quotation", "syntax error in query", "odbc", "microsoft ole db"]
+    found = []
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    body = (resp.text or "").lower()
+    for p in payloads:
+        r = _safe_get(f"{target_url}{'&' if '?' in target_url else '?'}id={p}")
+        if r:
+            rb = (r.text or "").lower()
+            for err in errors:
+                if err in rb:
+                    found.append({"payload": p, "error": err})
+                    break
+    result.details = {"payloads_tested": payloads, "errors_found": found}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
+    if found:
+        result.status = "failed"
+        result.severity = "high"
+        result.description = f"SQL error in response: {found[0].get('error', '')}"
+        result.evidence = f"Payload: {found[0].get('payload', '')} triggered SQL error"
+        result.remediation = "Use parameterized queries. Never concatenate user input into SQL."
+    else:
+        result.status = "passed"
+        result.description = "No SQL error leakage in response (basic check)"
+    return result
+
+
+# ─── Check 13: API Docs Exposure ───
+
+def check_api_docs_exposure(target_url: str) -> DastResult:
+    """Check for exposed Swagger/OpenAPI/GraphQL endpoints."""
+    result = DastResult(
+        check_id="DAST-API-01",
+        title="API Documentation Exposure",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    paths = ["/swagger", "/swagger.json", "/swagger-ui", "/api-docs", "/openapi.json", "/graphql", "/graphiql", "/v1/api-docs", "/v2/api-docs", "/api/swagger"]
+    exposed = []
+    base = f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}"
+    for path in paths:
+        r = _safe_get(urljoin(base, path))
+        if r and r.status_code == 200:
+            body = (r.text or "").lower()
+            if "swagger" in body or "openapi" in body or "graphql" in body or "graphiql" in body:
+                exposed.append(path)
+    result.details = {"paths_checked": paths, "exposed": exposed}
+    if exposed:
+        result.status = "failed"
+        result.severity = "medium"
+        result.description = f"API documentation exposed at: {', '.join(exposed[:5])}"
+        result.evidence = f"Exposed: {', '.join(exposed)}"
+        result.remediation = "Disable or restrict API docs in production. Require authentication."
+    else:
+        result.status = "passed"
+        result.description = "No exposed API documentation detected"
+    return result
+
+
+# ─── Check 14: Host Header Injection ───
+
+def check_host_header_injection(target_url: str) -> DastResult:
+    """Check for Host header injection leading to redirect/SSRF."""
+    result = DastResult(
+        check_id="DAST-HOST-01",
+        title="Host Header Injection",
+        owasp_ref="A01:2021",
+        cwe_id="CWE-644",
+    )
+    evil_host = "evil-attacker.com"
+    r = _safe_request("GET", target_url, headers={"Host": evil_host})
+    if not r:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    loc = r.headers.get("location", "")
+    if evil_host in loc or evil_host in (r.text or ""):
+        result.status = "failed"
+        result.severity = "high"
+        result.description = "Host header reflected in response/redirect"
+        result.evidence = f"Host: {evil_host} reflected in Location: {loc[:200]}"
+        result.remediation = "Validate Host header against allowlist. Don't use it in redirects."
+    else:
+        result.status = "passed"
+        result.description = "Host header not reflected in response"
+    result.details = {"tested_host": evil_host, "location": loc[:200]}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {evil_host}"
+    result.response_raw = f"HTTP/1.1 {r.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in r.headers.items()) + "\n\n" + (r.text[:1500] if r.text else "")
+    return result
+
+
+# ─── Check 15: CRLF Injection ───
+
+def check_crlf_injection(target_url: str) -> DastResult:
+    """Check for CRLF injection in redirect parameters."""
+    result = DastResult(
+        check_id="DAST-CRLF-01",
+        title="CRLF Injection",
+        owasp_ref="A01:2021",
+        cwe_id="CWE-93",
+    )
+    payload = "%0d%0aSet-Cookie:crlf=injected"
+    parsed = urlparse(target_url)
+    test_url = f"{parsed.scheme}://{parsed.netloc}/?redirect={payload}"
+    r = _safe_request("GET", test_url)
+    if not r:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    set_cookie = r.headers.get("set-cookie", "")
+    vuln = "crlf=injected" in set_cookie.lower()
+    result.details = {"payload": payload, "set_cookie_header": set_cookie[:200]}
+    if vuln:
+        result.status = "failed"
+        result.severity = "high"
+        result.description = "CRLF injection: header injection via redirect param"
+        result.evidence = f"Set-Cookie reflected: {set_cookie[:150]}"
+        result.remediation = "Sanitize redirect params. Reject CRLF sequences."
+    else:
+        result.status = "passed"
+        result.description = "No CRLF injection detected"
+    return result
+
+
+# ─── Check 16: Sensitive Data Exposure ───
+
+def check_sensitive_data(target_url: str) -> DastResult:
+    """Check for PII/sensitive patterns in response."""
+    result = DastResult(
+        check_id="DAST-PII-01",
+        title="Sensitive Data Exposure",
+        owasp_ref="A02:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    body = resp.text or ""
+    patterns = [
+        (r"\b\d{16}\b", "Credit card pattern"),
+        (r"\b\d{3}-\d{2}-\d{4}\b", "SSN pattern"),
+        (r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "Email addresses"),
+        (r"password\s*[=:]\s*['\"]?[\w]+", "Password in response"),
+        (r"api[_-]?key\s*[=:]\s*['\"]?[\w-]+", "API key pattern"),
+    ]
+    found = []
+    for pat, label in patterns:
+        m = re.search(pat, body, re.I)
+        if m:
+            found.append({"pattern": label, "sample": m.group(0)[:50]})
+    result.details = {"patterns_checked": [p[1] for p in patterns], "found": found}
+    if found:
+        result.status = "failed"
+        result.severity = "medium"
+        result.description = f"Sensitive data patterns: {', '.join(f['pattern'] for f in found[:3])}"
+        result.evidence = f"Sample: {found[0].get('sample', '')}"
+        result.remediation = "Never expose PII or secrets in client-side responses."
+    else:
+        result.status = "passed"
+        result.description = "No obvious PII patterns in response"
+    return result
+
+
+# ─── Check 17: Subresource Integrity ───
+
+def check_sri(target_url: str) -> DastResult:
+    """Check for missing SRI on external scripts."""
+    result = DastResult(
+        check_id="DAST-SRI-01",
+        title="Subresource Integrity (SRI)",
+        owasp_ref="A08:2021",
+        cwe_id="CWE-353",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    body = resp.text or ""
+    script_tags = re.findall(r'<script[^>]*src=["\']([^"\']+)["\'][^>]*>', body, re.I)
+    no_sri = []
+    for src in script_tags:
+        if src.startswith("http") or src.startswith("//"):
+            idx = body.find(src)
+            if idx >= 0 and "integrity=" not in body[max(0, idx - 150):idx + 250]:
+                no_sri.append(src[:80])
+    result.details = {"external_scripts": [s[:80] for s in script_tags if (s.startswith("http") or s.startswith("//"))][:20], "missing_sri": no_sri[:10]}
+    if no_sri:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"{len(no_sri)} external script(s) without SRI"
+        result.evidence = f"Scripts: {', '.join(no_sri[:3])}"
+        result.remediation = "Add integrity attribute to external scripts for SRI."
+    else:
+        result.status = "passed"
+        result.description = "No external scripts without SRI (or no external scripts)"
+    return result
+
+
+# ─── Check 18: Cache Control ───
+
+def check_cache_control(target_url: str) -> DastResult:
+    """Check Cache-Control on sensitive-looking paths."""
+    result = DastResult(
+        check_id="DAST-CACHE-01",
+        title="Cache Control on Sensitive Pages",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-524",
+    )
+    paths = ["/", "/login", "/dashboard", "/api/user", "/profile", "/admin"]
+    base = f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}"
+    issues = []
+    for path in paths:
+        r = _safe_get(urljoin(base, path))
+        if r and r.status_code == 200:
+            cc = r.headers.get("cache-control", "").lower()
+            if "no-store" not in cc and "no-cache" not in cc and "private" not in cc:
+                issues.append({"path": path, "cache_control": cc or "(none)"})
+    result.details = {"paths_checked": paths, "missing_no_store": issues}
+    if issues:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Missing no-store on {len(issues)} path(s)"
+        result.evidence = f"Paths: {', '.join(i['path'] for i in issues[:5])}"
+        result.remediation = "Set Cache-Control: no-store on sensitive pages."
+    else:
+        result.status = "passed"
+        result.description = "Cache headers adequate on checked paths"
+    return result
+
+
+# ─── Check 19: Form Autocomplete ───
+
+def check_form_autocomplete(target_url: str) -> DastResult:
+    """Check for autocomplete on password fields."""
+    result = DastResult(
+        check_id="DAST-FORM-01",
+        title="Password Autocomplete",
+        owasp_ref="A07:2021",
+        cwe_id="CWE-525",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    body = resp.text or ""
+    pwd_inputs = re.findall(r'<input[^>]*type=["\']?password["\']?[^>]*>', body, re.I)
+    bad = []
+    for inp in pwd_inputs:
+        if "autocomplete" not in inp.lower() or "autocomplete=\"on\"" in inp.lower() or "autocomplete='on'" in inp.lower():
+            bad.append(inp[:100])
+    result.details = {"password_inputs": len(pwd_inputs), "missing_off": len(bad)}
+    if bad and pwd_inputs:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "Password field(s) without autocomplete=off"
+        result.remediation = "Add autocomplete='off' to password inputs."
+    else:
+        result.status = "passed"
+        result.description = "Password fields have autocomplete=off or no password inputs"
+    return result
+
+
+# ─── Check 20: Backup File Disclosure ───
+
+def check_backup_files(target_url: str) -> DastResult:
+    """Check for common backup/config file exposure."""
+    result = DastResult(
+        check_id="DAST-BACKUP-01",
+        title="Backup File Disclosure",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-530",
+    )
+    paths = ["/.git/config", "/.env", "/config.php.bak", "/web.config.bak", "/.htaccess.bak", "/backup.sql", "/db.sql", "/dump.sql"]
+    base = f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}"
+    exposed = []
+    for path in paths:
+        r = _safe_get(urljoin(base, path))
+        if r and r.status_code == 200 and len(r.text or "") > 0:
+            if "root" in (r.text or "").lower() or "password" in (r.text or "").lower() or "[core]" in (r.text or "") or "database" in (r.text or "").lower():
+                exposed.append(path)
+    result.details = {"paths_checked": paths, "exposed": exposed}
+    if exposed:
+        result.status = "failed"
+        result.severity = "high"
+        result.description = f"Backup/config file(s) exposed: {', '.join(exposed)}"
+        result.evidence = f"Exposed: {', '.join(exposed)}"
+        result.remediation = "Remove backup files from web root. Restrict .git, .env access."
+    else:
+        result.status = "passed"
+        result.description = "No backup/config files exposed"
+    return result
+
+
 # ─── DAST Runner ───
 
 ALL_CHECKS = [
@@ -569,6 +949,16 @@ ALL_CHECKS = [
     ("directory_listing", check_directory_listing),
     ("open_redirect", check_open_redirect),
     ("rate_limiting", check_rate_limiting),
+    ("xss_basic", check_xss_basic),
+    ("sqli_error", check_sqli_error),
+    ("api_docs_exposure", check_api_docs_exposure),
+    ("host_header_injection", check_host_header_injection),
+    ("crlf_injection", check_crlf_injection),
+    ("sensitive_data", check_sensitive_data),
+    ("sri", check_sri),
+    ("cache_control", check_cache_control),
+    ("form_autocomplete", check_form_autocomplete),
+    ("backup_files", check_backup_files),
 ]
 
 

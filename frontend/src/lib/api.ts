@@ -64,6 +64,8 @@ export const api = {
     request(`/auth/users/${userId}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
   // Projects
+  detectTech: (url: string) =>
+    request("/projects/detect-tech", { method: "POST", body: JSON.stringify({ url }) }),
   createProject: (data: object) =>
     request("/projects", { method: "POST", body: JSON.stringify(data) }),
   listProjects: (params?: { limit?: number; offset?: number }) => {
@@ -74,6 +76,8 @@ export const api = {
   updateProject: (id: string, data: object) =>
     request(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   getProjectProgress: (id: string) => request(`/projects/${id}/progress`),
+  getProjectFindingsTrend: (projectId: string) => request(`/projects/${projectId}/findings/trend`),
+  getDashboardFindingsTrend: () => request("/projects/trend/findings"),
   listProjectMembers: (projectId: string) => request(`/projects/${projectId}/members`),
   getAvailableUsersForProject: (projectId: string) => request(`/projects/${projectId}/members/available-users`),
   addProjectMember: (projectId: string, data: { user_id: string; role: string; can_read?: boolean; can_write?: boolean; can_download_report?: boolean; can_manage_members?: boolean }) =>

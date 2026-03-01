@@ -6,7 +6,7 @@ import { useAuthStore } from "@/lib/store";
 import Navbar from "@/components/Navbar";
 import { api } from "@/lib/api";
 import toast from "react-hot-toast";
-import { ChevronRight, ChevronLeft, Shield, Code, Database, Globe, Lock, Zap } from "lucide-react";
+import { ChevronRight, ChevronLeft, Shield, Code, Database, Globe, Lock, Zap, Scan } from "lucide-react";
 
 const STEPS = [
   { id: 1, title: "Project Info", icon: Shield, desc: "Application details & team" },
@@ -59,6 +59,7 @@ export default function NewProject() {
     lead_id: "" as string, assigned_tester_ids: [] as string[],
   });
   const [assignableUsers, setAssignableUsers] = useState<{ id: string; full_name: string; role: string }[]>([]);
+  const [detectingTech, setDetectingTech] = useState(false);
 
   const [stack, setStack] = useState({
     frontend: [] as string[],
@@ -170,8 +171,42 @@ export default function NewProject() {
                   </div>
                   <div>
                     <label className="text-sm mb-1 block" style={{ color: "var(--text-secondary)" }}>Application URL *</label>
-                    <input className="input-field" type="url" placeholder="https://app.example.com"
-                      value={info.application_url} onChange={e => setInfo({ ...info, application_url: e.target.value })} />
+                    <div className="flex gap-2">
+                      <input className="input-field flex-1" type="url" placeholder="https://app.example.com"
+                        value={info.application_url} onChange={e => setInfo({ ...info, application_url: e.target.value })} />
+                      <button
+                        type="button"
+                        disabled={!info.application_url || detectingTech}
+                        onClick={async () => {
+                          if (!info.application_url) return;
+                          setDetectingTech(true);
+                          try {
+                            const res = await api.detectTech(info.application_url);
+                            if (res.stack_profile && res._detected) {
+                              const sp = res.stack_profile;
+                              setStack(prev => ({
+                                ...prev,
+                                frontend: Array.from(new Set([...prev.frontend, ...(sp.frontend || [])])),
+                                backend: Array.from(new Set([...prev.backend, ...(sp.backend || [])])),
+                                cms: sp.cms?.length ? (sp.cms[0] || "none") : prev.cms,
+                                api_type: Array.from(new Set([...prev.api_type, ...(sp.api || []).map((a: string) => a.toLowerCase())])),
+                              }));
+                              toast.success(`Detected: ${[...(sp.frontend || []), ...(sp.backend || []), ...(sp.cms || [])].slice(0, 5).join(", ") || "tech stack"}`);
+                            } else {
+                              toast.error(res._error || "Could not detect technology");
+                            }
+                          } catch {
+                            toast.error("Detection failed");
+                          } finally {
+                            setDetectingTech(false);
+                          }
+                        }}
+                        className="btn-secondary flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                        title="Auto-detect technology from URL"
+                      >
+                        <Scan className="w-4 h-4" /> {detectingTech ? "Detecting..." : "Detect"}
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="text-sm mb-1 block" style={{ color: "var(--text-secondary)" }}>Version</label>

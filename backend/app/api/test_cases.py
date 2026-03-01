@@ -19,7 +19,7 @@ import uuid
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
 
-AUTOMATION_TAGS = frozenset({"automated", "nuclei", "sqlmap", "nikto", "zap", "burp", "cve-scanning", "server-scan", "sqli"})
+AUTOMATION_TAGS = frozenset({"automated", "dast", "nuclei", "sqlmap", "nikto", "zap", "burp", "cve-scanning", "server-scan", "sqli", "security-headers", "ssl", "tls", "cors", "robots", "rate-limiting"})
 
 
 def tc_to_dict(tc: TestCase, cat: Category) -> dict:
