@@ -10,7 +10,7 @@ import {
   ArrowLeft, ChevronDown, ChevronUp, Globe, Lock,
   Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
   Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput,
-  History, Calendar
+  History, Calendar, Filter, ChevronRight
 } from "lucide-react";
 import Link from "next/link";
 
@@ -54,9 +54,22 @@ export default function DastScanPage() {
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
   const [initialExpandDone, setInitialExpandDone] = useState(false);
   const [scanHistory, setScanHistory] = useState<any[]>([]);
+  const [checksSectionExpanded, setChecksSectionExpanded] = useState(false);
+  const [resultFilter, setResultFilter] = useState<"failed" | "passed" | "all" | "error">("failed");
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
+
+  // Default filter when new scan results load: failed if any, else passed
+  const hasSetFilterForScan = useRef<string | null>(null);
+  useEffect(() => {
+    if (!scanResult?.results?.length || !scanResult?.scan_id) return;
+    if (hasSetFilterForScan.current === scanResult.scan_id) return;
+    hasSetFilterForScan.current = scanResult.scan_id;
+    const fails = scanResult.results.filter((r: any) => r.status === "failed").length;
+    setResultFilter(fails > 0 ? "failed" : "passed");
+  }, [scanResult?.scan_id, scanResult?.results?.length]);
 
   useEffect(() => {
     if (id) {
@@ -229,14 +242,28 @@ export default function DastScanPage() {
     });
   };
 
-  // Auto-expand failed checks when results first load
+  // Auto-expand failed checks when results first load; default filter to failed
   useEffect(() => {
     if (scanResult?.results && !initialExpandDone) {
-      const failedIds = new Set((scanResult.results as any[]).filter((r: any) => r.status === "failed").map((r: any) => r.check_id));
+      const results = scanResult.results as any[];
+      const failedIds = new Set(results.filter((r: any) => r.status === "failed").map((r: any) => r.check_id));
       setExpandedResults(prev => new Set([...Array.from(prev), ...Array.from(failedIds)]));
       setInitialExpandDone(true);
+      if (results.some((r: any) => r.status === "failed")) setResultFilter("failed");
     }
   }, [scanResult, initialExpandDone]);
+
+  const results = (scanResult?.results || []) as any[];
+  const failedCount = results.filter((r: any) => r.status === "failed").length;
+  const passedCount = results.filter((r: any) => r.status === "passed").length;
+  const errorCount = results.filter((r: any) => r.status === "error").length;
+  const filteredResults = results.filter((r: any) => {
+    if (resultFilter === "failed") return r.status === "failed";
+    if (resultFilter === "passed") return r.status === "passed";
+    if (resultFilter === "error") return r.status === "error";
+    return true;
+  });
+
 
   if (!user) return null;
 
@@ -270,111 +297,97 @@ export default function DastScanPage() {
           </button>
         </div>
 
-        {/* Previous Scan Summary & Full History */}
-        {(scanResult || scanHistory.length > 0) && (
-          <div className="space-y-4">
-            {scanResult && (
-              <div className="rounded-xl p-4 flex items-center gap-4 flex-wrap" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-                <div className="flex items-center gap-2">
-                  <History className="w-5 h-5" style={{ color: "var(--accent-indigo)" }} />
-                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Last Scan</span>
-                </div>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  {scanResult.created_at && (
-                    <span className="flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
-                      <Calendar className="w-4 h-4" />
-                      {new Date(scanResult.created_at).toLocaleString()}
-                    </span>
-                  )}
-                  {scanResult.duration_seconds != null && (
-                    <span style={{ color: "var(--text-secondary)" }}>{scanResult.duration_seconds}s</span>
-                  )}
-                  <span style={{ color: "var(--text-secondary)" }}>
-                    {(scanResult.passed ?? 0) + (scanResult.failed ?? 0) + (scanResult.errors ?? 0)} total
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <CheckCircle className="w-4 h-4 text-emerald-500" />
-                    <span style={{ color: "#16a34a" }}>{scanResult.passed ?? 0} Passed</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <XCircle className="w-4 h-4 text-red-500" />
-                    <span style={{ color: "#dc2626" }}>{scanResult.failed ?? 0} Failed</span>
-                  </span>
-                  {(scanResult.findings_created ?? 0) > 0 && (
-                    <span style={{ color: "#ea580c" }}>{scanResult.findings_created} findings</span>
-                  )}
-                </div>
+        {/* Last Scan Summary - Compact */}
+        {scanResult && (
+          <div className="rounded-xl p-3 flex items-center gap-4 flex-wrap" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
+              <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Last Scan</span>
+            </div>
+            <div className="flex flex-wrap gap-3 text-sm">
+              {scanResult.created_at && (
+                <span className="flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
+                  <Calendar className="w-3.5 h-3.5" />
+                  {new Date(scanResult.created_at).toLocaleString()}
+                </span>
+              )}
+              <span style={{ color: "var(--text-muted)" }}>{scanResult.duration_seconds ?? 0}s</span>
+              <span className="flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5 text-emerald-500" /><span style={{ color: "#16a34a" }}>{scanResult.passed ?? 0}</span></span>
+              <span className="flex items-center gap-1"><XCircle className="w-3.5 h-3.5 text-red-500" /><span style={{ color: "#dc2626" }}>{scanResult.failed ?? 0}</span></span>
+              {(scanResult.findings_created ?? 0) > 0 && <span style={{ color: "#ea580c" }}>{scanResult.findings_created} findings</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Collapsible Scan History */}
+        {scanHistory.length > 0 && (
+          <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+            <button onClick={() => setHistoryExpanded(!historyExpanded)} className="w-full flex items-center justify-between p-3 text-left hover:bg-white/5">
+              <div className="flex items-center gap-2">
+                <ChevronRight className={`w-4 h-4 transition-transform ${historyExpanded ? "rotate-90" : ""}`} style={{ color: "var(--text-muted)" }} />
+                <History className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
+                <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Scan History</span>
+                <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--bg-elevated)", color: "var(--text-muted)" }}>{scanHistory.length}</span>
               </div>
-            )}
-            {scanHistory.length > 0 && (
-              <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <History className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
-                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>All Scan History</span>
-                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>({scanHistory.length} scans)</span>
+            </button>
+            {historyExpanded && (
+              <div className="px-3 pb-3 pt-0 overflow-y-auto" style={{ maxHeight: "240px" }}>
+                <div className="flex gap-4 px-2 py-1.5 text-xs font-medium" style={{ color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)" }}>
+                  <span className="flex-1 min-w-[130px]">Date & Time</span>
+                  <span className="w-10">Total</span>
+                  <span className="w-8">P</span>
+                  <span className="w-8">F</span>
+                  <span className="w-10">Time</span>
                 </div>
-                <div className="overflow-y-auto" style={{ maxHeight: "300px" }}>
-                  <div className="min-w-[400px]">
-                    <div className="flex gap-4 px-2 py-1.5 text-xs font-medium" style={{ color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)" }}>
-                      <span className="flex-1 min-w-[140px]">Date & Time</span>
-                      <span className="w-12">Total</span>
-                      <span className="w-10">Passed</span>
-                      <span className="w-10">Failed</span>
-                      <span className="w-12">Duration</span>
-                      <span className="w-14">Findings</span>
-                    </div>
-                    {scanHistory.map((s: any) => (
-                      <div key={s.id || s.scan_id} className="flex gap-4 py-2 px-2 rounded hover:bg-white/5 items-center text-xs" style={{ borderBottom: "1px solid var(--border-subtle)" }} title={s.target_url}>
-                        <span className="flex-1 min-w-[140px]" style={{ color: "var(--text-secondary)" }}>
-                          {s.created_at ? new Date(s.created_at).toLocaleString() : "—"}
-                        </span>
-                        <span className="w-12" style={{ color: "var(--text-primary)" }}>{s.total_checks ?? (s.passed ?? 0) + (s.failed ?? 0) + (s.errors_count ?? 0)}</span>
-                        <span className="w-10" style={{ color: "#16a34a" }}>{s.passed ?? 0}</span>
-                        <span className="w-10" style={{ color: "#dc2626" }}>{s.failed ?? 0}</span>
-                        <span className="w-12" style={{ color: "var(--text-muted)" }}>{s.duration_seconds ?? 0}s</span>
-                        <span className="w-14" style={{ color: (s.findings_created ?? 0) > 0 ? "#ea580c" : "var(--text-muted)" }}>{s.findings_created ?? 0}</span>
-                      </div>
-                    ))}
+                {scanHistory.map((s: any) => (
+                  <div key={s.id || s.scan_id} className="flex gap-4 py-1.5 px-2 text-xs rounded hover:bg-white/5" style={{ borderBottom: "1px solid var(--border-subtle)" }} title={s.target_url}>
+                    <span className="flex-1 min-w-[130px]" style={{ color: "var(--text-secondary)" }}>{s.created_at ? new Date(s.created_at).toLocaleString() : "—"}</span>
+                    <span className="w-10" style={{ color: "var(--text-primary)" }}>{s.total_checks ?? "-"}</span>
+                    <span className="w-8" style={{ color: "#16a34a" }}>{s.passed ?? 0}</span>
+                    <span className="w-8" style={{ color: "#dc2626" }}>{s.failed ?? 0}</span>
+                    <span className="w-10" style={{ color: "var(--text-muted)" }}>{s.duration_seconds ?? 0}s</span>
                   </div>
-                </div>
+                ))}
               </div>
             )}
           </div>
         )}
 
-        {/* Check Selection */}
-        <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-              Security Checks ({selectedChecks.length}/{availableChecks.length} selected)
-            </h2>
-            <button onClick={() => setSelectedChecks(
-              selectedChecks.length === availableChecks.length ? [] : availableChecks.map(c => c.id)
-            )} className="text-xs px-3 py-1 rounded" style={{ color: "var(--accent-indigo)" }}>
-              {selectedChecks.length === availableChecks.length ? "Deselect All" : "Select All"}
-            </button>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-            {availableChecks.map((check: any) => {
-              const Icon = CHECK_ICONS[check.id] || Shield;
-              const selected = selectedChecks.includes(check.id);
-              return (
-                <button
-                  key={check.id}
-                  onClick={() => toggleCheck(check.id)}
-                  className="flex items-center gap-2 p-2 rounded-lg text-xs transition-all"
-                  style={{
-                    background: selected ? "rgba(37, 99, 235, 0.15)" : "var(--bg-elevated)",
-                    border: `1px solid ${selected ? "rgba(37, 99, 235, 0.4)" : "var(--border-subtle)"}`,
-                    color: selected ? "var(--accent-indigo)" : "var(--text-secondary)",
-                  }}
-                >
-                  <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="truncate">{check.title.replace("Check for ", "").replace("Check ", "")}</span>
+        {/* Collapsible Security Checks */}
+        <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+          <button onClick={() => setChecksSectionExpanded(!checksSectionExpanded)} className="w-full flex items-center justify-between p-3 text-left hover:bg-white/5">
+            <div className="flex items-center gap-2">
+              <ChevronRight className={`w-4 h-4 transition-transform ${checksSectionExpanded ? "rotate-90" : ""}`} style={{ color: "var(--text-muted)" }} />
+              <Shield className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
+              <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Security Checks</span>
+              <span className="text-xs px-1.5 py-0.5 rounded font-medium" style={{ background: "rgba(37, 99, 235, 0.2)", color: "var(--accent-indigo)" }}>
+                {selectedChecks.length}/{availableChecks.length} selected
+              </span>
+            </div>
+          </button>
+          {checksSectionExpanded && (
+            <div className="px-3 pb-4 pt-0 border-t" style={{ borderColor: "var(--border-subtle)" }}>
+              <div className="flex items-center justify-between mt-3 mb-2">
+                <span className="text-xs" style={{ color: "var(--text-muted)" }}>Select checks to run</span>
+                <button onClick={() => setSelectedChecks(selectedChecks.length === availableChecks.length ? [] : availableChecks.map((c: any) => c.id))} className="text-xs px-2 py-1 rounded" style={{ color: "var(--accent-indigo)" }}>
+                  {selectedChecks.length === availableChecks.length ? "Deselect All" : "Select All"}
                 </button>
-              );
-            })}
-          </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 max-h-64 overflow-y-auto">
+                {availableChecks.map((check: any) => {
+                  const Icon = CHECK_ICONS[check.id] || Shield;
+                  const selected = selectedChecks.includes(check.id);
+                  return (
+                    <button key={check.id} onClick={() => toggleCheck(check.id)} className="flex items-center gap-2 p-2 rounded-lg text-xs transition-all text-left"
+                      style={{ background: selected ? "rgba(37, 99, 235, 0.15)" : "var(--bg-elevated)", border: `1px solid ${selected ? "rgba(37, 99, 235, 0.4)" : "var(--border-subtle)"}`, color: selected ? "var(--accent-indigo)" : "var(--text-secondary)" }}>
+                      <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span className="truncate">{check.title.replace("Check for ", "").replace("Check ", "")}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Live Progress - Which scan is running */}
@@ -445,122 +458,127 @@ export default function DastScanPage() {
         {/* Results - Scan Complete */}
         {scanResult && (
           <div className="space-y-4">
-            {/* Summary - Scan Complete */}
-            <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <h2 className="font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-                    <CheckCircle className="w-5 h-5 text-emerald-500" /> Scan Complete
-                  </h2>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
-                    Target: {scanResult.target_url}
-                  </p>
-                </div>
-                <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                  {scanResult.duration_seconds}s | {scanResult.total_checks} checks
-                </span>
+            {/* Filter & Summary Bar */}
+            <div className="rounded-xl p-3 flex flex-wrap items-center gap-3" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+              <div className="flex items-center gap-1.5">
+                <Filter className="w-4 h-4" style={{ color: "var(--text-muted)" }} />
+                <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Show:</span>
               </div>
-              <div className="flex gap-4 text-sm">
-                <span className="flex items-center gap-1" style={{ color: "#16a34a" }}>
-                  <CheckCircle className="w-4 h-4" /> {scanResult.passed} Passed
-                </span>
-                <span className="flex items-center gap-1" style={{ color: "#dc2626" }}>
-                  <XCircle className="w-4 h-4" /> {scanResult.failed} Failed
-                </span>
-                {scanResult.errors > 0 && (
-                  <span className="flex items-center gap-1" style={{ color: "#ca8a04" }}>
-                    <AlertTriangle className="w-4 h-4" /> {scanResult.errors} Errors
-                  </span>
-                )}
-                {scanResult.findings_created > 0 && (
-                  <span className="flex items-center gap-1 font-medium" style={{ color: "#ea580c" }}>
-                    {scanResult.findings_created} findings auto-created
-                  </span>
-                )}
+              <div className="flex flex-wrap gap-1">
+                {(["failed", "passed", "error", "all"] as const).map((f) => (
+                  <button key={f} onClick={() => setResultFilter(f)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                      resultFilter === f ? "text-white" : ""
+                    }`}
+                    style={{
+                      background: resultFilter === f ? (f === "failed" ? "#dc2626" : f === "passed" ? "#16a34a" : f === "error" ? "#ca8a04" : "#6366f1") : "var(--bg-elevated)",
+                      color: resultFilter === f ? "white" : "var(--text-secondary)",
+                      border: resultFilter === f ? "none" : "1px solid var(--border-subtle)",
+                    }}>
+                    {f === "failed" && <XCircle className="w-3 h-3 inline mr-1 align-middle" />}
+                    {f === "passed" && <CheckCircle className="w-3 h-3 inline mr-1 align-middle" />}
+                    {f === "error" && <AlertTriangle className="w-3 h-3 inline mr-1 align-middle" />}
+                    {f.charAt(0).toUpperCase() + f.slice(1)} {f === "failed" ? `(${failedCount})` : f === "passed" ? `(${passedCount})` : f === "error" ? `(${errorCount})` : `(${results.length})`}
+                  </button>
+                ))}
               </div>
+              <span className="text-xs ml-auto" style={{ color: "var(--text-muted)" }}>
+                Showing {filteredResults.length} of {results.length}
+              </span>
             </div>
 
-            {/* Individual Results */}
-            {(scanResult.results || []).map((check: any) => {
-              const Icon = CHECK_ICONS[check.check_id?.split("-")[1]?.toLowerCase()] || Shield;
-              const expanded = expandedResults.has(check.check_id);
-              return (
-                <div key={check.check_id} className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: `1px solid ${check.status === "failed" ? "rgba(220, 38, 38, 0.3)" : "var(--border-subtle)"}` }}>
-                  <button onClick={() => toggleExpand(check.check_id)} className="w-full flex items-center justify-between p-4">
-                    <div className="flex items-center gap-3">
-                      {check.status === "passed" ? <CheckCircle className="w-5 h-5" style={{ color: "#16a34a" }} /> : check.status === "failed" ? <XCircle className="w-5 h-5" style={{ color: "#dc2626" }} /> : <AlertTriangle className="w-5 h-5" style={{ color: "#ca8a04" }} />}
-                      <div className="text-left">
-                        <p className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{check.title}</p>
-                        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{check.description}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {check.status === "failed" && (
-                        <span className="text-xs px-2 py-0.5 rounded font-medium" style={{ background: `${SEVERITY_COLORS[check.severity]}20`, color: SEVERITY_COLORS[check.severity] }}>
-                          {check.severity}
-                        </span>
-                      )}
-                      {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </div>
-                  </button>
-                  {expanded && (
-                    <div className="px-4 pb-4 space-y-4 text-sm" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                      {/* Status callout: failed = highlight issue, passed = everything correct */}
-                      {check.status === "failed" && (
-                        <div className="p-3 rounded-lg" style={{ background: "rgba(220, 38, 38, 0.12)", border: "1px solid rgba(220, 38, 38, 0.3)" }}>
-                          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "#dc2626" }}>
-                            <XCircle className="w-4 h-4" /> Issue
-                          </p>
-                          <p className="text-sm mt-1" style={{ color: "var(--text-primary)" }}>{check.description}</p>
-                          {check.evidence && <p className="text-xs mt-2 font-mono" style={{ color: "var(--text-secondary)" }}>{check.evidence}</p>}
-                        </div>
-                      )}
-                      {check.status === "passed" && (
-                        <div className="p-3 rounded-lg" style={{ background: "rgba(22, 163, 74, 0.12)", border: "1px solid rgba(22, 163, 74, 0.3)" }}>
-                          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "#16a34a" }}>
-                            <CheckCircle className="w-4 h-4" /> All checks correct
-                          </p>
-                          <p className="text-sm mt-1" style={{ color: "var(--text-primary)" }}>{check.description}</p>
-                        </div>
-                      )}
-                      {check.status === "error" && (
-                        <div className="p-3 rounded-lg" style={{ background: "rgba(202, 138, 4, 0.12)", border: "1px solid rgba(202, 138, 4, 0.3)" }}>
-                          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "#ca8a04" }}>
-                            <AlertTriangle className="w-4 h-4" /> Error
-                          </p>
-                          <p className="text-sm mt-1" style={{ color: "var(--text-primary)" }}>{check.description}</p>
-                        </div>
-                      )}
-                      {/* Request — always show when available */}
-                      {check.request_raw && (
-                        <div>
-                          <p className="text-xs font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Request</p>
-                          <pre className="p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "4px solid #dc2626" : "4px solid var(--border-subtle)" }}>{check.request_raw}</pre>
-                        </div>
-                      )}
-                      {/* Response — always show when available */}
-                      {check.response_raw && (
-                        <div>
-                          <p className="text-xs font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Response</p>
-                          <pre className="p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-64 overflow-y-auto" style={{ background: check.status === "failed" ? "rgba(220, 38, 38, 0.06)" : "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "4px solid #dc2626" : "4px solid var(--border-subtle)" }}>{check.response_raw}</pre>
-                          {check.status === "failed" && <p className="text-xs font-medium mt-1" style={{ color: "#dc2626" }}>Anomaly detected — review response above</p>}
-                        </div>
-                      )}
-                      {check.reproduction_steps && (
-                        <div><strong style={{ color: "var(--text-primary)" }}>Steps to Reproduce:</strong><pre className="mt-1 p-2 rounded text-xs whitespace-pre-wrap" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{check.reproduction_steps}</pre></div>
-                      )}
-                      {check.remediation && (
-                        <div><strong style={{ color: "var(--text-primary)" }}>Remediation:</strong><p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>{check.remediation}</p></div>
-                      )}
-                      {check.cwe_id && <p className="text-xs" style={{ color: "var(--text-secondary)" }}>CWE: {check.cwe_id} | OWASP: {check.owasp_ref}</p>}
-                      {check.details && Object.keys(check.details).length > 0 && (
-                        <details className="text-xs"><summary className="cursor-pointer" style={{ color: "var(--accent-indigo)" }}>Raw Details</summary><pre className="mt-1 p-2 rounded overflow-x-auto" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{JSON.stringify(check.details, null, 2)}</pre></details>
-                      )}
-                    </div>
-                  )}
+            {/* Individual Results - Compact & Segregated */}
+            <div className="space-y-2">
+              {filteredResults.length === 0 ? (
+                <div className="rounded-xl p-8 text-center" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>No {resultFilter} results</p>
                 </div>
-              );
-            })}
+              ) : (
+                filteredResults.map((check: any) => {
+                  const expanded = expandedResults.has(check.check_id);
+                  return (
+                    <div key={check.check_id} className="rounded-lg overflow-hidden" style={{ background: "var(--bg-card)", border: `1px solid ${check.status === "failed" ? "rgba(220, 38, 38, 0.25)" : "var(--border-subtle)"}` }}>
+                      <button onClick={() => toggleExpand(check.check_id)} className="w-full flex items-center justify-between p-3 text-left hover:bg-white/5 transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {check.status === "passed" ? <CheckCircle className="w-5 h-5 flex-shrink-0" style={{ color: "#16a34a" }} /> : check.status === "failed" ? <XCircle className="w-5 h-5 flex-shrink-0" style={{ color: "#dc2626" }} /> : <AlertTriangle className="w-5 h-5 flex-shrink-0" style={{ color: "#ca8a04" }} />}
+                          <div className="min-w-0">
+                            <p className="font-medium text-sm truncate" style={{ color: "var(--text-primary)" }}>{check.title}</p>
+                            <p className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{check.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {check.status === "failed" && (
+                            <span className="text-xs px-2 py-0.5 rounded font-medium" style={{ background: `${SEVERITY_COLORS[check.severity] || "#6b7280"}22`, color: SEVERITY_COLORS[check.severity] || "#6b7280" }}>{check.severity}</span>
+                          )}
+                          <ChevronDown className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`} style={{ color: "var(--text-muted)" }} />
+                        </div>
+                      </button>
+                      {expanded && (
+                        <div className="px-3 pb-3 pt-0 space-y-3 text-sm" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                          {/* Issue/Pass callout */}
+                          {check.status === "failed" && (
+                            <div className="p-2.5 rounded-lg" style={{ background: "rgba(220, 38, 38, 0.08)", borderLeft: "4px solid #dc2626" }}>
+                              <p className="text-xs font-semibold mb-1" style={{ color: "#dc2626" }}>Issue</p>
+                              <p className="text-xs" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                              {check.evidence && <p className="text-xs mt-1.5 font-mono opacity-90" style={{ color: "var(--text-secondary)" }}>{check.evidence}</p>}
+                            </div>
+                          )}
+                          {check.status === "passed" && (
+                            <div className="p-2.5 rounded-lg" style={{ background: "rgba(22, 163, 74, 0.08)", borderLeft: "4px solid #16a34a" }}>
+                              <p className="text-xs font-semibold mb-0.5" style={{ color: "#16a34a" }}>Passed</p>
+                              <p className="text-xs" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                            </div>
+                          )}
+                          {check.status === "error" && (
+                            <div className="p-2.5 rounded-lg" style={{ background: "rgba(202, 138, 4, 0.08)", borderLeft: "4px solid #ca8a04" }}>
+                              <p className="text-xs font-semibold mb-0.5" style={{ color: "#ca8a04" }}>Error</p>
+                              <p className="text-xs" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                            </div>
+                          )}
+                          {/* Request / Response - Collapsible */}
+                          {(check.request_raw || check.response_raw) && (
+                            <div className="space-y-2">
+                              {check.request_raw && (
+                                <details className="group">
+                                  <summary className="cursor-pointer text-xs font-medium flex items-center gap-1" style={{ color: "var(--accent-indigo)" }}>
+                                    <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" /> Request
+                                  </summary>
+                                  <pre className="mt-1.5 p-2.5 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)", fontSize: "11px" }}>{check.request_raw}</pre>
+                                </details>
+                              )}
+                              {check.response_raw && (
+                                <details className="group">
+                                  <summary className="cursor-pointer text-xs font-medium flex items-center gap-1" style={{ color: "var(--accent-indigo)" }}>
+                                    <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" /> Response {check.status === "failed" && <span className="text-red-500">(anomaly)</span>}
+                                  </summary>
+                                  <pre className="mt-1.5 p-2.5 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-48 overflow-y-auto" style={{ background: check.status === "failed" ? "rgba(220, 38, 38, 0.05)" : "var(--bg-elevated)", color: "var(--text-secondary)", fontSize: "11px" }}>{check.response_raw}</pre>
+                                </details>
+                              )}
+                            </div>
+                          )}
+                          {/* Steps & Remediation - Compact */}
+                          <div className="grid sm:grid-cols-2 gap-2">
+                            {check.reproduction_steps && (
+                              <div><p className="text-xs font-semibold mb-0.5" style={{ color: "var(--text-primary)" }}>Steps</p><pre className="text-xs whitespace-pre-wrap p-2 rounded" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{check.reproduction_steps}</pre></div>
+                            )}
+                            {check.remediation && (
+                              <div><p className="text-xs font-semibold mb-0.5" style={{ color: "var(--text-primary)" }}>Remediation</p><p className="text-xs p-2 rounded" style={{ background: "rgba(22, 163, 74, 0.08)", color: "var(--text-secondary)" }}>{check.remediation}</p></div>
+                            )}
+                          </div>
+                          {check.cwe_id && <p className="text-xs" style={{ color: "var(--text-muted)" }}>CWE: {check.cwe_id} | OWASP: {check.owasp_ref}</p>}
+                          {check.details && Object.keys(check.details).length > 0 && (
+                            <details className="text-xs">
+                              <summary className="cursor-pointer flex items-center gap-1" style={{ color: "var(--accent-indigo)" }}><ChevronRight className="w-3 h-3" /> Raw Details</summary>
+                              <pre className="mt-1 p-2 rounded overflow-x-auto text-xs" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{JSON.stringify(check.details, null, 2)}</pre>
+                            </details>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         )}
 
