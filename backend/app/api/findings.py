@@ -1,5 +1,5 @@
 """Findings API."""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
@@ -222,3 +222,48 @@ async def auto_suggest_finding(
         "description": combined_desc,
         **suggestion,
     }
+
+
+@router.post("/import/burp")
+async def import_burp_xml(
+    project_id: str = Query(...),
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import findings from Burp Suite XML export."""
+    from app.services.burp_import_service import parse_burp_xml
+    
+    if not file.filename or not file.filename.endswith(".xml"):
+        raise HTTPException(400, "Only XML files are accepted")
+    
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:  # 50MB limit
+        raise HTTPException(400, "File too large (max 50MB)")
+    
+    xml_str = content.decode("utf-8", errors="replace")
+    parsed = parse_burp_xml(xml_str)
+    
+    if not parsed:
+        raise HTTPException(400, "No findings found in XML. Ensure it is a valid Burp Suite XML export.")
+    
+    import uuid as _uuid
+    created = []
+    for f_data in parsed:
+        finding = Finding(
+            project_id=_uuid.UUID(project_id),
+            title=f_data["title"],
+            severity=f_data["severity"],
+            description=f_data.get("description", ""),
+            affected_url=f_data.get("affected_url", ""),
+            recommendation=f_data.get("recommendation", ""),
+            request=f_data.get("request", ""),
+            response=f_data.get("response", ""),
+            status="open",
+            created_by=current_user.id,
+        )
+        db.add(finding)
+        created.append(f_data["title"])
+    
+    await db.commit()
+    return {"imported": len(created), "findings": created}

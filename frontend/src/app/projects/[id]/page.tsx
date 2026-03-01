@@ -8,7 +8,7 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, Upload
 } from "lucide-react";
 import Link from "next/link";
 
@@ -420,7 +420,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate }: { tc: any; pr
 
 export default function ProjectDetail() {
   const { id } = useParams() as { id: string };
-  const { hydrate, user } = useAuthStore();
+  const { hydrate, user, token } = useAuthStore();
   const router = useRouter();
   const [project, setProject] = useState<any>(null);
   const [progress, setProgress] = useState<any>(null);
@@ -436,6 +436,11 @@ export default function ProjectDetail() {
   const [users, setUsers] = useState<any[]>([]);
   const [findings, setFindings] = useState<any[]>([]);
   const [showFindings, setShowFindings] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [asyncReportTask, setAsyncReportTask] = useState<string | null>(null);
+  const [asyncReportFormat, setAsyncReportFormat] = useState<string>("");
+  const selectedPhaseRef = useRef<string | null>(null);
+  selectedPhaseRef.current = selectedPhase;
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -529,6 +534,23 @@ export default function ProjectDetail() {
   const openFindingsPanel = () => {
     setShowFindings(true);
     loadFindings();
+  };
+
+  const handleBurpImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const result = await api.importBurpXml(id as string, file);
+      toast.success(`Imported ${result.imported} findings from Burp XML`);
+      const f = await api.getFindings(id as string);
+      setFindings(f);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#9CA3AF]">Loading project...</div>;
@@ -656,6 +678,11 @@ export default function ProjectDetail() {
                 >
                   <AlertTriangle className="w-4 h-4" /> Findings ({progress?.failed || 0})
                 </button>
+                <label className="cursor-pointer px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded flex items-center gap-1">
+                  <Upload className="w-3 h-3" />
+                  {importing ? "Importing..." : "Import Burp XML"}
+                  <input type="file" accept=".xml" className="hidden" onChange={handleBurpImport} disabled={importing} />
+                </label>
                 <button
                   onClick={openMembersModal}
                   className="flex items-center gap-2 px-3 py-1.5 rounded border border-[#374151] text-[#9CA3AF] hover:text-white hover:border-blue-600 transition-colors text-sm"

@@ -145,6 +145,21 @@ export const api = {
     request(`/findings/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   createJiraIssue: (findingId: string, projectKey?: string) =>
     request(`/findings/${findingId}/jira${projectKey ? `?project_key=${projectKey}` : ""}`, { method: "POST" }),
+  importBurpXml: async (projectId: string, file: File) => {
+    const token = getToken();
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API}/findings/import/burp?project_id=${projectId}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Import failed");
+    }
+    return res.json();
+  },
 
   // Badges
   badges: () => request("/badges"),
@@ -152,6 +167,16 @@ export const api = {
   // AI Assist
   suggestFinding: (data: { title: string; description?: string; severity?: string }) =>
     request("/ai-assist/suggest", { method: "POST", body: JSON.stringify(data) }),
+
+  // Organizations
+  listOrganizations: () => request("/organizations"),
+  createOrganization: (data: { name: string; slug: string }) =>
+    request("/organizations", { method: "POST", body: JSON.stringify(data) }),
+  getOrganization: (id: string) => request(`/organizations/${id}`),
+  assignUserToOrg: (orgId: string, userId: string) =>
+    request(`/organizations/${orgId}/assign-user?user_id=${userId}`, { method: "PATCH" }),
+  assignProjectToOrg: (orgId: string, projectId: string) =>
+    request(`/organizations/${orgId}/assign-project?project_id=${projectId}`, { method: "PATCH" }),
 
   // Admin settings (integration status, LLM config)
   getSettingsStatus: () => request("/admin/settings"),

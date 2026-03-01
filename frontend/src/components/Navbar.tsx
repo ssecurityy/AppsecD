@@ -1,5 +1,5 @@
 "use client";
-import { Shield, LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, Target, Search, Bug, Key, Award } from "lucide-react";
+import { Shield, LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, Target, Search, Bug, Key, Award, Building2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
@@ -21,7 +21,7 @@ export default function Navbar() {
     { href: "/dashboard", icon: Home, label: "Dashboard" },
     { href: "/projects", icon: FolderOpen, label: "Projects" },
     { href: "/payloads", icon: BookOpen, label: "Payloads" },
-    ...(user?.role === "admin" ? [{ href: "/admin/users", icon: Shield, label: "Users" }, { href: "/admin/audit", icon: FileText, label: "Audit" }, { href: "/admin/settings", icon: Settings, label: "Settings" }] : []),
+    ...(user?.role === "admin" ? [{ href: "/admin/users", icon: Shield, label: "Users" }, { href: "/admin/organizations", icon: Building2, label: "Orgs" }, { href: "/admin/audit", icon: FileText, label: "Audit" }, { href: "/admin/settings", icon: Settings, label: "Settings" }] : []),
   ];
 
   const BADGE_ICONS: Record<string, React.ReactNode> = {
