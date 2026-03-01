@@ -57,3 +57,52 @@ async def update_llm_settings(
         raise HTTPException(400, f"Model must be one of: {', '.join(valid_models)}")
     await update_llm_config(db, payload.model, payload.api_key)
     return {"ok": True}
+
+
+@router.post("/llm/test")
+async def test_llm_connection(
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test the configured LLM API key by making a small API call."""
+    model, api_key = await get_llm_config(db)
+    if not api_key:
+        return {"ok": False, "error": "No API key configured", "mode": "rule_based"}
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model or "gpt-4o-mini",
+            messages=[{"role": "user", "content": "Say 'ok' in one word."}],
+            max_tokens=5,
+            temperature=0,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        return {"ok": True, "model": model, "response": text, "mode": "llm"}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "model": model, "mode": "llm"}
+
+
+@router.post("/jira/test")
+async def test_jira_connection(
+    current_user: User = Depends(require_admin),
+):
+    """Test the configured JIRA connection."""
+    s = get_settings()
+    if not (s.jira_base_url and s.jira_email and s.jira_api_token):
+        return {"ok": False, "error": "JIRA not configured. Set env variables."}
+    try:
+        import httpx
+        base = s.jira_base_url.rstrip("/")
+        with httpx.Client(timeout=10) as client:
+            r = client.get(
+                f"{base}/rest/api/3/myself",
+                auth=(s.jira_email, s.jira_api_token),
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return {"ok": True, "user": data.get("displayName", "Unknown"), "email": data.get("emailAddress", "")}
+            else:
+                return {"ok": False, "error": f"JIRA returned {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

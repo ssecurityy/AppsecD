@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     jira_api_token: str = ""
     jira_project_key: str = ""
 
+    # Security
+    secret_key: str = "vapt-navigator-secret-key-change-in-production-2026"
+
     # AI Assist — LLM mode (optional; when set, uses OpenAI instead of rule-based)
     openai_api_key: str = ""
 

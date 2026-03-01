@@ -197,3 +197,28 @@ async def create_jira_issue(
     if not out:
         raise HTTPException(502, "Failed to create JIRA issue. Check JIRA configuration and connectivity.")
     return {"jira_key": out["key"], "jira_url": out["url"]}
+
+
+@router.post("/auto-suggest")
+async def auto_suggest_finding(
+    payload: dict,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """When a test case fails, suggest a finding with pre-filled data."""
+    from app.services.ai_assist_service import suggest_finding
+    from app.services.admin_settings_service import get_llm_config
+
+    title = payload.get("test_title", "")
+    description = payload.get("test_description", "")
+    fail_notes = payload.get("notes", "")
+    combined_desc = f"{description}\n\nTester Notes: {fail_notes}" if fail_notes else description
+
+    model, api_key = await get_llm_config(db)
+    suggestion = suggest_finding(title, combined_desc, "medium", model=model, api_key=api_key)
+
+    return {
+        "title": title,
+        "description": combined_desc,
+        **suggestion,
+    }

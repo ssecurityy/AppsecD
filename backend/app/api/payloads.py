@@ -45,6 +45,14 @@ async def preview_wordlist(path: str, lines: int = 50):
     from app.core.config import get_settings
     settings = get_settings()
     full_path = Path(settings.seclists_path) / path
+    # Prevent path traversal
+    try:
+        full_path = full_path.resolve()
+        base = Path(settings.seclists_path).resolve()
+        if not str(full_path).startswith(str(base)):
+            raise HTTPException(403, "Path traversal not allowed")
+    except Exception:
+        raise HTTPException(403, "Invalid path")
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(404, "File not found")
     preview = read_wordlist_preview(str(full_path), min(lines, 200))

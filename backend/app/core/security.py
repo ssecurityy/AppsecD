@@ -8,7 +8,7 @@ from .config import get_settings
 settings = get_settings()
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
-SECRET_KEY = "vapt-navigator-secret-key-change-in-production-2026"
+SECRET_KEY = settings.secret_key
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8  # 8 hours
 

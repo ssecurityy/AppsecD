@@ -37,6 +37,14 @@ def get_payload_content(category: str, filename: str = "README.md") -> Optional[
     """Read content from PayloadsAllTheThings."""
     settings = get_settings()
     base = Path(settings.payloads_path) / category
+    # Prevent path traversal
+    try:
+        resolved_base = Path(settings.payloads_path).resolve()
+        resolved_path = (base / filename).resolve()
+        if not str(resolved_path).startswith(str(resolved_base)):
+            return None
+    except Exception:
+        return None
     path = base / filename
     if path.exists() and path.is_file():
         try:

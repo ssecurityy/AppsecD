@@ -51,6 +51,15 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
     user = result.scalar_one_or_none()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(401, "Invalid credentials")
+    # Check if MFA is enabled - return mfa_required flag
+    if user.mfa_enabled and user.mfa_secret:
+        mfa_code = getattr(payload, 'mfa_code', None)
+        if not mfa_code:
+            return {"mfa_required": True, "user_id": str(user.id)}
+        import pyotp
+        totp = pyotp.TOTP(user.mfa_secret)
+        if not totp.verify(mfa_code, valid_window=1):
+            raise HTTPException(401, "Invalid MFA code")
     from datetime import datetime, date
     today = date.today()
     user.last_login = datetime.utcnow()
@@ -132,3 +141,46 @@ async def create_user(
     await db.commit()
     await db.refresh(user)
     return UserOut.model_validate(user)
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+async def update_user(
+    user_id: str,
+    payload: dict,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user — admin only."""
+    import uuid as _uuid
+    result = await db.execute(select(User).where(User.id == _uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, "User not found")
+    allowed = {"email", "username", "full_name", "role", "is_active", "xp_points", "level"}
+    for key, value in payload.items():
+        if key in allowed:
+            setattr(user, key, value)
+    await db.commit()
+    await db.refresh(user)
+    return UserOut.model_validate(user)
+
+
+@router.put("/users/{user_id}/password")
+async def update_user_password(
+    user_id: str,
+    payload: dict,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change user password — admin only."""
+    import uuid as _uuid
+    result = await db.execute(select(User).where(User.id == _uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, "User not found")
+    new_password = payload.get("password")
+    if not new_password or len(new_password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    user.hashed_password = hash_password(new_password)
+    await db.commit()
+    return {"ok": True}

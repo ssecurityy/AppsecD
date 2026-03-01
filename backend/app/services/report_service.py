@@ -3,6 +3,7 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 import base64
+import hashlib
 import json
 import re
 from docx import Document
@@ -116,6 +117,11 @@ def _html_escape(s: str) -> str:
     if not s:
         return ""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def compute_report_hash(content: bytes) -> str:
+    """Compute SHA-256 hash of report content for integrity verification."""
+    return hashlib.sha256(content).hexdigest()
 
 
 def generate_html(data: dict) -> str:

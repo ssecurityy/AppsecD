@@ -1,6 +1,7 @@
 """WebSocket endpoint for real-time progress updates."""
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import json
+from app.core.security import decode_token
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 
@@ -43,7 +44,10 @@ async def project_websocket(websocket: WebSocket, project_id: str):
     if not token:
         await websocket.close(code=4001)
         return
-    # Simplified: accept and add to room. Full auth would decode JWT.
+    payload = decode_token(token)
+    if not payload:
+        await websocket.close(code=4001)
+        return
     await manager.connect(websocket, project_id)
     try:
         while True:
