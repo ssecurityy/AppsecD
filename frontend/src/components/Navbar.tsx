@@ -36,6 +36,7 @@ export default function Navbar() {
     { href: "/payloads", icon: BookOpen, label: "Wordlists" },
     ...(isAdmin(user?.role) ? [
       { href: "/admin/users", icon: Users, label: "Users" },
+      { href: "/admin/organizations", icon: Building2, label: "Orgs" },
       { href: "/admin/audit", icon: FileText, label: "Audit" },
       { href: "/admin/settings", icon: Settings, label: "Settings" },
     ] : []),
