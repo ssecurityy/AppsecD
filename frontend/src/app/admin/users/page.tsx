@@ -5,7 +5,7 @@ import Navbar from "@/components/Navbar";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
-import { UserPlus, Shield } from "lucide-react";
+import { UserPlus, Shield, Pencil, X } from "lucide-react";
 
 export default function AdminUsersPage() {
   const { hydrate, user } = useAuthStore();
@@ -20,6 +20,10 @@ export default function AdminUsersPage() {
     password: "",
     role: "tester",
   });
+  const [editUser, setEditUser] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({ email: "", username: "", full_name: "", role: "", is_active: true });
+  const [editPassword, setEditPassword] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -55,6 +59,40 @@ export default function AdminUsersPage() {
       loadUsers();
     } catch (e: any) {
       toast.error(e.message);
+    }
+  };
+
+  const openEdit = (u: any) => {
+    setEditUser(u);
+    setEditForm({ email: u.email, username: u.username, full_name: u.full_name, role: u.role, is_active: u.is_active !== false });
+    setEditPassword("");
+  };
+
+  const handleEditSave = async () => {
+    if (!editUser) return;
+    setEditSaving(true);
+    try {
+      await api.updateUser(editUser.id, editForm);
+      if (editPassword) {
+        await api.updateUserPassword(editUser.id, editPassword);
+      }
+      toast.success("User updated");
+      setEditUser(null);
+      loadUsers();
+    } catch (e: any) {
+      toast.error(e.message || "Update failed");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleToggleActive = async (u: any) => {
+    try {
+      await api.updateUser(u.id, { is_active: !u.is_active });
+      toast.success(`User ${u.is_active ? "deactivated" : "activated"}`);
+      loadUsers();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to toggle status");
     }
   };
 
@@ -136,6 +174,8 @@ export default function AdminUsersPage() {
                 <tr className="border-b border-[#1F2937] text-left text-[#9CA3AF]">
                   <th className="p-3">User</th>
                   <th className="p-3">Role</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -150,12 +190,96 @@ export default function AdminUsersPage() {
                         {u.role}
                       </span>
                     </td>
+                    <td className="p-3">
+                      <button
+                        onClick={() => handleToggleActive(u)}
+                        className={`px-2 py-0.5 rounded text-xs ${u.is_active !== false ? 'bg-green-900/40 text-green-300 border border-green-800' : 'bg-red-900/40 text-red-300 border border-red-800'}`}
+                      >
+                        {u.is_active !== false ? "Active" : "Inactive"}
+                      </button>
+                    </td>
+                    <td className="p-3">
+                      <button onClick={() => openEdit(u)} className="text-blue-400 hover:text-blue-300">
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </div>
+
+        {editUser && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="card p-6 w-full max-w-md space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-white">Edit User: {editUser.username}</h3>
+                <button onClick={() => setEditUser(null)} className="text-[#6B7280] hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <input
+                className="input-field"
+                placeholder="Full name"
+                value={editForm.full_name}
+                onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
+              />
+              <input
+                className="input-field"
+                placeholder="Email"
+                type="email"
+                value={editForm.email}
+                onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+              />
+              <input
+                className="input-field"
+                placeholder="Username"
+                value={editForm.username}
+                onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
+              />
+              <div>
+                <label className="block text-xs font-medium text-[#9CA3AF] mb-1">Role</label>
+                <select
+                  className="input-field"
+                  value={editForm.role}
+                  onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                >
+                  <option value="viewer">Viewer</option>
+                  <option value="tester">Tester</option>
+                  <option value="lead">Lead</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-[#9CA3AF]">Active</label>
+                <button
+                  type="button"
+                  onClick={() => setEditForm({ ...editForm, is_active: !editForm.is_active })}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${editForm.is_active ? 'bg-green-600' : 'bg-[#374151]'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${editForm.is_active ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#9CA3AF] mb-1">New Password (leave blank to keep)</label>
+                <input
+                  className="input-field"
+                  placeholder="New password"
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleEditSave} disabled={editSaving} className="btn-primary disabled:opacity-50">
+                  {editSaving ? "Saving..." : "Save Changes"}
+                </button>
+                <button onClick={() => setEditUser(null)} className="btn-secondary">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

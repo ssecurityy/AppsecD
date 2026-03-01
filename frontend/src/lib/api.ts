@@ -39,8 +39,8 @@ async function request(path: string, opts: RequestInit = {}): Promise<any> {
 
 export const api = {
   // Auth
-  login: (username: string, password: string) =>
-    request("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  login: (username: string, password: string, mfa_code?: string) =>
+    request("/auth/login", { method: "POST", body: JSON.stringify({ username, password, ...(mfa_code ? { mfa_code } : {}) }) }),
   register: (data: object) =>
     request("/auth/register", { method: "POST", body: JSON.stringify(data) }),
   me: () => request("/auth/me"),
@@ -157,6 +157,20 @@ export const api = {
   getSettingsStatus: () => request("/admin/settings"),
   updateLlmSettings: (data: { model: string; api_key?: string }) =>
     request("/admin/settings/llm", { method: "PUT", body: JSON.stringify(data) }),
+  testLlmConnection: () => request("/admin/settings/llm/test", { method: "POST" }),
+  testJiraConnection: () => request("/admin/settings/jira/test", { method: "POST" }),
+
+  // AI auto-suggest & report
+  autoSuggestFinding: (data: { test_title: string; test_description?: string; notes?: string }) =>
+    request("/findings/auto-suggest", { method: "POST", body: JSON.stringify(data) }),
+  summarizeReport: (projectId: string) =>
+    request(`/projects/${projectId}/report/summarize`, { method: "POST" }),
+
+  // MFA
+  mfaStatus: () => request("/mfa/status"),
+  mfaSetup: () => request("/mfa/setup"),
+  mfaVerify: (code: string) => request("/mfa/verify", { method: "POST", body: JSON.stringify({ code }) }),
+  mfaDisable: (code: string) => request("/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
 
   // Audit (admin)
   auditLogs: (params?: { limit?: number; offset?: number; action?: string }) => {

@@ -14,6 +14,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaUserId, setMfaUserId] = useState("");
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (user) router.replace("/dashboard"); }, [user, router]);
@@ -23,11 +26,32 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const res = await api.login(username, password);
-      setAuth(res.user, res.access_token);
-      toast.success(`Welcome back, ${res.user.full_name}! 🔐`);
-      router.push("/dashboard");
+      if (res.mfa_required) {
+        setMfaRequired(true);
+        setMfaUserId(res.user_id);
+        toast("MFA code required", { icon: "🔐" });
+      } else {
+        setAuth(res.user, res.access_token);
+        toast.success(`Welcome back, ${res.user.full_name}!`);
+        router.push("/dashboard");
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await api.login(username, password, mfaCode);
+      setAuth(res.user, res.access_token);
+      toast.success(`Welcome back, ${res.user.full_name}!`);
+      router.push("/dashboard");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "MFA verification failed");
     } finally {
       setLoading(false);
     }
@@ -63,7 +87,8 @@ export default function LoginPage() {
         </div>
 
         <div className="card p-6">
-          <form onSubmit={handleLogin} className="space-y-4">
+          {!mfaRequired ? (
+            <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="text-sm text-[#9CA3AF] mb-1.5 block">Username</label>
                 <div className="relative">
@@ -106,9 +131,41 @@ export default function LoginPage() {
                 {loading ? "Signing in..." : "Sign In 🔐"}
               </motion.button>
               <p className="text-center text-xs text-[#6B7280] mt-2">
-                Contact admin for access. Default: admin / Admin@2026!
+                Contact your administrator for access credentials.
               </p>
             </form>
+          ) : (
+            <form onSubmit={handleMfaVerify} className="space-y-4">
+              <div className="text-center mb-2">
+                <Shield className="w-8 h-8 text-blue-500 mx-auto mb-2" />
+                <p className="text-sm text-[#9CA3AF]">Enter your 6-digit authenticator code</p>
+              </div>
+              <div>
+                <input
+                  className="input-field text-center text-2xl tracking-widest"
+                  type="text"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                  required
+                  autoFocus
+                />
+              </div>
+              <motion.button
+                type="submit"
+                disabled={loading || mfaCode.length !== 6}
+                whileTap={{ scale: 0.97 }}
+                className="btn-primary w-full py-3 disabled:opacity-50"
+              >
+                {loading ? "Verifying..." : "Verify MFA Code"}
+              </motion.button>
+              <button type="button" onClick={() => { setMfaRequired(false); setMfaCode(""); }}
+                className="w-full text-sm text-[#6B7280] hover:text-white">
+                Back to login
+              </button>
+            </form>
+          )}
         </div>
       </motion.div>
     </div>

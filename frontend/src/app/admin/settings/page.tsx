@@ -5,7 +5,7 @@ import Navbar from "@/components/Navbar";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
-import { Settings, Key, CheckCircle, XCircle, Info, Save } from "lucide-react";
+import { Settings, Key, CheckCircle, XCircle, Info, Save, Shield } from "lucide-react";
 
 const LLM_MODELS = [
   { value: "gpt-4o-mini", label: "gpt-4o-mini (fast, cheap)" },
@@ -26,6 +26,14 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [llmModel, setLlmModel] = useState("gpt-4o-mini");
   const [llmApiKey, setLlmApiKey] = useState("");
+  const [testingLlm, setTestingLlm] = useState(false);
+  const [llmTestResult, setLlmTestResult] = useState<{ok: boolean; error?: string; response?: string; model?: string} | null>(null);
+  const [testingJira, setTestingJira] = useState(false);
+  const [jiraTestResult, setJiraTestResult] = useState<{ok: boolean; error?: string; user?: string} | null>(null);
+  const [mfaStatus, setMfaStatus] = useState<{mfa_enabled: boolean} | null>(null);
+  const [mfaSetupData, setMfaSetupData] = useState<{secret: string; qr_uri: string} | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaLoading, setMfaLoading] = useState(false);
 
   const refreshStatus = () => {
     api.getSettingsStatus()
@@ -43,7 +51,10 @@ export default function AdminSettingsPage() {
   }, [user, router]);
 
   useEffect(() => {
-    if (user?.role === "admin") refreshStatus();
+    if (user?.role === "admin") {
+      refreshStatus();
+      api.mfaStatus().then(setMfaStatus).catch(() => {});
+    }
   }, [user]);
 
   const handleSaveLlm = async () => {
@@ -59,6 +70,87 @@ export default function AdminSettingsPage() {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestLlm = async () => {
+    setTestingLlm(true);
+    setLlmTestResult(null);
+    try {
+      const result = await api.testLlmConnection();
+      setLlmTestResult(result);
+      if (result.ok) {
+        toast.success("LLM connection successful!");
+      } else {
+        toast.error(result.error || "LLM test failed");
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Test failed";
+      setLlmTestResult({ ok: false, error: msg });
+      toast.error(msg);
+    } finally {
+      setTestingLlm(false);
+    }
+  };
+
+  const handleTestJira = async () => {
+    setTestingJira(true);
+    setJiraTestResult(null);
+    try {
+      const result = await api.testJiraConnection();
+      setJiraTestResult(result);
+      if (result.ok) {
+        toast.success(`JIRA connected as ${result.user}`);
+      } else {
+        toast.error(result.error || "JIRA test failed");
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Test failed";
+      setJiraTestResult({ ok: false, error: msg });
+      toast.error(msg);
+    } finally {
+      setTestingJira(false);
+    }
+  };
+
+  const handleMfaSetup = async () => {
+    setMfaLoading(true);
+    try {
+      const data = await api.mfaSetup();
+      setMfaSetupData(data);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "MFA setup failed");
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async () => {
+    setMfaLoading(true);
+    try {
+      await api.mfaVerify(mfaCode);
+      toast.success("MFA enabled successfully!");
+      setMfaSetupData(null);
+      setMfaCode("");
+      api.mfaStatus().then(setMfaStatus).catch(() => {});
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Verification failed");
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
+  const handleMfaDisable = async () => {
+    setMfaLoading(true);
+    try {
+      await api.mfaDisable(mfaCode);
+      toast.success("MFA disabled");
+      setMfaCode("");
+      api.mfaStatus().then(setMfaStatus).catch(() => {});
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to disable MFA");
+    } finally {
+      setMfaLoading(false);
     }
   };
 
@@ -143,7 +235,23 @@ export default function AdminSettingsPage() {
               >
                 Clear key
               </button>
+              <button
+                onClick={handleTestLlm}
+                disabled={testingLlm || saving}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded"
+              >
+                {testingLlm ? "Testing..." : "Test Connection"}
+              </button>
               </div>
+              {llmTestResult && (
+                <div className={`mt-3 p-3 rounded text-sm ${llmTestResult.ok ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-red-900/30 border border-red-700 text-red-300'}`}>
+                  {llmTestResult.ok ? (
+                    <p>Connected to <strong>{llmTestResult.model}</strong>. Response: &quot;{llmTestResult.response}&quot;</p>
+                  ) : (
+                    <p>Failed: {llmTestResult.error}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -170,8 +278,84 @@ export default function AdminSettingsPage() {
               <div className="text-xs text-[#6B7280]">
                 <strong>Env:</strong> <code>JIRA_BASE_URL</code>, <code>JIRA_EMAIL</code>, <code>JIRA_API_TOKEN</code>, <code>JIRA_PROJECT_KEY</code>
               </div>
+              <button
+                onClick={handleTestJira}
+                disabled={testingJira}
+                className="mt-3 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded"
+              >
+                {testingJira ? "Testing..." : "Test JIRA Connection"}
+              </button>
+              {jiraTestResult && (
+                <div className={`mt-3 p-3 rounded text-sm ${jiraTestResult.ok ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-red-900/30 border border-red-700 text-red-300'}`}>
+                  {jiraTestResult.ok ? (
+                    <p>Connected as <strong>{jiraTestResult.user}</strong></p>
+                  ) : (
+                    <p>Failed: {jiraTestResult.error}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
+        </div>
+
+        <div className="card p-4 mb-4">
+          <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <Shield className="w-4 h-4" /> Multi-Factor Authentication
+          </h2>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-white">MFA Status</span>
+              {mfaStatus?.mfa_enabled ? (
+                <span className="flex items-center gap-1 text-xs text-green-400">
+                  <CheckCircle className="w-3 h-3" /> Enabled
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-amber-400">
+                  <XCircle className="w-3 h-3" /> Disabled
+                </span>
+              )}
+            </div>
+
+            {!mfaStatus?.mfa_enabled && !mfaSetupData && (
+              <button onClick={handleMfaSetup} disabled={mfaLoading}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded">
+                {mfaLoading ? "Setting up..." : "Enable MFA"}
+              </button>
+            )}
+
+            {mfaSetupData && (
+              <div className="space-y-3">
+                <p className="text-xs text-[#9CA3AF]">Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.):</p>
+                <div className="bg-white p-4 rounded inline-block">
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(mfaSetupData.qr_uri)}`} alt="MFA QR Code" className="w-48 h-48" />
+                </div>
+                <p className="text-xs text-[#6B7280]">Manual key: <code className="bg-[#1F2937] px-1 rounded">{mfaSetupData.secret}</code></p>
+                <div>
+                  <label className="block text-xs font-medium text-[#9CA3AF] mb-1">Enter 6-digit code to verify</label>
+                  <input type="text" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                    placeholder="000000" className="w-32 bg-[#111827] border border-[#1F2937] rounded px-3 py-2 text-white text-sm text-center tracking-widest" />
+                </div>
+                <button onClick={handleMfaVerify} disabled={mfaLoading || mfaCode.length !== 6}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded">
+                  {mfaLoading ? "Verifying..." : "Verify & Enable"}
+                </button>
+              </div>
+            )}
+
+            {mfaStatus?.mfa_enabled && (
+              <div className="space-y-3">
+                <p className="text-xs text-[#9CA3AF]">Enter your current TOTP code to disable MFA:</p>
+                <div className="flex gap-2 items-end">
+                  <input type="text" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                    placeholder="000000" className="w-32 bg-[#111827] border border-[#1F2937] rounded px-3 py-2 text-white text-sm text-center tracking-widest" />
+                  <button onClick={handleMfaDisable} disabled={mfaLoading || mfaCode.length !== 6}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium rounded">
+                    {mfaLoading ? "Disabling..." : "Disable MFA"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="card p-4 text-sm text-[#9CA3AF]">
