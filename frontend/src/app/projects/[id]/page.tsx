@@ -643,6 +643,7 @@ export default function ProjectDetail() {
 
   useEffect(() => {
     loadData().finally(() => setLoading(false));
+    loadFindings();
   }, [id]);
 
   useEffect(() => {
@@ -864,7 +865,7 @@ export default function ProjectDetail() {
                   className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm"
                   style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
                 >
-                  <AlertTriangle className="w-4 h-4" /> Findings ({progress?.failed || 0})
+                  <AlertTriangle className="w-4 h-4" /> Findings ({findings.length})
                 </button>
                 <label className="cursor-pointer">
                   <input type="file" className="hidden" accept=".xml" onChange={handleBurpImport} disabled={importing} />
@@ -881,7 +882,7 @@ export default function ProjectDetail() {
                   <Users className="w-4 h-4" /> Team
                 </button>
                 <div className="text-right">
-                  <div className="text-2xl font-bold text-red-400">{progress?.failed || 0}</div>
+                  <div className="text-2xl font-bold text-red-400">{findings.length}</div>
                   <div className="text-xs" style={{ color: "var(--text-secondary)" }}>findings</div>
                 </div>
               </div>
