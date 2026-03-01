@@ -8,7 +8,7 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload
 } from "lucide-react";
 import Link from "next/link";
 
@@ -436,6 +436,7 @@ export default function ProjectDetail() {
   const [users, setUsers] = useState<any[]>([]);
   const [findings, setFindings] = useState<any[]>([]);
   const [showFindings, setShowFindings] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -529,6 +530,23 @@ export default function ProjectDetail() {
   const openFindingsPanel = () => {
     setShowFindings(true);
     loadFindings();
+  };
+
+  const handleBurpImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const res = await api.importBurpXml(id, file);
+      toast.success(`Imported ${res.imported} findings from Burp XML`);
+      loadFindings();
+      handleUpdate();
+    } catch (err: any) {
+      toast.error(err.message || "Import failed");
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ color: "var(--text-secondary)" }}>Loading project...</div>;
@@ -666,6 +684,13 @@ export default function ProjectDetail() {
                 >
                   <AlertTriangle className="w-4 h-4" /> Findings ({progress?.failed || 0})
                 </button>
+                <label className="cursor-pointer">
+                  <input type="file" className="hidden" accept=".xml" onChange={handleBurpImport} disabled={importing} />
+                  <span className={`flex items-center gap-2 px-3 py-1.5 rounded border text-sm transition-colors ${importing ? "opacity-50 cursor-not-allowed" : "hover:text-white hover:border-purple-500"}`}
+                    style={{ borderColor: "var(--border-subtle)", color: "rgb(168, 85, 247)" }}>
+                    <Upload className="w-4 h-4" /> {importing ? "Importing..." : "Import Burp XML"}
+                  </span>
+                </label>
                 <button
                   onClick={openMembersModal}
                   className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm"
