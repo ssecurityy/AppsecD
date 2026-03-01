@@ -20,12 +20,65 @@ from app.models.test_case import TestCase
 from app.models.result import ProjectTestResult
 from app.models.category import Category
 from app.models.finding import Finding
+from app.models.dast_scan_result import DastScanResult
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, ProjectMemberCreate, ProjectMemberUpdate, ProjectMemberOut
+
+# Map DAST check_id to testing phase for progress overlay
+DAST_CHECK_TO_PHASE = {
+    "DAST-HDR-01": "pre_auth",   # Security Headers
+    "DAST-SSL-01": "transport",  # SSL/TLS
+    "DAST-COOK-01": "auth",      # Cookie security
+    "DAST-CORS-01": "pre_auth",  # CORS
+    "DAST-INFO-01": "recon",     # Info disclosure
+    "DAST-METH-01": "pre_auth",  # HTTP methods
+    "DAST-ROBO-01": "recon",     # robots.txt
+    "DAST-DIR-01": "recon",      # Directory listing
+    "DAST-REDIR-01": "pre_auth", # Open redirect
+    "DAST-RATE-01": "auth",      # Rate limiting
+    "DAST-XSS-01": "client",     # XSS
+    "DAST-SQLI-01": "api",       # SQLi
+    "DAST-API-01": "api",        # API docs
+    "DAST-HOST-01": "pre_auth",  # Host header
+    "DAST-CRLF-01": "pre_auth",  # CRLF
+    "DAST-PII-01": "client",     # PII exposure
+    "DAST-SRI-01": "client",     # SRI
+    "DAST-CACHE-01": "pre_auth", # Cache control
+    "DAST-FORM-01": "auth",      # Autocomplete
+    "DAST-BACKUP-01": "recon",   # Backup files
+    "DAST-DIR-02": "recon",      # Path discovery
+}
 from datetime import datetime, date
 import uuid
 
 require_tester_plus = require_roles(get_current_user, "super_admin", "admin", "lead", "tester")
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+async def _get_dast_results_by_phase(db: AsyncSession, project_id: str) -> dict:
+    """Fetch latest DAST scan and aggregate passed/failed by phase."""
+    from sqlalchemy import desc
+    r = await db.execute(
+        select(DastScanResult).where(DastScanResult.project_id == project_id).order_by(desc(DastScanResult.created_at)).limit(1)
+    )
+    scan = r.scalar_one_or_none()
+    if not scan or not scan.results:
+        return {}
+    agg: dict[str, dict] = {}
+    for res in scan.results:
+        check_id = res.get("check_id", "")
+        if check_id.startswith("DAST-ERR-"):
+            phase = "recon"
+        else:
+            phase = DAST_CHECK_TO_PHASE.get(check_id, "pre_auth")
+        if phase not in agg:
+            agg[phase] = {"passed": 0, "failed": 0, "total": 0}
+        agg[phase]["total"] += 1
+        status = (res.get("status") or "").lower()
+        if status == "passed":
+            agg[phase]["passed"] += 1
+        elif status == "failed":
+            agg[phase]["failed"] += 1
+    return agg
 
 
 def project_to_dict(p: Project, organization_name: str | None = None, finding_count: int | None = None) -> dict:
@@ -341,7 +394,7 @@ async def get_project_progress(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get detailed progress breakdown per phase."""
+    """Get detailed progress breakdown per phase. Includes DAST scan results mapped to phases."""
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
@@ -367,20 +420,50 @@ async def get_project_progress(
                 "icon": cat.icon or "🔍",
                 "total": 0, "not_started": 0, "passed": 0,
                 "failed": 0, "na": 0, "in_progress": 0,
+                "dast_passed": 0, "dast_failed": 0,
             }
         phases[phase]["total"] += 1
         phases[phase][ptr.status] = phases[phase].get(ptr.status, 0) + 1
 
+    # Overlay DAST scan results onto phases
+    dast_by_phase = await _get_dast_results_by_phase(db, project_id)
+    cats_q = await db.execute(select(Category).where(Category.is_active == True))
+    all_cats = {c.phase: (c.name, c.icon or "🔍") for c in cats_q.scalars().all()}
+    phase_names = {cat.phase: (cat.name, cat.icon or "🔍") for _, _, cat in rows}
+    phase_names.update(all_cats)
+    for dphase, dcounts in dast_by_phase.items():
+        name, icon = phase_names.get(dphase, (dphase.replace("_", " ").title(), "🔍"))
+        if dphase not in phases:
+            phases[dphase] = {
+                "phase": dphase,
+                "phase_name": name,
+                "icon": icon or "🔍",
+                "total": 0, "not_started": 0, "passed": 0,
+                "failed": 0, "na": 0, "in_progress": 0,
+                "dast_passed": 0, "dast_failed": 0,
+            }
+        phases[dphase]["dast_passed"] = dcounts.get("passed", 0)
+        phases[dphase]["dast_failed"] = dcounts.get("failed", 0)
+        phases[dphase]["passed"] += dcounts.get("passed", 0)
+        phases[dphase]["failed"] += dcounts.get("failed", 0)
+        phases[dphase]["total"] += dcounts.get("total", 0)
+
     phase_list = sorted(phases.values(), key=lambda x: x["phase"])
 
     total_applicable = sum(1 for ptr, tc, cat in rows if ptr.is_applicable)
-    tested = sum(1 for ptr, tc, cat in rows if ptr.status in ("passed", "failed", "na"))
-    passed = sum(1 for ptr, tc, cat in rows if ptr.status == "passed")
-    failed = sum(1 for ptr, tc, cat in rows if ptr.status == "failed")
+    manual_tested = sum(1 for ptr, tc, cat in rows if ptr.status in ("passed", "failed", "na"))
+    manual_passed = sum(1 for ptr, tc, cat in rows if ptr.status == "passed")
+    manual_failed = sum(1 for ptr, tc, cat in rows if ptr.status == "failed")
+    dast_total = sum(d.get("total", 0) for d in dast_by_phase.values())
+    dast_passed = sum(d.get("passed", 0) for d in dast_by_phase.values())
+    dast_failed = sum(d.get("failed", 0) for d in dast_by_phase.values())
+    tested = manual_tested + dast_total
+    passed = manual_passed + dast_passed
+    failed = manual_failed + dast_failed
 
-    pct = round((tested / total_applicable * 100) if total_applicable > 0 else 0, 1)
+    pct = round((tested / (total_applicable + dast_total) * 100) if (total_applicable + dast_total) > 0 else 0, 1)
 
-    # Update project counts
+    # Update project counts (include DAST in tested/passed/failed)
     project.tested_count = tested
     project.passed_count = passed
     project.failed_count = failed
@@ -388,7 +471,7 @@ async def get_project_progress(
 
     return {
         "project_id": project_id,
-        "total_applicable": total_applicable,
+        "total_applicable": total_applicable + dast_total,  # manual + DAST for display
         "tested": tested,
         "passed": passed,
         "failed": failed,
@@ -396,6 +479,9 @@ async def get_project_progress(
         "not_started": sum(1 for ptr, tc, cat in rows if ptr.status == "not_started"),
         "completion_pct": pct,
         "phases": phase_list,
+        "dast_tested": dast_total,
+        "dast_passed": dast_passed,
+        "dast_failed": dast_failed,
     }
 
 
