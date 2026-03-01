@@ -1,7 +1,7 @@
-"""DAST Automation Engine — HTTP-based security checks.
+"""DAST Automation Engine — WAF-aware, rate-limit-safe scanning.
 
-Runs automated security checks using httpx. Optional ffuf for directory discovery.
-Uses SecLists/IntruderPayloads wordlists when available.
+Uses throttling, UA rotation, reachability probe. Optional ffuf for discovery.
+SecLists/IntruderPayloads wordlists when available.
 """
 import httpx
 import ssl
@@ -10,11 +10,33 @@ import time
 import logging
 import re
 import os
+import random
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urljoin
 
 logger = logging.getLogger(__name__)
+
+# Realistic browser User-Agents — rotate to evade WAF/blocking
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+]
+BROWSER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+HEADERS = {**BROWSER_HEADERS, "User-Agent": USER_AGENTS[0]}
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 WORDLIST_PATHS = [
@@ -34,8 +56,84 @@ def _load_discovery_wordlist(max_paths: int = 150) -> list[str]:
                 logger.debug("Could not load wordlist %s: %s", p, e)
     return ["admin", "login", "api", "config", "backup", "static", "assets", "uploads", "images", "css", "js", "wp-admin", ".git", ".env", "debug", "test", "dev", "staging", "dashboard", "panel"]
 
-TIMEOUT = httpx.Timeout(15.0, connect=8.0)
-HEADERS = {"User-Agent": "AppSecD-DAST/1.0 (Automated Security Testing)"}
+TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+MIN_DELAY_BETWEEN_REQUESTS = 1.2
+MAX_DELAY_BETWEEN_REQUESTS = 2.8
+PROBE_DELAY = 2.0  # delay between probe attempts
+_scan_ctx: "ScanContext | None" = None
+
+
+class ScanContext:
+    """WAF-aware scan context: resolved base URL, throttling, UA rotation."""
+    def __init__(self, base_url: str | None):
+        self.base_url = base_url
+        self.ua_index = 0
+        self.last_request = 0.0
+
+    def _headers(self) -> dict:
+        h = dict(BROWSER_HEADERS)
+        h["User-Agent"] = USER_AGENTS[self.ua_index % len(USER_AGENTS)]
+        self.ua_index += 1
+        return h
+
+    def throttle(self) -> None:
+        elapsed = time.time() - self.last_request
+        delay = random.uniform(MIN_DELAY_BETWEEN_REQUESTS, MAX_DELAY_BETWEEN_REQUESTS)
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+        self.last_request = time.time()
+
+    def _rewrite_url(self, url: str) -> str:
+        """Use resolved base scheme+netloc when same host to avoid re-failing."""
+        if not self.base_url:
+            return url
+        p_url = urlparse(url)
+        p_base = urlparse(self.base_url)
+        if p_url.netloc and p_url.netloc.lower() == p_base.netloc.lower():
+            return f"{p_base.scheme}://{p_base.netloc}{p_url.path or '/'}{p_url.query and '?' + p_url.query or ''}"
+        return url
+
+    def safe_get(self, url: str, **kwargs) -> httpx.Response | None:
+        self.throttle()
+        url = self._rewrite_url(url)
+        urls_to_try = _url_variants(url)
+        for attempt in range(2):  # retry with different UA
+            for u in urls_to_try:
+                try:
+                    h = self._headers()
+                    h.update(kwargs.pop("headers", {}))
+                    with httpx.Client(timeout=TIMEOUT, headers=h, verify=False, follow_redirects=True) as client:
+                        r = client.get(u, **kwargs)
+                        if r.status_code == 429:
+                            time.sleep(random.uniform(5, 10))
+                            continue
+                        return r
+                except Exception as e:
+                    logger.debug("DAST GET %s failed: %s", u, e)
+            time.sleep(PROBE_DELAY)
+        logger.warning("DAST request failed for %s", url)
+        return None
+
+    def safe_request(self, method: str, url: str, **kwargs) -> httpx.Response | None:
+        self.throttle()
+        url = self._rewrite_url(url)
+        urls_to_try = _url_variants(url)
+        for attempt in range(2):
+            for u in urls_to_try:
+                try:
+                    h = self._headers()
+                    h.update(kwargs.pop("headers", {}))
+                    with httpx.Client(timeout=TIMEOUT, headers=h, verify=False, follow_redirects=False) as client:
+                        r = client.request(method, u, **kwargs)
+                        if r.status_code == 429:
+                            time.sleep(random.uniform(5, 10))
+                            continue
+                        return r
+                except Exception as e:
+                    logger.debug("DAST %s %s failed: %s", method, u, e)
+            time.sleep(PROBE_DELAY)
+        logger.warning("DAST %s failed for %s", method, url)
+        return None
 
 
 class DastResult:
@@ -102,24 +200,52 @@ def _url_variants(url: str) -> list[str]:
 
 
 def _safe_get(url: str, **kwargs) -> httpx.Response | None:
+    if _scan_ctx:
+        return _scan_ctx.safe_get(url, **kwargs)
     for u in _url_variants(url):
         try:
-            with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=True) as client:
+            h = {**BROWSER_HEADERS, "User-Agent": USER_AGENTS[0]}
+            with httpx.Client(timeout=TIMEOUT, headers=h, verify=False, follow_redirects=True) as client:
                 return client.get(u, **kwargs)
         except Exception as e:
             logger.debug("DAST GET %s failed: %s", u, e)
-    logger.warning("DAST request failed for all variants of %s", url)
     return None
 
 
 def _safe_request(method: str, url: str, **kwargs) -> httpx.Response | None:
+    if _scan_ctx:
+        return _scan_ctx.safe_request(method, url, **kwargs)
     for u in _url_variants(url):
         try:
-            with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=False) as client:
+            h = {**BROWSER_HEADERS, "User-Agent": USER_AGENTS[0]}
+            with httpx.Client(timeout=TIMEOUT, headers=h, verify=False, follow_redirects=False) as client:
                 return client.request(method, u, **kwargs)
         except Exception as e:
             logger.debug("DAST %s %s failed: %s", method, u, e)
-    logger.warning("DAST %s request failed for all variants of %s", method, url)
+    return None
+
+
+def _resolve_base_url(target_url: str) -> str | None:
+    """Probe URL variants with rotating UA; return first reachable base URL. Slow, WAF-safe."""
+    parsed = urlparse(target_url)
+    variants = _url_variants(target_url)
+    for _ in range(2):  # two passes with different UAs
+        for ua in USER_AGENTS:
+            for u in variants:
+                try:
+                    time.sleep(PROBE_DELAY)
+                    with httpx.Client(
+                        timeout=TIMEOUT,
+                        headers={**BROWSER_HEADERS, "User-Agent": ua},
+                        verify=False,
+                        follow_redirects=True,
+                    ) as client:
+                        r = client.get(u)
+                        if r.status_code < 500:
+                            p = urlparse(str(r.url))
+                            return f"{p.scheme}://{p.netloc}/"
+                except Exception as e:
+                    logger.debug("Probe %s failed: %s", u, e)
     return None
 
 
@@ -543,8 +669,10 @@ def check_open_redirect(target_url: str) -> DastResult:
     
     for param in redirect_params:
         test_url = f"{base}/login?{param}={evil_url}"
+        if _scan_ctx:
+            _scan_ctx.throttle()
         try:
-            with httpx.Client(timeout=TIMEOUT, headers=HEADERS, verify=False, follow_redirects=False) as client:
+            with httpx.Client(timeout=TIMEOUT, headers={**HEADERS, "User-Agent": USER_AGENTS[hash(param) % len(USER_AGENTS)]}, verify=False, follow_redirects=False) as client:
                 resp = client.get(test_url)
                 location = resp.headers.get("location", "")
                 if evil_url in location:
@@ -1022,16 +1150,18 @@ def check_directory_discovery(target_url: str) -> DastResult:
                 wordlist_source = f"ffuf+{wp.name}"
                 break
 
-    # Fallback: httpx-based discovery
+    # Fallback: httpx-based discovery (throttled to avoid WAF/rate limit)
     if not discovered:
         discard_codes = {404, 410}
-        for path in wordlist:
+        for i, path in enumerate(wordlist):
             path = path.strip().lstrip("/")
             if not path:
                 continue
+            if i > 0:
+                time.sleep(random.uniform(0.15, 0.4))  # throttle
             test_url = urljoin(root + "/", path)
             try:
-                with httpx.Client(timeout=httpx.Timeout(4.0, connect=3.0), headers=HEADERS, verify=False, follow_redirects=True) as client:
+                with httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0), headers={**HEADERS, "User-Agent": USER_AGENTS[i % len(USER_AGENTS)]}, verify=False, follow_redirects=True) as client:
                     r = client.get(test_url)
             except Exception:
                 continue
@@ -1085,22 +1215,31 @@ ALL_CHECKS = [
 
 
 def run_dast_scan(target_url: str, checks: list[str] | None = None) -> dict:
-    """Run DAST scan with selected or all checks. Returns structured results."""
+    """Run DAST scan with WAF-aware throttling, UA rotation, reachability probe."""
+    global _scan_ctx
     results = []
     selected = ALL_CHECKS if not checks else [(n, f) for n, f in ALL_CHECKS if n in checks]
     
+    # Phase 1: Resolve reachable base URL (slow, evades WAF)
+    resolved = _resolve_base_url(target_url)
+    effective_url = (resolved or target_url).rstrip("/") or target_url
+    _scan_ctx = ScanContext(resolved)  # use resolved for rewriting same-host requests
+    
     start = time.time()
-    for name, check_fn in selected:
-        try:
-            r = check_fn(target_url)
-            results.append(r.to_dict())
-        except Exception as e:
-            results.append(DastResult(
-                check_id=f"DAST-ERR-{name}",
-                title=f"Error in {name}",
-                status="error",
-                description=str(e)[:200],
-            ).to_dict())
+    try:
+        for name, check_fn in selected:
+            try:
+                r = check_fn(effective_url)
+                results.append(r.to_dict())
+            except Exception as e:
+                results.append(DastResult(
+                    check_id=f"DAST-ERR-{name}",
+                    title=f"Error in {name}",
+                    status="error",
+                    description=str(e)[:200],
+                ).to_dict())
+    finally:
+        _scan_ctx = None
     
     duration = round(time.time() - start, 2)
     passed = sum(1 for r in results if r["status"] == "passed")
