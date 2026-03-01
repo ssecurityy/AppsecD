@@ -8,7 +8,7 @@ import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
   Settings, Key, CheckCircle, XCircle, Info, Save, Cpu, Building2,
-  RefreshCw, ExternalLink, Shield, Bell, Mail, MessageSquare, Globe, Send, Webhook
+  RefreshCw, ExternalLink, Shield, Bell, Mail, MessageSquare, Globe, Send, Webhook, Zap
 } from "lucide-react";
 
 export default function AdminSettingsPage() {
@@ -48,6 +48,12 @@ export default function AdminSettingsPage() {
     webhook_url: "",
   });
   const [notifLoaded, setNotifLoaded] = useState(false);
+
+  // Test connection states
+  const [testingLlm, setTestingLlm] = useState(false);
+  const [llmTestResult, setLlmTestResult] = useState<any>(null);
+  const [testingJira, setTestingJira] = useState(false);
+  const [jiraTestResult, setJiraTestResult] = useState<any>(null);
 
   const refreshStatus = (orgId?: string) => {
     setLoading(true);
@@ -158,6 +164,32 @@ export default function AdminSettingsPage() {
       toast.error(e.message || "Failed to save");
     } finally {
       setSavingNotif(false);
+    }
+  };
+
+  const handleTestLlm = async () => {
+    setTestingLlm(true);
+    setLlmTestResult(null);
+    try {
+      const res = await api.testLlmConnection();
+      setLlmTestResult(res);
+    } catch (e: any) {
+      setLlmTestResult({ ok: false, error: e.message });
+    } finally {
+      setTestingLlm(false);
+    }
+  };
+
+  const handleTestJira = async () => {
+    setTestingJira(true);
+    setJiraTestResult(null);
+    try {
+      const res = await api.testJiraConnection();
+      setJiraTestResult(res);
+    } catch (e: any) {
+      setJiraTestResult({ ok: false, error: e.message });
+    } finally {
+      setTestingJira(false);
     }
   };
 
@@ -278,7 +310,20 @@ export default function AdminSettingsPage() {
                   className="btn-primary flex items-center gap-2 text-sm py-2 px-4 disabled:opacity-50">
                   <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "Save"}
                 </button>
+                <button onClick={handleTestLlm} disabled={testingLlm}
+                  className="btn-secondary flex items-center gap-2 text-sm py-2 px-4 disabled:opacity-50">
+                  <Zap className="w-3.5 h-3.5" /> {testingLlm ? "Testing..." : "Test Connection"}
+                </button>
               </div>
+              {llmTestResult && (
+                <div className={`mt-3 p-3 rounded-lg text-xs border ${llmTestResult.ok ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
+                  {llmTestResult.ok ? (
+                    <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Connected — Model: {llmTestResult.model}, Response: {llmTestResult.response}</span>
+                  ) : (
+                    <span className="flex items-center gap-1"><XCircle className="w-3 h-3" /> {llmTestResult.error}</span>
+                  )}
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -325,10 +370,25 @@ export default function AdminSettingsPage() {
                     value={jiraKey} onChange={e => setJiraKey(e.target.value)} />
                 </div>
               </div>
-              <button onClick={handleSaveJira} disabled={savingJira}
-                className="btn-primary flex items-center gap-2 text-sm py-2 px-4 disabled:opacity-50">
-                <Save className="w-3.5 h-3.5" /> {savingJira ? "Saving..." : "Save JIRA Settings"}
-              </button>
+              <div className="flex gap-2">
+                <button onClick={handleSaveJira} disabled={savingJira}
+                  className="btn-primary flex items-center gap-2 text-sm py-2 px-4 disabled:opacity-50">
+                  <Save className="w-3.5 h-3.5" /> {savingJira ? "Saving..." : "Save JIRA Settings"}
+                </button>
+                <button onClick={handleTestJira} disabled={testingJira}
+                  className="btn-secondary flex items-center gap-2 text-sm py-2 px-4 disabled:opacity-50">
+                  <Zap className="w-3.5 h-3.5" /> {testingJira ? "Testing..." : "Test JIRA Connection"}
+                </button>
+              </div>
+              {jiraTestResult && (
+                <div className={`mt-3 p-3 rounded-lg text-xs border ${jiraTestResult.ok ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
+                  {jiraTestResult.ok ? (
+                    <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Connected — User: {jiraTestResult.user} ({jiraTestResult.email})</span>
+                  ) : (
+                    <span className="flex items-center gap-1"><XCircle className="w-3 h-3" /> {jiraTestResult.error}</span>
+                  )}
+                </div>
+              )}
             </div>
           </motion.div>
         )}
