@@ -1,5 +1,7 @@
 """Reports API — generate and download project reports."""
 import json
+import base64
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,14 +22,44 @@ from app.models.project import Project
 from app.models.finding import Finding
 from app.models.result import ProjectTestResult
 from app.models.category import Category
+from app.models.organization import Organization
 
 router = APIRouter(prefix="/projects", tags=["reports"])
+LOGO_UPLOAD_DIR = Path("/opt/navigator/data/uploads/org_logos")
+ALLOWED_IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+async def _load_org_branding(db, project) -> dict:
+    """Fetch org for project and build branding dict with logo base64."""
+    org = None
+    if getattr(project, "organization_id", None):
+        from sqlalchemy import select
+        r = await db.execute(select(Organization).where(Organization.id == project.organization_id))
+        org = r.scalar_one_or_none()
+    if not org:
+        return {"name": "AppSecD", "logo_base64": None, "brand_color": "#2563eb"}
+    logo_b64 = None
+    if org.logo_url and LOGO_UPLOAD_DIR.exists():
+        for ext in ALLOWED_IMAGE_EXT:
+            fpath = LOGO_UPLOAD_DIR / f"{org.id}{ext}"
+            if fpath.exists():
+                try:
+                    logo_b64 = f"data:image/{ext[1:]};base64," + base64.b64encode(fpath.read_bytes()).decode()
+                except Exception:
+                    pass
+                break
+    return {
+        "name": org.name or "AppSecD",
+        "logo_base64": logo_b64,
+        "brand_color": org.brand_color or "#2563eb",
+    }
 
 
 def finding_to_dict(f, evidence_from_result=None):
     ev = evidence_from_result if evidence_from_result else []
     if not ev and getattr(f, "evidence_urls", None):
         ev = [{"url": u, "filename": u.split("/")[-1] if "/" in str(u) else str(u)} for u in (f.evidence_urls or [])]
+    created = getattr(f, "created_at", None)
     d = {
         "id": str(f.id),
         "title": f.title,
@@ -42,6 +74,7 @@ def finding_to_dict(f, evidence_from_result=None):
         "impact": f.impact,
         "recommendation": f.recommendation,
         "evidence": ev,
+        "created_at": created.isoformat() if created else None,
     }
     # Include request/response for automated findings (DAST, Burp import)
     if getattr(f, "request", None):
@@ -117,7 +150,8 @@ async def get_report(
     ]
 
     proj_dict = project_to_dict(project)
-    data = build_report_data(proj_dict, findings, phases, project_id=project_id)
+    organization = await _load_org_branding(db, project)
+    data = build_report_data(proj_dict, findings, phases, project_id=project_id, organization=organization)
 
     fmt = format.lower()
     if fmt == "html":
@@ -194,7 +228,8 @@ async def get_report_data(
         for c in phases_result.scalars().all()
     ]
     proj_dict = project_to_dict(project)
-    data = build_report_data(proj_dict, findings, phases, project_id=project_id)
+    organization = await _load_org_branding(db, project)
+    data = build_report_data(proj_dict, findings, phases, project_id=project_id, organization=organization)
     for f in data.get("findings", []):
         f.pop("compliance", None)
     return data
@@ -242,7 +277,8 @@ async def start_async_report(
         for c in phases_result.scalars().all()
     ]
     proj_dict = project_to_dict(project)
-    data = build_report_data(proj_dict, findings, phases, project_id=project_id)
+    organization = await _load_org_branding(db, project)
+    data = build_report_data(proj_dict, findings, phases, project_id=project_id, organization=organization)
     report_data_json = json.dumps(data, default=str)
 
     try:

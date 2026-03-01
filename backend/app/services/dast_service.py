@@ -1226,8 +1226,42 @@ ALL_CHECKS = [
 ]
 
 
-_dast_progress: dict[str, dict] = {}
-_dast_progress_lock = __import__("threading").Lock()
+_redis_sync = None
+_redis_lock = __import__("threading").Lock()
+DAST_PROGRESS_TTL = 3600  # 1 hour
+
+
+def _get_redis_sync():
+    """Sync Redis client for DAST progress — shared across workers."""
+    global _redis_sync
+    if _redis_sync is None:
+        from app.core.config import get_settings
+        import redis as redis_lib
+        _redis_sync = redis_lib.from_url(get_settings().redis_url, decode_responses=True)
+    return _redis_sync
+
+
+def _dast_progress_set(scan_id: str, data: dict) -> None:
+    key = f"dast:scan:{scan_id}"
+    try:
+        r = _get_redis_sync()
+        import json
+        r.setex(key, DAST_PROGRESS_TTL, json.dumps(data, default=str))
+    except Exception as e:
+        logger.warning("DAST progress redis set failed: %s", e)
+
+
+def _dast_progress_get(scan_id: str) -> dict | None:
+    key = f"dast:scan:{scan_id}"
+    try:
+        r = _get_redis_sync()
+        raw = r.get(key)
+        if raw:
+            import json
+            return json.loads(raw)
+    except Exception as e:
+        logger.warning("DAST progress redis get failed: %s", e)
+    return None
 
 
 def run_dast_scan(
@@ -1247,34 +1281,32 @@ def run_dast_scan(
         if on_progress:
             on_progress(index, total, check_name, result_dict)
         if progress_scan_id:
-            with _dast_progress_lock:
-                entry = {
-                    "status": "completed" if index >= total else "running",
-                    "current_index": index,
-                    "current_check": check_name if index < total else None,
-                    "completed_count": index,
-                    "total": total,
-                    "results": results,
-                    "last_updated": time.time(),
-                }
-                if progress_meta:
-                    entry.update(progress_meta)
-                _dast_progress[progress_scan_id] = entry
-
-    # Phase 1: Resolve reachable base URL (slow, evades WAF)
-    if progress_scan_id:
-        with _dast_progress_lock:
             entry = {
-                "status": "running",
-                "current_check": "Resolving target URL...",
-                "completed_count": 0,
+                "status": "completed" if index >= total else "running",
+                "current_index": index,
+                "current_check": check_name if index < total else None,
+                "completed_count": index,
                 "total": total,
-                "results": [],
+                "results": results,
                 "last_updated": time.time(),
             }
             if progress_meta:
                 entry.update(progress_meta)
-            _dast_progress[progress_scan_id] = entry
+            _dast_progress_set(progress_scan_id, entry)
+
+    # Phase 1: Resolve reachable base URL (slow, evades WAF)
+    if progress_scan_id:
+        entry = {
+            "status": "running",
+            "current_check": "Resolving target URL...",
+            "completed_count": 0,
+            "total": total,
+            "results": [],
+            "last_updated": time.time(),
+        }
+        if progress_meta:
+            entry.update(progress_meta)
+        _dast_progress_set(progress_scan_id, entry)
     resolved = _resolve_base_url(target_url)
     effective_url = (resolved or target_url).rstrip("/") or target_url
     _scan_ctx = ScanContext(resolved)
@@ -1283,10 +1315,11 @@ def run_dast_scan(
     try:
         for i, (name, check_fn) in enumerate(selected):
             if progress_scan_id:
-                with _dast_progress_lock:
-                    if progress_scan_id in _dast_progress:
-                        _dast_progress[progress_scan_id]["current_check"] = name
-                        _dast_progress[progress_scan_id]["last_updated"] = time.time()
+                cur = _dast_progress_get(progress_scan_id)
+                if cur:
+                    cur["current_check"] = name
+                    cur["last_updated"] = time.time()
+                    _dast_progress_set(progress_scan_id, cur)
             try:
                 r = check_fn(effective_url)
                 rd = r.to_dict()
@@ -1318,34 +1351,43 @@ def run_dast_scan(
         "results": results,
     }
     if progress_scan_id:
-        with _dast_progress_lock:
-            _dast_progress[progress_scan_id] = {
-                "status": "completed",
-                "current_check": None,
-                "completed_count": total,
-                "total": total,
-                "results": results,
-                "last_updated": time.time(),
-                "target_url": target_url,
-                "passed": passed,
-                "failed": failed,
-                "errors": errors,
-                "duration_seconds": duration,
-            }
+        _dast_progress_set(progress_scan_id, {
+            "status": "completed",
+            "current_check": None,
+            "completed_count": total,
+            "total": total,
+            "results": results,
+            "last_updated": time.time(),
+            "target_url": target_url,
+            "passed": passed,
+            "failed": failed,
+            "errors": errors,
+            "duration_seconds": duration,
+        })
     return final
 
 
 def get_dast_progress(scan_id: str) -> dict | None:
     """Return current progress for a scan. None if unknown."""
-    with _dast_progress_lock:
-        return _dast_progress.get(scan_id)
+    return _dast_progress_get(scan_id)
 
 
 def list_dast_progress(max_age_sec: float = 3600) -> list[dict]:
-    """Return all scans (active + recent) for dashboard. Evict entries older than max_age_sec."""
-    now = time.time()
-    with _dast_progress_lock:
-        expired = [sid for sid, v in _dast_progress.items() if isinstance(v, dict) and (now - v.get("last_updated", 0)) > max_age_sec]
-        for sid in expired:
-            del _dast_progress[sid]
-        return [{"scan_id": sid, **(v if isinstance(v, dict) else {})} for sid, v in _dast_progress.items()]
+    """Return all scans (active + recent) for dashboard."""
+    try:
+        r = _get_redis_sync()
+        keys = r.keys("dast:scan:*")
+        out = []
+        now = time.time()
+        for key in keys or []:
+            raw = r.get(key)
+            if raw:
+                import json
+                v = json.loads(raw)
+                if isinstance(v, dict) and (now - v.get("last_updated", 0)) <= max_age_sec:
+                    sid = key.replace("dast:scan:", "")
+                    out.append({"scan_id": sid, **v})
+        return out
+    except Exception as e:
+        logger.warning("list_dast_progress failed: %s", e)
+        return []

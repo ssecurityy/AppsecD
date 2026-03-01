@@ -54,10 +54,43 @@ export default function DastScanPage() {
         setAvailableChecks(r.checks || []);
         setSelectedChecks((r.checks || []).map((c: any) => c.id));
       }).catch(() => {});
-      try {
-        const saved = localStorage.getItem(`dast_result_${id}`);
-        if (saved) setScanResult(JSON.parse(saved));
-      } catch {}
+      // Load latest from DB (scan ran in background, user returned). Fallback to localStorage.
+      api.dastProjectLatest(id as string).then((r: any) => {
+        setScanResult(r);
+        try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(r)); } catch {}
+      }).catch(() => {
+        try {
+          const saved = localStorage.getItem(`dast_result_${id}`);
+          if (saved) setScanResult(JSON.parse(saved));
+        } catch {}
+      });
+      // If a scan is still running for this project, resume polling
+      api.dastScans().then((r: any) => {
+        const active = (r?.scans ?? []).find((s: any) => s.project_id === id && s.status === "running");
+        if (active?.scan_id) {
+          setScanning(true);
+          setScanId(active.scan_id);
+          setScanProgress(active);
+          const res = { scan_id: active.scan_id };
+          const poll = async () => {
+            try {
+              const prog = await api.dastScanProgress(res.scan_id) as any;
+              setScanProgress(prog);
+              if (prog?.status === "completed") {
+                setScanning(false);
+                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+                const result = { target_url: prog.target_url || active.target_url, total_checks: prog.results?.length ?? 0, passed: prog.passed ?? 0, failed: prog.failed ?? 0, errors: prog.errors ?? 0, duration_seconds: prog.duration_seconds ?? 0, results: prog.results ?? [], findings_created: prog.findings_created ?? 0, finding_titles: prog.finding_titles ?? [] };
+                setScanResult(result);
+                setInitialExpandDone(false);
+                try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(result)); } catch {}
+                toast.success(prog.failed === 0 ? "All checks passed!" : `Scan complete: ${prog.failed} issue(s) found`);
+              }
+            } catch (_) {}
+          };
+          poll();
+          pollRef.current = setInterval(poll, 1500);
+        }
+      }).catch(() => {});
     }
   }, [id]);
 

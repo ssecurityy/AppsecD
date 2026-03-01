@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.api.auth import get_current_user
+from app.services.project_permissions import user_can_read_project
 from app.core.database import get_db, AsyncSessionLocal
 from app.models.project import Project
 from app.models.finding import Finding
+from app.models.dast_scan_result import DastScanResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ async def _run_scan_background(
     user_id: uuid.UUID,
 ):
     """Run DAST scan in thread, update progress, create findings when done."""
-    from app.services.dast_service import run_dast_scan, _dast_progress, _dast_progress_lock
+    from app.services.dast_service import run_dast_scan, _dast_progress_get, _dast_progress_set
 
     try:
         result = await asyncio.to_thread(
@@ -48,25 +50,38 @@ async def _run_scan_background(
         )
     except Exception as e:
         logger.exception("DAST scan %s failed", scan_id)
-        with _dast_progress_lock:
-            _dast_progress[scan_id] = {
+        from app.services.dast_service import _dast_progress_set
+        _dast_progress_set(scan_id, {
                 "project_id": project_id,
                 "target_url": target_url,
                 "status": "error",
                 "error": str(e),
                 "results": [],
                 "last_updated": __import__("time").time(),
-            }
+            })
         return
 
     findings_created = []
+    project_uuid = uuid.UUID(project_id)
     async with AsyncSessionLocal() as db:
         try:
             for check in result["results"]:
+                title = f"[DAST] {check['title']}"
                 if check["status"] == "failed":
+                    # Deduplicate: skip if same finding already exists (open/confirmed)
+                    existing = await db.execute(
+                        select(Finding).where(
+                            Finding.project_id == project_uuid,
+                            Finding.title == title,
+                            Finding.affected_url == target_url,
+                            Finding.status.in_(["open", "confirmed"]),
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        continue
                     finding = Finding(
-                        project_id=uuid.UUID(project_id),
-                        title=f"[DAST] {check['title']}",
+                        project_id=project_uuid,
+                        title=title,
                         description=check["description"],
                         severity=check.get("severity", "medium"),
                         cwe_id=check.get("cwe_id", ""),
@@ -86,15 +101,55 @@ async def _run_scan_background(
                         finding.response = check["response_raw"]
                     db.add(finding)
                     findings_created.append(check["title"])
+                elif check["status"] == "passed":
+                    # Auto-close: if this check now passes, close related open findings for same target
+                    from datetime import datetime
+                    existing = await db.execute(
+                        select(Finding).where(
+                            Finding.project_id == project_uuid,
+                            Finding.title == title,
+                            Finding.affected_url == target_url,
+                            Finding.status.in_(["open", "confirmed"]),
+                        )
+                    )
+                    for f in existing.scalars().all():
+                        f.status = "fixed"
+                        f.recheck_status = "resolved"
+                        f.recheck_notes = "DAST scan passed — vulnerability no longer detected"
+                        f.recheck_date = datetime.utcnow()
+                        f.recheck_by = user_id
             await db.commit()
         except Exception as e:
             logger.exception("DAST findings creation failed for %s", scan_id)
             await db.rollback()
 
-    with _dast_progress_lock:
-        if scan_id in _dast_progress:
-            _dast_progress[scan_id]["findings_created"] = len(findings_created)
-            _dast_progress[scan_id]["finding_titles"] = findings_created
+        # Persist scan result to DB (survives tab close, refresh, offline)
+        try:
+            scan_record = DastScanResult(
+                project_id=project_uuid,
+                scan_id=scan_id,
+                target_url=target_url,
+                status="completed",
+                results=result["results"],
+                passed=result["passed"],
+                failed=result["failed"],
+                errors_count=result["errors"],
+                duration_seconds=int(result.get("duration_seconds", 0) or 0),
+                findings_created=len(findings_created),
+                finding_titles=findings_created,
+                created_by=user_id,
+            )
+            db.add(scan_record)
+            await db.commit()
+        except Exception as e:
+            logger.warning("DAST scan result persist failed: %s", e)
+            await db.rollback()
+
+    cur = _dast_progress_get(scan_id)
+    if cur:
+        cur["findings_created"] = len(findings_created)
+        cur["finding_titles"] = findings_created
+        _dast_progress_set(scan_id, cur)
 
 
 @router.post("/scan")
@@ -115,6 +170,19 @@ async def run_scan(
         raise HTTPException(400, "No target URL configured for this project")
 
     scan_id = str(uuid.uuid4())
+    # Seed progress in Redis immediately so first poll finds it (multi-worker safe)
+    from app.services.dast_service import _dast_progress_set, ALL_CHECKS
+    total = len(ALL_CHECKS) if not payload.checks else len(payload.checks)
+    _dast_progress_set(scan_id, {
+        "status": "running",
+        "current_check": "Starting...",
+        "completed_count": 0,
+        "total": total,
+        "results": [],
+        "last_updated": __import__("time").time(),
+        "project_id": payload.project_id,
+        "target_url": target_url,
+    })
     background_tasks.add_task(
         _run_scan_background,
         scan_id,
@@ -124,6 +192,39 @@ async def run_scan(
         current_user.id,
     )
     return {"scan_id": scan_id, "project_id": payload.project_id, "target_url": target_url}
+
+
+@router.get("/project/{project_id}/latest")
+async def get_latest_scan(
+    project_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent completed DAST scan for this project. Used when user returns after scan ran in background."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied to this project")
+    from sqlalchemy import desc
+    r = await db.execute(
+        select(DastScanResult)
+        .where(DastScanResult.project_id == uuid.UUID(project_id), DastScanResult.status == "completed")
+        .order_by(desc(DastScanResult.created_at))
+        .limit(1)
+    )
+    row = r.scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, "No completed DAST scan found for this project")
+    return {
+        "target_url": row.target_url,
+        "total_checks": len(row.results or []),
+        "passed": row.passed,
+        "failed": row.failed,
+        "errors": row.errors_count,
+        "duration_seconds": row.duration_seconds,
+        "results": row.results or [],
+        "findings_created": row.findings_created or 0,
+        "finding_titles": row.finding_titles or [],
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 @router.get("/scans")

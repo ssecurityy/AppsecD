@@ -184,15 +184,26 @@ export default function NewProject() {
                             const res = await api.detectTech(info.application_url);
                             if (res.stack_profile && res._detected) {
                               const sp = res.stack_profile;
-                              const all = [...(sp.frontend || []), ...(sp.backend || []), ...(sp.cms || []), ...(sp.api || []), ...(sp.waf || [])].slice(0, 8);
+                              const all = [...(sp.frontend || []), ...(sp.backend || []), ...(sp.cms || []), ...(sp.api || []), ...(sp.waf || []), ...(sp.server || [])].slice(0, 10);
                               setStack(prev => ({
                                 ...prev,
                                 frontend: Array.from(new Set([...prev.frontend, ...(sp.frontend || [])])),
                                 backend: Array.from(new Set([...prev.backend, ...(sp.backend || [])])),
+                                database: Array.from(new Set([...prev.database, ...(sp.database || [])])),
                                 cms: sp.cms?.length ? (sp.cms[0] || "none") : prev.cms,
                                 api_type: Array.from(new Set([...prev.api_type, ...(sp.api || []).map((a: string) => a.toLowerCase())])),
                               }));
-                              toast.success(`Detected: ${all.join(", ") || "tech stack"}`);
+                              const pf = res.prefilled || {};
+                              if (Object.keys(pf).length) {
+                                setInfo(prev => ({
+                                  ...prev,
+                                  application_name: pf.application_name || prev.application_name,
+                                  environment: pf.environment || prev.environment,
+                                  testing_type: pf.testing_type || prev.testing_type,
+                                  testing_scope: pf.testing_scope || prev.testing_scope,
+                                }));
+                              }
+                              toast.success(`Detected: ${all.join(", ") || "tech stack"}${pf.application_name ? ` • Pre-filled fields` : ""}`);
                             } else {
                               toast.error(res._error || "Could not detect technology");
                             }

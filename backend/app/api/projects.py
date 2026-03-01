@@ -75,8 +75,14 @@ async def detect_technology(
     if not url:
         return {"stack_profile": {}, "_error": "URL required", "_detected": False}
     result = _detect(url)
-    stack_profile = {k: v for k, v in result.items() if not k.startswith("_")}
-    return {"stack_profile": stack_profile, "_detected": result.get("_detected", False), "_error": result.get("_error")}
+    stack_profile = {k: v for k, v in result.items() if k != "prefilled" and not k.startswith("_")}
+    prefilled = result.get("prefilled") or {}
+    return {
+        "stack_profile": stack_profile,
+        "prefilled": prefilled,
+        "_detected": result.get("_detected", False),
+        "_error": result.get("_error"),
+    }
 
 
 @router.post("", response_model=dict)

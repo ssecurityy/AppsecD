@@ -13,6 +13,7 @@ from .admin_setting import AdminSetting
 from .org_setting import OrgSetting
 from .stored_cve import StoredCVE
 from .org_feature_flag import OrgFeatureFlag
+from .dast_scan_result import DastScanResult
 
 __all__ = [
     "User", "Project", "Organization", "Category", "TestCase", "ProjectTestResult",
@@ -23,4 +24,5 @@ __all__ = [
     "OrgSetting",
     "StoredCVE",
     "OrgFeatureFlag",
+    "DastScanResult",
 ]

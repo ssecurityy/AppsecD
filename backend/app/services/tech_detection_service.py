@@ -152,10 +152,53 @@ def _detect_waf(resp: httpx.Response) -> list[str]:
     return detected
 
 
+def _extract_prefilled(url: str, resp: "httpx.Response", stack: dict) -> dict:
+    """Extract suggested values for project onboarding from URL and response."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    body = (resp.text or "")[:50000]
+    prefilled = {}
+
+    # Application name from <title> tag
+    title_match = re.search(r"<title[^>]*>([^<]+)</title>", body, re.I | re.S)
+    if title_match:
+        title = re.sub(r"\s+", " ", title_match.group(1).strip())[:80]
+        if title and len(title) > 2:
+            prefilled["application_name"] = title
+
+    # Fallback: derive from host (e.g. app.example.com -> Example App, demo.acme.io -> Acme Demo)
+    if not prefilled.get("application_name") and host:
+        parts = host.replace("www.", "").split(".")[:-1]  # drop TLD
+        if parts:
+            name = " ".join(p.title() for p in parts if len(p) > 1)
+            if name:
+                prefilled["application_name"] = name
+
+    # Environment from URL hints
+    if "staging" in host or "stg" in host or "stage" in host or "uat" in host:
+        prefilled["environment"] = "staging"
+    elif "dev" in host or "test" in host or "demo" in host:
+        prefilled["environment"] = "development"
+    elif "prod" in host or "app" in host or "www" in host:
+        prefilled["environment"] = "production"
+    else:
+        prefilled["environment"] = "staging"
+
+    # Testing type default
+    prefilled["testing_type"] = "grey_box"
+
+    # Testing scope default from URL
+    prefilled["testing_scope"] = f"In-scope: {url}\nOut-of-scope: Third-party systems, partner integrations."
+
+    return prefilled
+
+
 def detect_technology(url: str) -> dict:
     """
     World-class technology detection. Returns stack_profile with
     frontend, backend, server, cms, api, waf, analytics, and raw detections.
+    Plus prefilled suggested values for project onboarding.
     """
     if not url or not url.strip():
         return {}
@@ -163,7 +206,7 @@ def detect_technology(url: str) -> dict:
     if not url.startswith("http"):
         url = f"https://{url}"
 
-    resp, _ = _try_urls(url)
+    resp, effective_url = _try_urls(url)
     if not resp:
         return {"_error": "Could not reach URL", "_detected": False}
 
@@ -194,8 +237,14 @@ def detect_technology(url: str) -> dict:
             continue
         v_clean = v.split("/")[0].strip()[:100]
         result["raw_headers"][h] = v_clean
-        if cat == "server" and v_clean not in result["server"]:
-            result["server"].append(v_clean)
+        if cat == "server" and v_clean:
+            for srv in ["nginx", "Apache", "IIS", "Cloudflare", "LiteSpeed", "Caddy", "OpenResty"]:
+                if srv.lower() in v_clean.lower() and srv not in result["server"]:
+                    result["server"].append(srv)
+                    break
+            else:
+                if v_clean not in result["server"] and len(v_clean) < 50:
+                    result["server"].append(v_clean)
         elif cat == "backend" and tech_name and tech_name not in result["backend"]:
             result["backend"].append(tech_name)
         elif cat == "backend" and not tech_name:
@@ -263,6 +312,10 @@ def detect_technology(url: str) -> dict:
     for k in list(result.keys()):
         if isinstance(result[k], list) and not result[k]:
             del result[k]
+
+    # Add prefilled suggestions for project onboarding
+    result["prefilled"] = _extract_prefilled(effective_url or url, resp, result)
+
     return result
 
 

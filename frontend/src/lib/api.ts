@@ -394,6 +394,8 @@ export const api = {
     request("/dast/scan", { method: "POST", body: JSON.stringify(data) }),
   dastScanProgress: (scanId: string) =>
     request(`/dast/scan/${scanId}`, { method: "GET" }),
+  dastProjectLatest: (projectId: string) =>
+    request(`/dast/project/${projectId}/latest`, { method: "GET" }),
   dastScans: () => request("/dast/scans", { method: "GET" }),
   dastCheck: (data: { target_url: string; check: string }) =>
     request("/dast/check", { method: "POST", body: JSON.stringify(data) }),

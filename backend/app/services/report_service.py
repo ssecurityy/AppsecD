@@ -79,7 +79,7 @@ def _evidence_to_base64(project_id: str, evidence_item: dict) -> str | None:
         return None
 
 
-def build_report_data(project: dict, findings: list, phases: list, project_id: str = "") -> dict:
+def build_report_data(project: dict, findings: list, phases: list, project_id: str = "", organization: dict | None = None) -> dict:
     """Build structured report data with evidence."""
     risk = _risk_score(project, findings)
     coverage = _coverage_pct(project)
@@ -97,8 +97,10 @@ def build_report_data(project: dict, findings: list, phases: list, project_id: s
     sorted_findings = sorted(findings, key=lambda x: _severity_order(x.get("severity", "")))
     for f in sorted_findings:
         f["compliance"] = get_compliance_mapping(cwe_id=f.get("cwe_id"), owasp_category=f.get("owasp_category"))
+    org = organization or {"name": "AppSecD", "logo_base64": None, "brand_color": "#2563eb"}
     return {
         "project": project,
+        "organization": org,
         "findings": sorted_findings,
         "phases": phases,
         "project_id": project_id,
@@ -122,6 +124,10 @@ def _html_escape(s: str) -> str:
 def generate_html(data: dict) -> str:
     """Generate Big 4 style professional HTML report with screenshots."""
     p = data["project"]
+    org = data.get("organization") or {"name": "AppSecD", "logo_base64": None, "brand_color": "#2563eb"}
+    org_name = org.get("name") or "AppSecD"
+    org_logo = org.get("logo_base64")
+    org_color = org.get("brand_color") or "#2563eb"
     findings = data["findings"]
     risk = data["risk_score"]
     risk_level = data.get("risk_level", "Medium")
@@ -198,6 +204,19 @@ def generate_html(data: dict) -> str:
     ]
     for fw_name, fw_desc, fw_status in frameworks:
         compliance_rows += f'<tr><td><strong>{fw_name}</strong></td><td>{fw_desc}</td><td><span class="compliance-mapped">{fw_status}</span></td></tr>'
+
+    # Build findings trend by date
+    from collections import defaultdict
+    trend_by_date = defaultdict(int)
+    for f in findings:
+        ca = f.get("created_at")
+        if ca and len(ca) >= 10:
+            trend_by_date[ca[:10]] += 1
+    trend_dates = sorted(trend_by_date.keys())
+    trend_counts = [trend_by_date[d] for d in trend_dates]
+    if not trend_dates and findings:
+        trend_dates = [gen[:10]]
+        trend_counts = [len(findings)]
 
     # Build CWE detail rows for the CWE mapping table
     cwe_detail_rows = ""
@@ -1022,9 +1041,11 @@ def generate_html(data: dict) -> str:
          Cover Page
          ============================================================ -->
     <div class="cover-page">
-        <div class="cover-logo">AppSecD</div>
+        <div class="cover-logo-area">
+            {f'<img src="{org_logo}" alt="{_html_escape(org_name)}" class="cover-logo-img" style="max-height:60px;max-width:200px;object-fit:contain;" />' if org_logo else f'<div class="cover-logo">{_html_escape(org_name)}</div>'}
+        </div>
         <h1 class="cover-title">Application Security<br>Assessment Report</h1>
-        <p class="cover-subtitle">{_html_escape(p.get('application_name', ''))}</p>
+        <p class="cover-subtitle">{_html_escape(p.get('application_name', '') or p.get('name', ''))}</p>
         <div class="cover-meta">
             <div class="cover-meta-item">
                 <span class="cover-meta-label">Version</span>
@@ -1065,7 +1086,11 @@ def generate_html(data: dict) -> str:
                 </div>
                 <div class="doc-control-item">
                     <div class="doc-control-label">Prepared By</div>
-                    <div class="doc-control-value">AppSecD Platform</div>
+                    <div class="doc-control-value">{_html_escape(org_name)}</div>
+                </div>
+                <div class="doc-control-item">
+                    <div class="doc-control-label">Project</div>
+                    <div class="doc-control-value">{_html_escape(p.get('name', '') or p.get('application_name', ''))}</div>
                 </div>
             </div>
 
@@ -1227,6 +1252,18 @@ def generate_html(data: dict) -> str:
                         <canvas id="owaspChart" width="350" height="250"></canvas>
                     </div>
                 </div>
+                <div class="chart-card">
+                    <div class="chart-card-title">CWE Distribution</div>
+                    <div class="chart-container">
+                        <canvas id="cweChart" width="350" height="250"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <div class="chart-card-title">Findings Trend Over Time</div>
+                    <div class="chart-container">
+                        <canvas id="trendChart" width="400" height="220"></canvas>
+                    </div>
+                </div>
             </div>
             <script>
             document.addEventListener('DOMContentLoaded', function() {{
@@ -1244,6 +1281,23 @@ def generate_html(data: dict) -> str:
                         type: 'bar',
                         data: {{ labels: owaspData.map(d => d.label), datasets: [{{ label: 'Count', data: owaspData.map(d => d.value), backgroundColor: 'rgba(30,58,95,0.85)', borderRadius: 6, borderSkipped: false }}] }},
                         options: {{ indexAxis: 'y', responsive: true, plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ grid: {{ display: false }}, ticks: {{ stepSize: 1 }} }}, y: {{ grid: {{ display: false }} }} }} }}
+                    }});
+                }}
+                var cweData = {json.dumps([{"label": k[:20] if len(str(k)) > 20 else k, "value": v} for k, v in list(cwe.items())[:10] if str(k) != "N/A"])};
+                if (cweData.length) {{
+                    new Chart(document.getElementById('cweChart'), {{
+                        type: 'bar',
+                        data: {{ labels: cweData.map(d => d.label), datasets: [{{ label: 'Count', data: cweData.map(d => d.value), backgroundColor: 'rgba(22,163,74,0.75)', borderRadius: 6 }}] }},
+                        options: {{ indexAxis: 'y', responsive: true, plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ ticks: {{ stepSize: 1 }} }}, y: {{ grid: {{ display: false }} }} }} }}
+                    }});
+                }}
+                var trendLabels = {json.dumps(trend_dates)};
+                var trendValues = {json.dumps(trend_counts)};
+                if (trendLabels.length && document.getElementById('trendChart')) {{
+                    new Chart(document.getElementById('trendChart'), {{
+                        type: 'line',
+                        data: {{ labels: trendLabels, datasets: [{{ label: 'Findings', data: trendValues, borderColor: '#1e3a5f', backgroundColor: 'rgba(37,99,235,0.1)', fill: true, tension: 0.3, pointRadius: 4 }}] }},
+                        options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }}, scales: {{ y: {{ beginAtZero: true, ticks: {{ stepSize: 1 }} }} }} }}
                     }});
                 }}
             }});
@@ -1414,7 +1468,7 @@ def generate_html(data: dict) -> str:
                 are protected under applicable confidentiality agreements and information security policies.
             </div>
             <div class="footer-meta">
-                <span>Report generated by AppSecD Platform</span>
+                <span>Report generated by {_html_escape(org_name)}</span>
                 <span>{gen}</span>
                 <span>Classification: {_html_escape(p.get('classification') or 'Confidential')}</span>
             </div>
@@ -1430,6 +1484,8 @@ def generate_html(data: dict) -> str:
 
 def generate_docx(data: dict) -> bytes:
     """Generate Big 4 style professional DOCX report with embedded screenshots."""
+    org = data.get("organization") or {"name": "AppSecD", "logo_base64": None}
+    org_name = org.get("name") or "AppSecD"
     from docx.shared import RGBColor, Cm
     from docx.oxml.ns import qn, nsdecls
     from docx.oxml import parse_xml
@@ -1546,7 +1602,7 @@ def generate_docx(data: dict) -> bytes:
     # Brand name
     brand = doc.add_paragraph()
     brand.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = brand.add_run("APPSEC D")
+    run = brand.add_run(org_name.upper())
     run.font.size = Pt(11)
     run.font.color.rgb = RGBColor.from_string(primary_light)
     run.font.name = "Calibri"
@@ -1565,7 +1621,7 @@ def generate_docx(data: dict) -> bytes:
     # Subtitle (application name)
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run(p.get("application_name", ""))
+    run = subtitle.add_run(p.get("application_name", "") or p.get("name", ""))
     run.font.size = Pt(16)
     run.font.color.rgb = RGBColor.from_string(primary_light)
     run.font.name = "Calibri"
@@ -2016,7 +2072,7 @@ def generate_docx(data: dict) -> bytes:
 
     doc.add_paragraph()
     footer_para = doc.add_paragraph()
-    run = footer_para.add_run(f"Report generated by AppSecD Platform at {gen}")
+    run = footer_para.add_run(f"Report generated by {org_name} at {gen}")
     run.font.size = Pt(9)
     run.font.color.rgb = RGBColor.from_string("718096")
     run.font.name = "Calibri"
@@ -2039,6 +2095,8 @@ def generate_pdf(data: dict) -> bytes:
     """Generate Big 4 style professional PDF report with embedded screenshots."""
     if not FPDF:
         raise RuntimeError("fpdf2 not installed")
+    org = data.get("organization") or {"name": "AppSecD"}
+    org_name = org.get("name") or "AppSecD"
     p = data["project"]
     findings = data["findings"]
     risk = data["risk_score"]
@@ -2077,7 +2135,7 @@ def generate_pdf(data: dict) -> bytes:
             self.ln(6)
             self.set_font("Helvetica", "B", 9)
             self.set_text_color(*primary_color)
-            self.cell(95, 5, "AppSecD Security Assessment Report", ln=0, align="L")
+            self.cell(95, 5, f"{org_name} Security Assessment Report", ln=0, align="L")
             self.set_font("Helvetica", "", 8)
             self.set_text_color(100, 100, 100)
             self.cell(95, 5, f"{p.get('application_name', '')} | {p.get('classification') or 'Confidential'}", ln=True, align="R")
@@ -2093,7 +2151,7 @@ def generate_pdf(data: dict) -> bytes:
             self.ln(2)
             self.set_font("Helvetica", "", 7)
             self.set_text_color(120, 120, 120)
-            self.cell(95, 5, f"Generated: {gen[:10]} | AppSecD Platform", ln=0, align="L")
+            self.cell(95, 5, f"Generated: {gen[:10]} | {org_name}", ln=0, align="L")
             self.cell(95, 5, f"Page {self.page_no()}/{{nb}} | Confidential", ln=True, align="R")
             self.set_text_color(0, 0, 0)
 
