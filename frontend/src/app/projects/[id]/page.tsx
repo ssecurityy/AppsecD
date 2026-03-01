@@ -478,6 +478,38 @@ export default function ProjectDetail() {
     if (selectedPhase) loadTestCases(selectedPhase);
   }, [selectedPhase, id]);
 
+  // WebSocket for real-time updates
+  useEffect(() => {
+    if (!id || !token) return;
+    const wsBase = getApiBase().replace(/^http/, 'ws');
+    const ws = new WebSocket(`${wsBase}/ws/project/${id}?token=${token}`);
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "test_updated" || msg.type === "finding_created" || msg.type === "finding_updated" || msg.type === "progress_update") {
+          loadData();
+          loadFindings();
+          if (selectedPhaseRef.current) loadTestCases(selectedPhaseRef.current);
+        }
+      } catch {}
+    };
+
+    ws.onclose = () => {};
+    ws.onerror = () => {};
+
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 30000);
+
+    return () => {
+      clearInterval(pingInterval);
+      ws.close();
+    };
+  }, [id, token]);
+
   const handleUpdate = async () => {
     await loadData();
     if (selectedPhase) await loadTestCases(selectedPhase);
@@ -550,6 +582,39 @@ export default function ProjectDetail() {
     } finally {
       setImporting(false);
       e.target.value = "";
+    }
+  };
+
+  const handleAsyncDownload = async (format: "docx" | "pdf") => {
+    try {
+      toast.loading(`Generating ${format.toUpperCase()} report...`, { id: "async-report" });
+      const { task_id } = await api.startAsyncReport(id as string, format);
+      setAsyncReportTask(task_id);
+      setAsyncReportFormat(format);
+
+      const poll = async () => {
+        try {
+          const result = await api.getAsyncReportStatus(id as string, task_id);
+          if (result.status === "ready" && result.blob) {
+            const url = URL.createObjectURL(result.blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `VAPT_Report.${format}`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast.success(`${format.toUpperCase()} report downloaded!`, { id: "async-report" });
+            setAsyncReportTask(null);
+          } else {
+            setTimeout(poll, 2000);
+          }
+        } catch {
+          toast.error("Report generation failed", { id: "async-report" });
+          setAsyncReportTask(null);
+        }
+      };
+      setTimeout(poll, 2000);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to start report generation", { id: "async-report" });
     }
   };
 
@@ -668,6 +733,17 @@ export default function ProjectDetail() {
                         className="w-full text-left px-3 py-2 text-sm text-[#D1D5DB] hover:bg-[#1F2937] hover:text-white transition-colors"
                       >
                         Download {fmt.toUpperCase()}
+                      </button>
+                    ))}
+                    <div className="border-t border-[#1F2937] my-1" />
+                    {(["docx", "pdf"] as const).map((fmt) => (
+                      <button
+                        key={`async-${fmt}`}
+                        disabled={!!asyncReportTask}
+                        onClick={() => handleAsyncDownload(fmt)}
+                        className="w-full text-left px-3 py-2 text-sm text-[#9CA3AF] hover:bg-[#1F2937] hover:text-white transition-colors disabled:opacity-50"
+                      >
+                        {asyncReportTask && asyncReportFormat === fmt ? "Generating..." : `${fmt.toUpperCase()} (Async)`}
                       </button>
                     ))}
                   </div>

@@ -245,8 +245,8 @@ async def update_result(
     try:
         from app.api.websocket import get_manager
         mgr = get_manager()
-        if str(ptr.project_id) in mgr.active:
-            await mgr.broadcast(str(ptr.project_id), {"type": "progress_update", "result_id": str(ptr.id), "status": ptr.status})
+        await mgr.broadcast(str(ptr.project_id), {"type": "test_updated", "result_id": str(ptr.id), "status": ptr.status})
+        await mgr.broadcast(str(ptr.project_id), {"type": "progress_update", "result_id": str(ptr.id), "status": ptr.status})
     except Exception:
         pass
     return {

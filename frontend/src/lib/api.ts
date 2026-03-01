@@ -123,6 +123,23 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
+  startAsyncReport: (projectId: string, format: string) =>
+    request(`/projects/${projectId}/report/async?format=${format}`, { method: "POST" }),
+  getAsyncReportStatus: async (projectId: string, taskId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/projects/${projectId}/report/async/${taskId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 202) {
+      return { status: "pending" };
+    }
+    if (res.ok) {
+      const blob = await res.blob();
+      return { status: "ready", blob };
+    }
+    throw new Error("Failed to get report status");
+  },
+
   // Test Cases (paginated for 1000+ tests)
   getProjectTestCases: (projectId: string, phase?: string, limit?: number, offset?: number) => {
     const params = new URLSearchParams();

@@ -116,6 +116,12 @@ async def create_finding(
     await log_audit(db, "create_finding", user_id=str(current_user.id), resource_type="finding", resource_id=str(finding.id), details={"project_id": str(payload.project_id), "severity": payload.severity})
     await db.commit()
     await db.refresh(finding)
+    try:
+        from app.api.websocket import get_manager
+        manager = get_manager()
+        await manager.broadcast(str(finding.project_id), {"type": "finding_created", "finding_id": str(finding.id)})
+    except Exception:
+        pass
     return {**f_to_dict(finding), "xp_earned": xp, "badges_earned": new_badges}
 
 
@@ -161,6 +167,12 @@ async def update_finding(
     finding.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(finding)
+    try:
+        from app.api.websocket import get_manager
+        manager = get_manager()
+        await manager.broadcast(str(finding.project_id), {"type": "finding_updated", "finding_id": str(finding.id)})
+    except Exception:
+        pass
     return f_to_dict(finding)
 
 
