@@ -46,6 +46,16 @@ DAST_CHECK_TO_PHASE = {
     "DAST-FORM-01": "auth",      # Autocomplete
     "DAST-BACKUP-01": "recon",   # Backup files
     "DAST-DIR-02": "recon",      # Path discovery
+    "DAST-SECTXT-01": "recon",   # security.txt
+    "DAST-REDIR-02": "transport", # HTTP→HTTPS redirect
+    "DAST-HSTS-01": "transport",  # HSTS preload
+    "DAST-VER-01": "recon",      # Version headers
+    "DAST-COOP-01": "pre_auth",  # COOP/COEP
+    "DAST-REF-01": "pre_auth",   # Weak Referrer-Policy
+    "DAST-DEBUG-01": "recon",    # Debug/stack trace
+    "DAST-ENV-01": "recon",      # .env/.git exposure
+    "DAST-CT-01": "pre_auth",    # Content-Type sniffing
+    "DAST-FRAME-01": "pre_auth", # Clickjacking
 }
 from datetime import datetime, date
 import uuid

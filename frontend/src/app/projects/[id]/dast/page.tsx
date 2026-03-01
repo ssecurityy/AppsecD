@@ -24,6 +24,9 @@ const CHECK_ICONS: Record<string, any> = {
   api_docs_exposure: BookOpen, host_header_injection: Layers, crlf_injection: Wrench,
   sensitive_data: HardDrive, sri: Shield, cache_control: Clock,
   form_autocomplete: FormInput, backup_files: FileText, directory_discovery: Folder, dir: Folder,
+  security_txt: FileText, http_redirect_https: ExternalLink, hsts_preload: Lock,
+  version_headers: Server, coop_coep: Shield, weak_referrer: Globe, debug_response: Wrench,
+  dotenv_git: HardDrive, content_type_sniffing: Code, clickjacking: Shield,
 };
 
 const SEVERITY_COLORS: Record<string, string> = {

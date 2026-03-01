@@ -1199,6 +1199,411 @@ def check_directory_discovery(target_url: str) -> DastResult:
     return result
 
 
+# ─── Check 22: Security.txt (RFC 9116) ───
+
+def check_security_txt(target_url: str) -> DastResult:
+    """Verify presence and format of /.well-known/security.txt for coordinated disclosure."""
+    result = DastResult(
+        check_id="DAST-SECTXT-01",
+        title="Security.txt (RFC 9116)",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    parsed = urlparse(target_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    url = urljoin(base, "/.well-known/security.txt")
+    resp = _safe_get(url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    body = (resp.text or "").strip()
+    if resp.status_code == 404:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "security.txt not found at /.well-known/security.txt"
+        result.remediation = "Add /.well-known/security.txt per RFC 9116 with Contact, Expires, and optional Canonical"
+        result.reproduction_steps = f"1. GET {url}\n2. Received 404"
+    elif resp.status_code != 200:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"security.txt returned {resp.status_code}"
+        result.remediation = "Ensure /.well-known/security.txt returns 200 OK"
+    else:
+        has_contact = "contact:" in body.lower() or "mailto:" in body.lower()
+        if not has_contact:
+            result.status = "failed"
+            result.severity = "low"
+            result.description = "security.txt exists but missing required Contact field"
+            result.remediation = "Add Contact field per RFC 9116 (e.g., Contact: mailto:security@example.com)"
+        else:
+            result.status = "passed"
+            result.description = "security.txt present and valid (contains Contact)"
+    result.request_raw = f"GET {url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (body[:1500] if body else "")
+    result.details = {"url": url, "status_code": resp.status_code}
+    return result
+
+
+# ─── Check 23: HTTP to HTTPS Redirect ───
+
+def check_http_redirect_https(target_url: str) -> DastResult:
+    """Verify HTTP requests redirect to HTTPS."""
+    result = DastResult(
+        check_id="DAST-REDIR-02",
+        title="HTTP to HTTPS Redirect",
+        owasp_ref="A02:2021",
+        cwe_id="CWE-319",
+    )
+    parsed = urlparse(target_url)
+    if parsed.scheme != "https":
+        result.status = "passed"
+        result.description = "Target is HTTP-only; redirect check N/A"
+        result.details = {"reason": "target_not_https"}
+        return result
+    http_url = f"http://{parsed.netloc}{parsed.path or '/'}{parsed.query and '?' + parsed.query or ''}"
+    resp = _safe_request("GET", http_url)  # Do not follow redirects - we need to see 301/302
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach HTTP endpoint"
+        return result
+    if resp.status_code in (301, 302, 307, 308):
+        loc = resp.headers.get("location", "")
+        if loc.lower().startswith("https://"):
+            result.status = "passed"
+            result.description = "HTTP redirects to HTTPS"
+            result.details = {"redirect_to": loc[:100]}
+        else:
+            result.status = "failed"
+            result.severity = "high"
+            result.description = f"HTTP redirects to non-HTTPS: {loc[:80]}"
+            result.remediation = "Ensure HTTP redirects to HTTPS (301/302 Location: https://...)"
+            result.reproduction_steps = f"1. GET {http_url}\n2. Observe Location: {loc[:100]}"
+    else:
+        result.status = "failed"
+        result.severity = "high"
+        result.description = f"HTTP does not redirect to HTTPS (status {resp.status_code})"
+        result.remediation = "Configure HTTP to redirect (301/302) to HTTPS"
+        result.reproduction_steps = f"1. GET {http_url}\n2. Received {resp.status_code} instead of redirect"
+    result.request_raw = f"GET {http_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n"
+    result.evidence = resp.headers.get("location", "No Location header")
+    return result
+
+
+# ─── Check 24: HSTS Preload Readiness ───
+
+def check_hsts_preload(target_url: str) -> DastResult:
+    """Check HSTS header is preload-ready (max-age>=31536000, includeSubDomains, preload)."""
+    result = DastResult(
+        check_id="DAST-HSTS-01",
+        title="HSTS Preload Readiness",
+        owasp_ref="A02:2021",
+        cwe_id="CWE-319",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    parsed = urlparse(target_url)
+    if parsed.scheme != "https":
+        result.status = "passed"
+        result.description = "Target is HTTP; HSTS N/A"
+        result.details = {"reason": "http_target"}
+        return result
+    hsts = resp.headers.get("strict-transport-security", resp.headers.get("Strict-Transport-Security", ""))
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not hsts:
+        result.status = "failed"
+        result.severity = "medium"
+        result.description = "HSTS header missing"
+        result.remediation = "Add Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
+        result.reproduction_steps = f"1. GET {target_url}\n2. Check response headers for Strict-Transport-Security"
+    else:
+        hsts_lower = hsts.lower()
+        max_age_match = re.search(r"max-age=(\d+)", hsts_lower)
+        max_age = int(max_age_match.group(1)) if max_age_match else 0
+        has_preload = "preload" in hsts_lower
+        has_subdomains = "includesubdomains" in hsts_lower
+        issues = []
+        if max_age < 31536000:
+            issues.append(f"max-age={max_age} (need >= 31536000 for preload)")
+        if not has_preload:
+            issues.append("missing preload directive")
+        if not has_subdomains:
+            issues.append("missing includeSubDomains")
+        result.details = {"hsts_value": hsts[:200], "max_age": max_age, "has_preload": has_preload}
+        if issues:
+            result.status = "failed"
+            result.severity = "low"
+            result.description = f"HSTS not preload-ready: {'; '.join(issues)}"
+            result.remediation = "Use Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
+        else:
+            result.status = "passed"
+            result.description = "HSTS preload-ready"
+    return result
+
+
+# ─── Check 25: Additional Version Headers ───
+
+def check_version_headers(target_url: str) -> DastResult:
+    """Check for version disclosure in X-Generator, X-Runtime, X-Varnish, X-Drupal-Cache, etc."""
+    result = DastResult(
+        check_id="DAST-VER-01",
+        title="Version Header Disclosure",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    version_headers = ["x-generator", "x-runtime", "x-aspnetmvc-version", "x-drupal-cache", "x-varnish", "x-request-id", "x-version", "x-build", "x-revision"]
+    headers = {k.lower(): v for k, v in resp.headers.items()}
+    found = {h: headers[h] for h in version_headers if h in headers}
+    result.details = {"found": found}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if found:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Version headers disclosed: {', '.join(found.keys())}"
+        result.evidence = "; ".join(f"{k}: {v}" for k, v in list(found.items())[:5])
+        result.remediation = "Remove or genericize X-Generator, X-Runtime, and similar version headers"
+        result.reproduction_steps = f"1. GET {target_url}\n2. Inspect response headers\n3. Found: {list(found.keys())}"
+    else:
+        result.status = "passed"
+        result.description = "No additional version headers disclosed"
+    return result
+
+
+# ─── Check 26: COOP/COEP Headers ───
+
+def check_coop_coep(target_url: str) -> DastResult:
+    """Check Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy for Spectre mitigation."""
+    result = DastResult(
+        check_id="DAST-COOP-01",
+        title="COOP/COEP Headers",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-1021",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    headers = {k.lower(): v for k, v in resp.headers.items()}
+    coop = headers.get("cross-origin-opener-policy", "")
+    coep = headers.get("cross-origin-embedder-policy", "")
+    result.details = {"coop": coop, "coep": coep}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not coop and not coep:
+        result.status = "failed"
+        result.severity = "info"
+        result.description = "COOP/COEP headers not set"
+        result.remediation = "Consider Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp for sensitive apps"
+    else:
+        result.status = "passed"
+        result.description = f"COOP/COEP present" if (coop and coep) else "Partial COOP/COEP"
+    return result
+
+
+# ─── Check 27: Weak Referrer-Policy ───
+
+def check_weak_referrer(target_url: str) -> DastResult:
+    """Check for weak or missing Referrer-Policy (unsafe-url, no-referrer-when-downgrade)."""
+    result = DastResult(
+        check_id="DAST-REF-01",
+        title="Referrer-Policy Strength",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-200",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    ref = resp.headers.get("referrer-policy", resp.headers.get("Referrer-Policy", ""))
+    ref_lower = ref.lower().strip()
+    weak = ["unsafe-url", "no-referrer-when-downgrade", ""]
+    result.details = {"value": ref or "(not set)"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if not ref_lower:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = "Referrer-Policy header missing"
+        result.remediation = "Set Referrer-Policy: strict-origin-when-cross-origin or stricter"
+    elif ref_lower in weak or "unsafe" in ref_lower:
+        result.status = "failed"
+        result.severity = "low"
+        result.description = f"Weak Referrer-Policy: {ref}"
+        result.remediation = "Use strict-origin-when-cross-origin, strict-origin, or no-referrer"
+    else:
+        result.status = "passed"
+        result.description = f"Referrer-Policy adequate: {ref}"
+    return result
+
+
+# ─── Check 28: Debug/Stack Trace in Response ───
+
+def check_debug_response(target_url: str) -> DastResult:
+    """Check for stack traces, debug output, or exception messages in response body."""
+    result = DastResult(
+        check_id="DAST-DEBUG-01",
+        title="Debug/Stack Trace in Response",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-209",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    body = (resp.text or "")[:8000].lower()
+    patterns = [
+        (r"traceback\s*\(|traceback\s*:", "Traceback"),
+        (r"at\s+\S+\.(\w+)\s*\(", "Stack frame"),
+        (r"fatal error|php fatal|uncaught exception", "Fatal error"),
+        (r"exception\s+in\s+thread|exception\s+in\s+main", "Exception message"),
+        (r"\.pyc\s+in\s+line|file\s+\".*?\"\s+line", "Python trace"),
+        (r"sqlstate\[|pdoexception|mysqli_", "Database error"),
+        (r"java\.lang\.|nullpointerexception|stacktrace", "Java stack trace"),
+    ]
+    found = []
+    for pat, label in patterns:
+        if re.search(pat, body):
+            found.append(label)
+    result.details = {"patterns_checked": len(patterns), "found": found}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text or "")[:2500]
+    if found:
+        result.status = "failed"
+        result.severity = "medium"
+        result.description = f"Debug/stack trace detected: {', '.join(found)}"
+        result.evidence = f"Matched: {', '.join(found)}"
+        result.remediation = "Disable debug mode in production. Use generic error pages. Log stack traces server-side only."
+        result.reproduction_steps = f"1. GET {target_url}\n2. Inspect response body for debug output"
+    else:
+        result.status = "passed"
+        result.description = "No debug/stack trace in response"
+    return result
+
+
+# ─── Check 29: .env / .git/HEAD Exposure ───
+
+def check_dotenv_git(target_url: str) -> DastResult:
+    """Check for .env or .git/HEAD exposure (critical secrets/config)."""
+    result = DastResult(
+        check_id="DAST-ENV-01",
+        title=".env / .git Exposure",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-798",
+    )
+    parsed = urlparse(target_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    paths = [("/.env", ["password", "secret", "api_key", "key=", "database"]), ("/.git/HEAD", ["ref:", "refs/heads/"])]
+    exposed = []
+    for path, indicators in paths:
+        r = _safe_get(urljoin(base, path))
+        if r and r.status_code == 200:
+            txt = (r.text or "").lower()
+            if any(ind in txt for ind in indicators) or (path == "/.git/HEAD" and len(txt) < 200):
+                exposed.append(path)
+    result.details = {"paths_checked": [p[0] for p in paths], "exposed": exposed}
+    if exposed:
+        result.status = "failed"
+        result.severity = "critical"
+        result.description = f"Critical file(s) exposed: {', '.join(exposed)}"
+        result.evidence = f"Exposed: {', '.join(exposed)}"
+        result.remediation = "Immediately remove .env and .git from web root. Add to .gitignore. Use environment variables."
+        result.reproduction_steps = f"1. GET {base}{exposed[0]}\n2. Observe 200 with sensitive content"
+    else:
+        result.status = "passed"
+        result.description = "No .env or .git/HEAD exposure"
+    result.request_raw = f"GET {base}/.env HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = "See details"
+    return result
+
+
+# ─── Check 30: Content-Type Sniffing Risk ───
+
+def check_content_type_sniffing(target_url: str) -> DastResult:
+    """Check for missing X-Content-Type-Options or JSON served as text/html."""
+    result = DastResult(
+        check_id="DAST-CT-01",
+        title="Content-Type Sniffing / MIME Mismatch",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-16",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    ct = resp.headers.get("content-type", "").lower()
+    xcto = resp.headers.get("x-content-type-options", resp.headers.get("X-Content-Type-Options", ""))
+    body = (resp.text or "").strip()[:500]
+    looks_json = body.startswith("{") or body.startswith("[")
+    result.details = {"content_type": ct, "x_content_type_options": xcto or "(not set)", "body_start": body[:100]}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + body[:1000]
+    issues = []
+    if not xcto or "nosniff" not in xcto.lower():
+        issues.append("X-Content-Type-Options: nosniff missing")
+    if looks_json and "application/json" not in ct and "text/html" in ct:
+        issues.append("JSON-like response served as text/html (XSS risk)")
+    if issues:
+        result.status = "failed"
+        result.severity = "medium" if "nosniff" in str(issues).lower() else "low"
+        result.description = "; ".join(issues)
+        result.remediation = "Add X-Content-Type-Options: nosniff. Serve JSON with Content-Type: application/json"
+        result.reproduction_steps = f"1. GET {target_url}\n2. Check Content-Type and X-Content-Type-Options"
+    else:
+        result.status = "passed"
+        result.description = "Content-Type and X-Content-Type-Options adequate"
+    return result
+
+
+# ─── Check 31: Clickjacking Protection ───
+
+def check_clickjacking(target_url: str) -> DastResult:
+    """Verify X-Frame-Options or CSP frame-ancestors for clickjacking protection."""
+    result = DastResult(
+        check_id="DAST-FRAME-01",
+        title="Clickjacking Protection",
+        owasp_ref="A05:2021",
+        cwe_id="CWE-1021",
+    )
+    resp = _safe_get(target_url)
+    if not resp:
+        result.status = "error"
+        result.description = "Could not reach target"
+        return result
+    headers = {k.lower(): v for k, v in resp.headers.items()}
+    xfo = headers.get("x-frame-options", "")
+    csp = headers.get("content-security-policy", headers.get("content-security-policy-report-only", ""))
+    has_xfo = bool(xfo and xfo.strip())
+    has_frame_ancestors = "frame-ancestors" in csp.lower()
+    result.details = {"x_frame_options": xfo or "(not set)", "csp_frame_ancestors": has_frame_ancestors}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
+    if has_xfo or has_frame_ancestors:
+        result.status = "passed"
+        result.description = "Clickjacking protection present (X-Frame-Options or frame-ancestors)"
+    else:
+        result.status = "failed"
+        result.severity = "medium"
+        result.description = "No clickjacking protection (X-Frame-Options or CSP frame-ancestors missing)"
+        result.remediation = "Add X-Frame-Options: DENY or SAMEORIGIN, or CSP frame-ancestors 'none'"
+        result.reproduction_steps = f"1. GET {target_url}\n2. Check for X-Frame-Options or Content-Security-Policy frame-ancestors"
+    return result
+
+
 # ─── DAST Runner ───
 
 ALL_CHECKS = [
@@ -1223,6 +1628,16 @@ ALL_CHECKS = [
     ("form_autocomplete", check_form_autocomplete),
     ("backup_files", check_backup_files),
     ("directory_discovery", check_directory_discovery),
+    ("security_txt", check_security_txt),
+    ("http_redirect_https", check_http_redirect_https),
+    ("hsts_preload", check_hsts_preload),
+    ("version_headers", check_version_headers),
+    ("coop_coep", check_coop_coep),
+    ("weak_referrer", check_weak_referrer),
+    ("debug_response", check_debug_response),
+    ("dotenv_git", check_dotenv_git),
+    ("content_type_sniffing", check_content_type_sniffing),
+    ("clickjacking", check_clickjacking),
 ]
 
 
