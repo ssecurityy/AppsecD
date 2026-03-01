@@ -334,3 +334,24 @@ body {
   border-color: var(--border-accent);
   background: var(--bg-hover);
 }
+
+/* ═══════════════════════════════════════════════════════════ */
+/* Global overflow safety                                     */
+/* ═══════════════════════════════════════════════════════════ */
+.card { overflow: hidden; }
+pre, code { overflow-x: auto; max-width: 100%; }
+table { max-width: 100%; }
+img { max-width: 100%; height: auto; }
+
+/* Prevent long strings (URLs, payloads, hashes) from breaking layouts */
+.break-anywhere { overflow-wrap: anywhere; word-break: break-word; }
+
+/* Table wrapper for responsive tables */
+.table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+
+/* Modal overflow safety */
+.modal-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* Hide scrollbar utility (for nav elements) */
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }

@@ -7,7 +7,7 @@ import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
-  Building2, Plus, Users, FolderOpen, Search, Shield, Palette, Upload, X
+  Building2, Plus, Users, FolderOpen, Search, Shield, Palette, Upload, X, Cpu, ToggleLeft, ToggleRight
 } from "lucide-react";
 
 export default function AdminOrganizationsPage() {
@@ -33,6 +33,14 @@ export default function AdminOrganizationsPage() {
   const [brandingUploading, setBrandingUploading] = useState(false);
   const [brandingSaving, setBrandingSaving] = useState(false);
 
+  // Feature flags modal
+  const [featureFlagsOrg, setFeatureFlagsOrg] = useState<any>(null);
+  const [featureFlags, setFeatureFlags] = useState<Record<string, { label: string; enabled: boolean }>>({});
+  const [featureFlagsLoading, setFeatureFlagsLoading] = useState(false);
+  const [featureFlagsSaving, setFeatureFlagsSaving] = useState(false);
+  // Cache of feature flag counts per org: { orgId: { enabled: number, total: number } }
+  const [orgFeatureCounts, setOrgFeatureCounts] = useState<Record<string, { enabled: number; total: number }>>({});
+
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
     if (user && !isAdmin(user.role)) router.replace("/dashboard");
@@ -52,6 +60,8 @@ export default function AdminOrganizationsPage() {
       } catch {
         setAllProjects([]);
       }
+      // Load feature flag counts in background
+      loadFeatureCounts(orgList);
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -99,6 +109,63 @@ export default function AdminOrganizationsPage() {
       loadData();
     } catch (e: any) {
       toast.error(e.message);
+    }
+  };
+
+  // Load feature flag counts for all orgs
+  const loadFeatureCounts = async (orgList: any[]) => {
+    const counts: Record<string, { enabled: number; total: number }> = {};
+    await Promise.all(
+      orgList.map(async (org) => {
+        try {
+          const res = await api.getFeatureFlags(org.id);
+          const flags = res.flags || {};
+          const total = Object.keys(flags).length;
+          const enabled = Object.values(flags).filter((f: any) => f.enabled).length;
+          counts[org.id] = { enabled, total };
+        } catch {
+          counts[org.id] = { enabled: 0, total: 0 };
+        }
+      })
+    );
+    setOrgFeatureCounts(counts);
+  };
+
+  // Open feature flags modal for an org
+  const openFeatureFlags = async (org: any) => {
+    setFeatureFlagsOrg(org);
+    setFeatureFlagsLoading(true);
+    try {
+      const res = await api.getFeatureFlags(org.id);
+      setFeatureFlags(res.flags || {});
+    } catch (e: any) {
+      toast.error(e.message || "Failed to load feature flags");
+      setFeatureFlags({});
+    } finally {
+      setFeatureFlagsLoading(false);
+    }
+  };
+
+  // Save feature flags
+  const handleSaveFeatureFlags = async () => {
+    if (!featureFlagsOrg) return;
+    setFeatureFlagsSaving(true);
+    try {
+      const flagsPayload: Record<string, boolean> = {};
+      Object.entries(featureFlags).forEach(([key, val]) => {
+        flagsPayload[key] = val.enabled;
+      });
+      await api.updateFeatureFlags({ org_id: featureFlagsOrg.id, flags: flagsPayload });
+      toast.success("Feature flags updated");
+      // Update cached counts
+      const total = Object.keys(featureFlags).length;
+      const enabled = Object.values(featureFlags).filter((f) => f.enabled).length;
+      setOrgFeatureCounts((prev) => ({ ...prev, [featureFlagsOrg.id]: { enabled, total } }));
+      setFeatureFlagsOrg(null);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to update feature flags");
+    } finally {
+      setFeatureFlagsSaving(false);
     }
   };
 
@@ -227,6 +294,16 @@ export default function AdminOrganizationsPage() {
                       <div className="flex items-center gap-4 text-xs" style={{ color: "var(--text-secondary)" }}>
                         <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {orgUsers.length} users</span>
                         <span className="flex items-center gap-1"><FolderOpen className="w-3 h-3" /> {orgProjects.length} projects</span>
+                        {orgFeatureCounts[org.id] && (
+                          <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
+                            style={{
+                              background: orgFeatureCounts[org.id].enabled > 0 ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+                              color: orgFeatureCounts[org.id].enabled > 0 ? "#34d399" : "#f87171",
+                              border: `1px solid ${orgFeatureCounts[org.id].enabled > 0 ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)"}`,
+                            }}>
+                            <Cpu className="w-2.5 h-2.5" /> AI {orgFeatureCounts[org.id].enabled}/{orgFeatureCounts[org.id].total}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -269,6 +346,12 @@ export default function AdminOrganizationsPage() {
                           className="text-xs px-3 py-1.5 rounded border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-colors flex items-center gap-1"
                         >
                           <Palette className="w-3 h-3" /> Edit Branding
+                        </button>
+                        <button
+                          onClick={() => openFeatureFlags(org)}
+                          className="text-xs px-3 py-1.5 rounded border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 transition-colors flex items-center gap-1"
+                        >
+                          <Cpu className="w-3 h-3" /> Feature Controls
                         </button>
                       </div>
                     )}
@@ -443,6 +526,120 @@ export default function AdminOrganizationsPage() {
                   {brandingSaving ? "Saving..." : "Save Branding"}
                 </button>
                 <button onClick={() => setBrandingOrg(null)} className="btn-secondary text-sm">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Feature Controls Modal */}
+        {featureFlagsOrg && (
+          <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setFeatureFlagsOrg(null)}>
+            <div className="rounded-lg max-w-lg w-full p-5 space-y-4" style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)" }} onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                  <Cpu className="w-4 h-4 text-cyan-400" /> AI Feature Controls: {featureFlagsOrg.name}
+                </h3>
+                <button onClick={() => setFeatureFlagsOrg(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Toggle AI features for this organization. Disabled features will show &quot;Contact admin to enable&quot; for org users.
+              </p>
+
+              {featureFlagsLoading ? (
+                <div className="space-y-3 py-2">
+                  {[1, 2, 3, 4, 5, 6].map((i) => (
+                    <div key={i} className="h-10 rounded-lg animate-shimmer" style={{ background: "var(--bg-elevated)" }} />
+                  ))}
+                </div>
+              ) : Object.keys(featureFlags).length === 0 ? (
+                <div className="py-6 text-center">
+                  <Cpu className="w-6 h-6 mx-auto mb-2" style={{ color: "var(--text-muted)" }} />
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>No feature flags configured for this organization.</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {Object.entries(featureFlags).map(([key, flag]) => (
+                    <div
+                      key={key}
+                      className="flex items-center justify-between p-3 rounded-lg transition-colors"
+                      style={{
+                        background: flag.enabled ? "rgba(16,185,129,0.05)" : "var(--bg-elevated)",
+                        border: `1px solid ${flag.enabled ? "rgba(16,185,129,0.15)" : "var(--border-subtle)"}`,
+                      }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{flag.label}</p>
+                        <p className="text-[10px] font-mono" style={{ color: "var(--text-muted)" }}>{key}</p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setFeatureFlags((prev) => ({
+                            ...prev,
+                            [key]: { ...prev[key], enabled: !prev[key].enabled },
+                          }));
+                        }}
+                        className="flex-shrink-0 ml-3 transition-colors"
+                        title={flag.enabled ? "Disable feature" : "Enable feature"}
+                      >
+                        {flag.enabled ? (
+                          <ToggleRight className="w-8 h-8 text-emerald-400" />
+                        ) : (
+                          <ToggleLeft className="w-8 h-8" style={{ color: "var(--text-muted)" }} />
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Summary */}
+              {Object.keys(featureFlags).length > 0 && !featureFlagsLoading && (
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    {Object.values(featureFlags).filter((f) => f.enabled).length} of {Object.keys(featureFlags).length} features enabled
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => {
+                        setFeatureFlags((prev) => {
+                          const updated = { ...prev };
+                          Object.keys(updated).forEach((k) => { updated[k] = { ...updated[k], enabled: true }; });
+                          return updated;
+                        });
+                      }}
+                      className="text-[10px] px-2 py-1 rounded border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+                    >
+                      Enable All
+                    </button>
+                    <button
+                      onClick={() => {
+                        setFeatureFlags((prev) => {
+                          const updated = { ...prev };
+                          Object.keys(updated).forEach((k) => { updated[k] = { ...updated[k], enabled: false }; });
+                          return updated;
+                        });
+                      }}
+                      className="text-[10px] px-2 py-1 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      Disable All
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Save / Cancel */}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleSaveFeatureFlags}
+                  disabled={featureFlagsSaving || featureFlagsLoading}
+                  className="btn-primary text-sm flex-1 disabled:opacity-50"
+                >
+                  {featureFlagsSaving ? "Saving..." : "Save Feature Flags"}
+                </button>
+                <button onClick={() => setFeatureFlagsOrg(null)} className="btn-secondary text-sm">Cancel</button>
               </div>
             </div>
           </div>

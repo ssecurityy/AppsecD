@@ -92,7 +92,7 @@ export default function Navbar() {
       </Link>
 
       {/* Nav links */}
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5 overflow-x-auto min-w-0 flex-1 scrollbar-none" style={{ scrollbarWidth: 'none' }}>
         {nav.map(({ href, icon: Icon, label }) => {
           const active = pathname.startsWith(href);
           return (
@@ -191,8 +191,8 @@ export default function Navbar() {
                 {isSuperAdmin(user.role) ? <Crown className="w-3.5 h-3.5" /> : (user.full_name || "U")[0].toUpperCase()}
               </div>
               <div className="hidden md:block">
-                <div className="text-xs font-medium leading-none flex items-center gap-1" style={{ color: "var(--text-primary)" }}>
-                  {user.full_name}
+                <div className="text-xs font-medium leading-none flex items-center gap-1 max-w-[120px]" style={{ color: "var(--text-primary)" }}>
+                  <span className="truncate">{user.full_name}</span>
                   {isSuperAdmin(user.role) && <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded">SA</span>}
                 </div>
                 <div className="text-[10px] leading-none mt-0.5" style={{ color: "var(--text-muted)" }}>

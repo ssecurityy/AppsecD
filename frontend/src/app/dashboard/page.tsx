@@ -115,7 +115,7 @@ export default function Dashboard() {
           </div>
 
           {/* Quick links */}
-          <div className="relative flex items-center gap-2 mt-4">
+          <div className="relative flex items-center gap-2 mt-4 flex-wrap">
             {quickLinks.map(({ href, label, icon: Icon, color }) => (
               <Link key={href} href={href}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${color} hover:opacity-80 transition-all`}>
@@ -164,11 +164,11 @@ export default function Dashboard() {
                   const orgUsers_ = users.filter((u: any) => u.organization_id === o.id);
                   return (
                     <div key={o.id} className="flex items-center justify-between py-1.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <div className="w-6 h-6 rounded bg-emerald-500/10 flex items-center justify-center text-emerald-400 text-[10px] font-bold">
                           {o.name[0].toUpperCase()}
                         </div>
-                        <span className="text-sm" style={{ color: "var(--text-primary)" }}>{o.name}</span>
+                        <span className="text-sm truncate" style={{ color: "var(--text-primary)" }}>{o.name}</span>
                       </div>
                       <div className="flex items-center gap-3 text-xs" style={{ color: "var(--text-muted)" }}>
                         <span>{orgProjects.length} projects</span>
@@ -236,7 +236,7 @@ export default function Dashboard() {
                 ));
               })()}
             </div>
-            <div className="flex gap-4 mt-3">
+            <div className="flex gap-4 mt-3 flex-wrap">
               {["critical", "high", "medium", "low", "info"].map(sev => (
                 <div key={sev} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
                   <div className={`w-2 h-2 rounded-full ${SEVERITY_COLORS[sev]}`} />
@@ -291,7 +291,7 @@ export default function Dashboard() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-sm group-hover:text-indigo-300 transition-colors truncate" style={{ color: "var(--text-primary)" }}>
+                          <span className="font-medium text-sm group-hover:text-indigo-300 transition-colors truncate max-w-[200px]" style={{ color: "var(--text-primary)" }} title={p.application_name}>
                             {p.application_name}
                           </span>
                           <span className={`status-pill ${

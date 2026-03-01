@@ -66,7 +66,7 @@ function EvidenceItem({ e, onRemove, getApiBase }: { e: { filename: string; url:
           <img src={previewUrl} alt={e.filename} className="w-10 h-10 object-cover rounded" style={{ borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }} />
         </a>
       )}
-      <a href={isImage && previewUrl ? previewUrl : `${getApiBase()}${e.url}`} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline truncate max-w-[120px]">{e.filename}</a>
+      <a href={isImage && previewUrl ? previewUrl : `${getApiBase()}${e.url}`} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline truncate max-w-[120px] break-all">{e.filename}</a>
       <button onClick={onRemove} className="text-red-400 hover:text-red-300 shrink-0">×</button>
     </div>
   );
@@ -149,7 +149,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className={`border rounded-lg overflow-visible transition-all ${statusConf.bg}`}
+      className={`border rounded-lg overflow-hidden transition-all ${statusConf.bg}`}
     >
       <div className="p-4 cursor-pointer" onClick={() => setExpanded(!expanded)}>
         <div className="flex items-start gap-3">
@@ -209,13 +209,13 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                 {tc.where_to_test && (
                   <div>
                     <h4 className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-1">📍 Where to Test</h4>
-                    <p className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] p-2 rounded">{tc.where_to_test}</p>
+                    <p className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] p-2 rounded break-words">{tc.where_to_test}</p>
                   </div>
                 )}
                 {tc.what_to_test && (
                   <div>
                     <h4 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider mb-1">🎯 What to Test</h4>
-                    <p className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] p-2 rounded">{tc.what_to_test}</p>
+                    <p className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] p-2 rounded break-words">{tc.what_to_test}</p>
                   </div>
                 )}
               </div>
@@ -269,7 +269,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                       const resolved = replaceTarget(p, applicationUrl);
                       return (
                         <div key={i} className="flex items-center gap-2">
-                          <code className="text-xs bg-[var(--bg-tertiary)] px-2 py-1 rounded font-mono flex-1 overflow-x-auto" style={{ color: "var(--text-code)" }}>{resolved}</code>
+                          <code className="text-xs bg-[var(--bg-tertiary)] px-2 py-1 rounded font-mono flex-1 min-w-0 overflow-x-auto block" style={{ color: "var(--text-code)" }}>{resolved}</code>
                           <button onClick={() => { navigator.clipboard.writeText(resolved); toast.success("Copied! Ready to paste."); }}
                             className="hover:text-white text-xs px-2 py-1 rounded shrink-0" style={{ color: "var(--text-muted)", background: "var(--bg-elevated)" }}>
                             Copy
@@ -306,7 +306,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                                 return (
                                   <div key={i} className="flex items-start gap-2 rounded p-2" style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)" }}>
                                     <div className="flex-1 min-w-0">
-                                      <code className="text-xs font-mono block overflow-x-auto whitespace-pre" style={{ color: "var(--text-code)" }}>{resolved}</code>
+                                      <code className="text-xs font-mono block overflow-x-auto whitespace-pre-wrap break-all" style={{ color: "var(--text-code)" }}>{resolved}</code>
                                       {technique && (
                                         <span className="text-[10px] mt-1 inline-block px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
                                           {technique}
@@ -349,8 +349,8 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                               Copy
                             </button>
                           </div>
-                          <code className="text-xs font-mono block overflow-x-auto whitespace-pre" style={{ color: "var(--text-code)" }}>{resolvedCmd}</code>
-                          {cmd.description && <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>{cmd.description}</p>}
+                          <code className="text-xs font-mono block overflow-x-auto whitespace-pre-wrap break-all" style={{ color: "var(--text-code)" }}>{resolvedCmd}</code>
+                          {cmd.description && <p className="text-xs mt-1 break-words" style={{ color: "var(--text-muted)" }}>{cmd.description}</p>}
                         </div>
                       );
                     })}
@@ -362,13 +362,13 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                 {tc.pass_indicators && (
                   <div>
                     <h4 className="text-xs font-semibold text-green-400 uppercase tracking-wider mb-1">✅ Pass Indicators</h4>
-                    <p className="text-xs p-2 rounded" style={{ color: "var(--text-secondary)", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>{tc.pass_indicators}</p>
+                    <p className="text-xs p-2 rounded break-words" style={{ color: "var(--text-secondary)", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>{tc.pass_indicators}</p>
                   </div>
                 )}
                 {tc.fail_indicators && (
                   <div>
                     <h4 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-1">❌ Fail Indicators</h4>
-                    <p className="text-xs p-2 rounded" style={{ color: "var(--text-secondary)", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>{tc.fail_indicators}</p>
+                    <p className="text-xs p-2 rounded break-words" style={{ color: "var(--text-secondary)", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>{tc.fail_indicators}</p>
                   </div>
                 )}
               </div>
@@ -376,7 +376,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
               {tc.remediation && (
                 <div>
                   <h4 className="text-xs font-semibold text-purple-400 uppercase tracking-wider mb-1">🔧 Remediation</h4>
-                  <p className="text-xs p-2 rounded" style={{ color: "var(--text-secondary)", background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)" }}>{tc.remediation}</p>
+                  <p className="text-xs p-2 rounded break-words" style={{ color: "var(--text-secondary)", background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)" }}>{tc.remediation}</p>
                 </div>
               )}
 
@@ -712,11 +712,11 @@ export default function ProjectDetail() {
 
         {/* Main content */}
         <div className="flex-1 min-w-0">
-          <div className="card p-4 mb-4">
+          <div className="card p-4 mb-4 !overflow-visible">
             <div className="flex items-start justify-between gap-4">
-              <div>
-                <h1 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>{project.application_name}</h1>
-                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{project.application_url}</p>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-xl font-bold truncate" style={{ color: "var(--text-primary)" }}>{project.application_name}</h1>
+                <p className="text-sm truncate max-w-md" style={{ color: "var(--text-secondary)" }} title={project.application_url}>{project.application_url}</p>
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
                   <span className="text-xs" style={{ color: "var(--text-secondary)" }}>Owner: {project.app_owner_name || "—"}</span>
                   <span className="text-[#374151]">•</span>
@@ -725,7 +725,7 @@ export default function ProjectDetail() {
                   <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{project.testing_type}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <Link
                   href={`/projects/${id}/report`}
                   className="flex items-center gap-2 px-3 py-1.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm"
@@ -821,7 +821,7 @@ export default function ProjectDetail() {
                   <div key={f.id} className="flex items-center gap-3 p-3 rounded" style={{ background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium truncate" style={{ color: "var(--text-primary)" }}>{f.title}</div>
-                      <div className="text-xs" style={{ color: "var(--text-secondary)" }}>{f.severity} • {f.affected_url || "-"}</div>
+                      <div className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>{f.severity} • {f.affected_url || "-"}</div>
                     </div>
                     <select
                       value={f.status || "open"}

@@ -1,7 +1,7 @@
 """AI Assist API — suggest CWE, CVSS, impact, remediation for findings; craft payloads."""
 import json
 import logging
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -137,6 +137,11 @@ async def suggest(
             org_id = p.organization_id
     if not org_id and current_user.organization_id:
         org_id = current_user.organization_id
+
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI Finding Suggestions is disabled for your organization. Contact your admin to enable it.")
+
     provider, model, api_key = await get_llm_config(db, org_id)
     return suggest_finding(
         payload.title,
@@ -164,6 +169,10 @@ async def craft_payload(
             org_id = p.organization_id
     if not org_id and current_user.organization_id:
         org_id = current_user.organization_id
+
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_payload_crafting"):
+        raise HTTPException(403, "AI Payload Crafting is disabled for your organization. Contact your admin to enable it.")
 
     provider, model, api_key = await get_llm_config(db, org_id)
 

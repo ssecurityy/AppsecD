@@ -71,7 +71,7 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="border rounded-xl overflow-visible transition-all"
+      className="border rounded-xl overflow-hidden transition-all"
       style={{ background: "var(--bg-tertiary)", borderColor: "var(--border-subtle)" }}
     >
       {/* Header row */}
@@ -130,7 +130,7 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
             )}
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            {finding.affected_url && <span className="truncate max-w-[200px]">{finding.affected_url}</span>}
+            {finding.affected_url && <span className="truncate max-w-[200px]" title={finding.affected_url}>{finding.affected_url}</span>}
             {finding.owasp_category && <span>{finding.owasp_category}</span>}
             {finding.cwe_id && <span>CWE-{finding.cwe_id}</span>}
             {finding.cvss_score && <span>CVSS: {finding.cvss_score}</span>}
@@ -164,25 +164,25 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                 {finding.description && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Description</h4>
-                    <p className="text-xs p-3 rounded-lg" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.description}</p>
+                    <p className="text-xs p-3 rounded-lg break-words" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.description}</p>
                   </div>
                 )}
                 {finding.impact && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Impact</h4>
-                    <p className="text-xs p-3 rounded-lg" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.impact}</p>
+                    <p className="text-xs p-3 rounded-lg break-words" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.impact}</p>
                   </div>
                 )}
                 {finding.reproduction_steps && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Reproduction Steps</h4>
-                    <pre className="text-xs p-3 rounded-lg whitespace-pre-wrap font-mono" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.reproduction_steps}</pre>
+                    <pre className="text-xs p-3 rounded-lg whitespace-pre-wrap break-words font-mono" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.reproduction_steps}</pre>
                   </div>
                 )}
                 {finding.recommendation && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>Recommendation</h4>
-                    <p className="text-xs p-3 rounded-lg" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.recommendation}</p>
+                    <p className="text-xs p-3 rounded-lg break-words" style={{ color: "var(--text-secondary)", background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>{finding.recommendation}</p>
                   </div>
                 )}
               </div>
@@ -194,7 +194,7 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                     <MessageSquare className="w-3 h-3 text-indigo-400" />
                     <span className="text-xs font-semibold text-indigo-400">Last Recheck Notes</span>
                   </div>
-                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{finding.recheck_notes}</p>
+                  <p className="text-xs break-words" style={{ color: "var(--text-secondary)" }}>{finding.recheck_notes}</p>
                   {finding.recheck_date && (
                     <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>
                       {new Date(finding.recheck_date).toLocaleString()}
@@ -298,7 +298,7 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                                     <span className={`px-1.5 py-0.5 rounded border ${toConf.color}`}>{toConf.label}</span>
                                     <span className="ml-auto" style={{ color: "var(--text-muted)" }}>{new Date(h.date).toLocaleString()}</span>
                                   </div>
-                                  {h.notes && <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>{h.notes}</p>}
+                                  {h.notes && <p className="text-xs mt-1 break-words" style={{ color: "var(--text-secondary)" }}>{h.notes}</p>}
                                   {h.by_name && (
                                     <p className="text-[10px] mt-1 flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
                                       <User className="w-2.5 h-2.5" /> {h.by_name}
@@ -391,17 +391,17 @@ export default function VulnerabilityManagement() {
         </div>
 
         {/* Page header */}
-        <div className="flex items-start justify-between gap-4 mb-6">
-          <div>
+        <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold flex items-center gap-3" style={{ color: "var(--text-primary)" }}>
-              <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/20">
+              <div className="p-2 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/20 shrink-0">
                 <ShieldCheck className="w-6 h-6 text-indigo-400" />
               </div>
               Vulnerability Management
             </h1>
-            <p className="text-sm mt-1" style={{ color: "var(--text-muted)" }}>{project?.application_name} &mdash; Track, recheck, and resolve security findings</p>
+            <p className="text-sm mt-1 truncate" style={{ color: "var(--text-muted)" }}>{project?.application_name} &mdash; Track, recheck, and resolve security findings</p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             <Link
               href={`/projects/${id}`}
               className="btn-secondary text-xs flex items-center gap-1.5"

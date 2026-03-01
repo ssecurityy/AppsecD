@@ -234,7 +234,7 @@ export default function AdminSettingsPage() {
         )}
 
         {/* Settings Tabs */}
-        <div className="flex rounded-lg p-1" style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-subtle)" }}>
+        <div className="flex rounded-lg p-1 overflow-x-auto" style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-subtle)" }}>
           {settingsTabs.map(t => (
             <button key={t.key} onClick={() => { setActiveTab(t.key); if (t.key === "notifications" && !notifLoaded) loadNotificationSettings(); }}
               className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all flex-1 justify-center ${
@@ -270,7 +270,7 @@ export default function AdminSettingsPage() {
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>Provider</label>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   {["openai", "anthropic", "google"].map(p => (
                     <button key={p} onClick={() => { setLlmProvider(p); setLlmModel(""); }}
                       className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
@@ -316,11 +316,11 @@ export default function AdminSettingsPage() {
                 </button>
               </div>
               {llmTestResult && (
-                <div className={`mt-3 p-3 rounded-lg text-xs border ${llmTestResult.ok ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
+                <div className={`mt-3 p-3 rounded-lg text-xs border break-words ${llmTestResult.ok ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
                   {llmTestResult.ok ? (
-                    <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Connected — Model: {llmTestResult.model}, Response: {llmTestResult.response}</span>
+                    <span className="flex items-start gap-1 min-w-0"><CheckCircle className="w-3 h-3 shrink-0 mt-0.5" /> <span className="break-words min-w-0">Connected — Model: {llmTestResult.model}, Response: {llmTestResult.response}</span></span>
                   ) : (
-                    <span className="flex items-center gap-1"><XCircle className="w-3 h-3" /> {llmTestResult.error}</span>
+                    <span className="flex items-start gap-1 min-w-0"><XCircle className="w-3 h-3 shrink-0 mt-0.5" /> <span className="break-words min-w-0">{llmTestResult.error}</span></span>
                   )}
                 </div>
               )}
@@ -381,11 +381,11 @@ export default function AdminSettingsPage() {
                 </button>
               </div>
               {jiraTestResult && (
-                <div className={`mt-3 p-3 rounded-lg text-xs border ${jiraTestResult.ok ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
+                <div className={`mt-3 p-3 rounded-lg text-xs border break-words ${jiraTestResult.ok ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border-red-500/20 text-red-400"}`}>
                   {jiraTestResult.ok ? (
-                    <span className="flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Connected — User: {jiraTestResult.user} ({jiraTestResult.email})</span>
+                    <span className="flex items-start gap-1 min-w-0"><CheckCircle className="w-3 h-3 shrink-0 mt-0.5" /> <span className="break-words min-w-0">Connected — User: {jiraTestResult.user} ({jiraTestResult.email})</span></span>
                   ) : (
-                    <span className="flex items-center gap-1"><XCircle className="w-3 h-3" /> {jiraTestResult.error}</span>
+                    <span className="flex items-start gap-1 min-w-0"><XCircle className="w-3 h-3 shrink-0 mt-0.5" /> <span className="break-words min-w-0">{jiraTestResult.error}</span></span>
                   )}
                 </div>
               )}

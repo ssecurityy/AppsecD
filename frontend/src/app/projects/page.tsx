@@ -45,10 +45,10 @@ export default function ProjectsPage() {
                 <motion.div key={p.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.05 }}>
                   <Link href={`/projects/${p.id}`}
-                    className="card p-5 flex items-center gap-4 hover:border-indigo-500/50 transition-all block group overflow-visible">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold group-hover:text-indigo-400 transition-colors" style={{ color: "var(--text-primary)" }}>
+                    className="card p-5 flex items-center gap-4 hover:border-indigo-500/50 transition-all block group">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h3 className="font-semibold group-hover:text-indigo-400 transition-colors truncate" style={{ color: "var(--text-primary)" }}>
                           {p.application_name}
                         </h3>
                         <span className={`text-xs px-2 py-0.5 rounded border ${
@@ -57,7 +57,7 @@ export default function ProjectsPage() {
                           "text-[var(--text-muted)] bg-[var(--bg-elevated)] border-[var(--border-subtle)]"
                         }`}>{p.status.replace("_", " ")}</span>
                       </div>
-                      <p className="text-xs" style={{ color: "var(--text-muted)" }}>{p.application_url}</p>
+                      <p className="text-xs truncate" style={{ color: "var(--text-muted)" }} title={p.application_url}>{p.application_url}</p>
                       <div className="flex items-center gap-3 mt-2">
                         <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
                           <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }}

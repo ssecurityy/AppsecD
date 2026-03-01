@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
-import { ArrowLeft, FileText, RefreshCw, Download, ExternalLink, FileCode, FileSpreadsheet, FileJson, File } from "lucide-react";
+import { ArrowLeft, FileText, RefreshCw, Download, ExternalLink, FileCode, FileSpreadsheet, FileJson, File, Sparkles, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -37,6 +37,8 @@ export default function LiveReportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -62,6 +64,19 @@ export default function LiveReportPage() {
       toast.error(e.message);
     } finally {
       setDownloading(null);
+    }
+  };
+
+  const handleSummarize = async () => {
+    setSummarizing(true);
+    try {
+      const res = await api.summarizeReport(id);
+      setAiSummary(res.summary || res.executive_summary || "No summary generated.");
+      toast.success("AI summary generated");
+    } catch (e: any) {
+      toast.error(e.message || "Summary generation failed");
+    } finally {
+      setSummarizing(false);
     }
   };
 
@@ -167,10 +182,27 @@ export default function LiveReportPage() {
         {/* Executive Summary */}
         <motion.section id="executive-summary" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
           className="card p-6">
-          <h2 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-            <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">1</span>
-            Executive Summary
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+              <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">1</span>
+              Executive Summary
+            </h2>
+            <button onClick={handleSummarize} disabled={summarizing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--accent-indigo)" }}>
+              {summarizing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              {summarizing ? "Generating..." : "AI Summary"}
+            </button>
+          </div>
+          {aiSummary && (
+            <div className="mb-4 p-4 rounded-xl" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.1), rgba(147,51,234,0.1))", border: "1px solid rgba(99,102,241,0.2)" }}>
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-4 h-4 text-indigo-400" />
+                <span className="text-xs font-semibold text-indigo-400">AI-Generated Executive Summary</span>
+              </div>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{aiSummary}</p>
+            </div>
+          )}
           <div className="grid md:grid-cols-2 gap-6">
             <div>
               <p className="text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
@@ -305,7 +337,7 @@ export default function LiveReportPage() {
                 {findings.map((f: any, i: number) => (
                   <tr key={i} className="transition-colors hover:bg-[var(--bg-hover)]" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
                     <td className="p-3" style={{ color: "var(--text-muted)" }}>{i + 1}</td>
-                    <td className="p-3 font-medium" style={{ color: "var(--text-primary)" }}>{f.title}</td>
+                    <td className="p-3 font-medium max-w-[300px]" style={{ color: "var(--text-primary)" }}><span className="line-clamp-2">{f.title}</span></td>
                     <td className="p-3">
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                         f.severity === "critical" ? "bg-red-500/10 text-red-500" :
@@ -341,7 +373,7 @@ export default function LiveReportPage() {
               <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.05 * i }} className="card p-5">
                 <div className="flex items-start justify-between gap-3 mb-3">
-                  <h3 className="font-semibold" style={{ color: "var(--text-primary)" }}>
+                  <h3 className="font-semibold break-words min-w-0" style={{ color: "var(--text-primary)" }}>
                     #{i + 1} {f.title}
                   </h3>
                   <span className={`shrink-0 px-2.5 py-0.5 rounded text-xs font-medium ${
@@ -355,7 +387,7 @@ export default function LiveReportPage() {
                 <div className="space-y-2">
                   <div className="rounded-lg p-3" style={{ background: "var(--bg-tertiary)" }}>
                     <div className="text-xs font-medium mb-1" style={{ color: "var(--text-muted)" }}>Description</div>
-                    <p className="text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{f.description || "No description provided"}</p>
+                    <p className="text-sm leading-relaxed break-words" style={{ color: "var(--text-secondary)" }}>{f.description || "No description provided"}</p>
                   </div>
                   <div className="grid md:grid-cols-2 gap-2">
                     <div className="rounded-lg p-3" style={{ background: "var(--bg-tertiary)" }}>
@@ -364,7 +396,7 @@ export default function LiveReportPage() {
                     </div>
                     <div className="rounded-lg p-3" style={{ background: "var(--bg-tertiary)" }}>
                       <div className="text-xs font-medium mb-1" style={{ color: "var(--text-muted)" }}>Recommendation</div>
-                      <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{f.recommendation || "-"}</p>
+                      <p className="text-sm break-words" style={{ color: "var(--text-secondary)" }}>{f.recommendation || "-"}</p>
                     </div>
                   </div>
                   {f.evidence?.length > 0 && (

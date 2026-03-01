@@ -326,7 +326,28 @@ export const api = {
 
   // Security Intelligence
   securityDashboard: () => request("/security-intel/dashboard"),
-  cveFeed: () => request("/security-intel/cve-feed"),
-  generateTestCases: (data: { context: string; tech_stack?: string; app_type?: string }) =>
+  cveFeed: (params?: { page?: number; page_size?: number; keyword?: string; severity?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.page) q.set("page", String(params.page));
+    if (params?.page_size) q.set("page_size", String(params.page_size));
+    if (params?.keyword) q.set("keyword", params.keyword);
+    if (params?.severity) q.set("severity", params.severity);
+    return request(`/security-intel/cve-feed${q.toString() ? `?${q}` : ""}`);
+  },
+  cveSync: (params?: { keyword?: string; days?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.keyword) q.set("keyword", params.keyword);
+    if (params?.days) q.set("days", String(params.days));
+    return request(`/security-intel/cve-sync${q.toString() ? `?${q}` : ""}`, { method: "POST" });
+  },
+  generateTestCases: (data: { context: string; tech_stack?: string; app_type?: string; focus_areas?: string[]; project_id?: string }) =>
     request("/security-intel/generate-test-cases", { method: "POST", body: JSON.stringify(data) }),
+  saveTestCases: (data: { project_id: string; test_cases: any[] }) =>
+    request("/security-intel/save-test-cases", { method: "POST", body: JSON.stringify(data) }),
+  securityAssistant: (data: { question: string; project_id?: string; context?: string }) =>
+    request("/security-intel/assistant", { method: "POST", body: JSON.stringify(data) }),
+  getFeatureFlags: (orgId?: string) =>
+    request(`/security-intel/feature-flags${orgId ? `?org_id=${orgId}` : ""}`),
+  updateFeatureFlags: (data: { org_id: string; flags: Record<string, boolean> }) =>
+    request("/security-intel/feature-flags", { method: "PUT", body: JSON.stringify(data) }),
 };

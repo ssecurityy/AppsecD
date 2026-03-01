@@ -269,7 +269,7 @@ export default function AdminUsersPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex-1 relative min-w-[200px]">
+          <div className="flex-1 relative min-w-[180px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
             <input className="input-field pl-9 py-2 text-sm" placeholder="Search users..."
               value={search} onChange={e => setSearch(e.target.value)} />
@@ -289,7 +289,7 @@ export default function AdminUsersPage() {
         </div>
 
         {/* Users Table */}
-        <div className="card overflow-visible">
+        <div className="card !overflow-visible">
           {loading ? (
             <div className="p-8 space-y-3">
               {[1, 2, 3].map(i => <div key={i} className="h-14 rounded-lg animate-shimmer" style={{ background: "var(--bg-elevated)" }} />)}
@@ -315,7 +315,7 @@ export default function AdminUsersPage() {
                     {/* Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium truncate" style={{ color: "var(--text-primary)" }}>{u.full_name}</span>
+                        <span className="text-sm font-medium truncate max-w-[200px]" style={{ color: "var(--text-primary)" }} title={u.full_name}>{u.full_name}</span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${ROLE_COLORS[u.role] || ROLE_COLORS.viewer}`}>
                           {ROLE_LABELS[u.role] || u.role}
                         </span>
@@ -328,10 +328,10 @@ export default function AdminUsersPage() {
                           </span>
                         )}
                       </div>
-                      <div className="text-xs mt-0.5 flex items-center gap-2 flex-wrap" style={{ color: "var(--text-muted)" }}>
-                        <span>{u.username}</span>
+                      <div className="text-xs mt-0.5 flex items-center gap-2 flex-wrap min-w-0" style={{ color: "var(--text-muted)" }}>
+                        <span className="truncate max-w-[120px]" title={u.username}>{u.username}</span>
                         <span>&middot;</span>
-                        <span>{u.email}</span>
+                        <span className="truncate max-w-[180px]" title={u.email}>{u.email}</span>
                         {u.organization_name && (
                           <>
                             <span>&middot;</span>

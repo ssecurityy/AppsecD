@@ -11,6 +11,8 @@ from .payload_category import PayloadCategory, PayloadContent, SecListCategory, 
 from .payload_source import PayloadSource, WordlistSourceFile
 from .admin_setting import AdminSetting
 from .org_setting import OrgSetting
+from .stored_cve import StoredCVE
+from .org_feature_flag import OrgFeatureFlag
 
 __all__ = [
     "User", "Project", "Organization", "Category", "TestCase", "ProjectTestResult",
@@ -19,4 +21,6 @@ __all__ = [
     "PayloadSource", "WordlistSourceFile",
     "AdminSetting",
     "OrgSetting",
+    "StoredCVE",
+    "OrgFeatureFlag",
 ]
