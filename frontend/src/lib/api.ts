@@ -326,26 +326,34 @@ export const api = {
 
   // Security Intelligence
   securityDashboard: () => request("/security-intel/dashboard"),
-  cveFeed: (params?: { page?: number; page_size?: number; keyword?: string; severity?: string }) => {
+  cveFeed: (params?: { page?: number; page_size?: number; keyword?: string; severity?: string; cwe?: string; date_from?: string; date_to?: string }) => {
     const q = new URLSearchParams();
     if (params?.page) q.set("page", String(params.page));
     if (params?.page_size) q.set("page_size", String(params.page_size));
     if (params?.keyword) q.set("keyword", params.keyword);
     if (params?.severity) q.set("severity", params.severity);
+    if (params?.cwe) q.set("cwe", params.cwe);
+    if (params?.date_from) q.set("date_from", params.date_from);
+    if (params?.date_to) q.set("date_to", params.date_to);
     return request(`/security-intel/cve-feed${q.toString() ? `?${q}` : ""}`);
   },
-  cveSync: (params?: { keyword?: string; days?: number }) => {
+  cveSync: (params?: { keyword?: string; days?: number; source?: string }) => {
     const q = new URLSearchParams();
     if (params?.keyword) q.set("keyword", params.keyword);
     if (params?.days) q.set("days", String(params.days));
+    if (params?.source) q.set("source", params.source);
     return request(`/security-intel/cve-sync${q.toString() ? `?${q}` : ""}`, { method: "POST" });
   },
   generateTestCases: (data: { context: string; tech_stack?: string; app_type?: string; focus_areas?: string[]; project_id?: string }) =>
     request("/security-intel/generate-test-cases", { method: "POST", body: JSON.stringify(data) }),
   saveTestCases: (data: { project_id: string; test_cases: any[] }) =>
     request("/security-intel/save-test-cases", { method: "POST", body: JSON.stringify(data) }),
-  securityAssistant: (data: { question: string; project_id?: string; context?: string }) =>
+  securityAssistant: (data: { question: string; project_id?: string; context?: string; chat_history?: { role: string; content: string }[]; add_test_cases?: boolean }) =>
     request("/security-intel/assistant", { method: "POST", body: JSON.stringify(data) }),
+  cveDetail: (cveId: string) => request(`/security-intel/cve/${cveId}`),
+  cveSearch: (cveId: string) => request(`/security-intel/cve-search/${cveId}`),
+  assistantAddTestCases: (data: { project_id: string; test_cases: any[] }) =>
+    request("/security-intel/assistant/add-test-cases", { method: "POST", body: JSON.stringify(data) }),
   getFeatureFlags: (orgId?: string) =>
     request(`/security-intel/feature-flags${orgId ? `?org_id=${orgId}` : ""}`),
   updateFeatureFlags: (data: { org_id: string; flags: Record<string, boolean> }) =>

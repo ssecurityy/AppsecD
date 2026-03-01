@@ -338,8 +338,7 @@ body {
 /* ═══════════════════════════════════════════════════════════ */
 /* Global overflow safety                                     */
 /* ═══════════════════════════════════════════════════════════ */
-.card { overflow: hidden; }
-pre, code { overflow-x: auto; max-width: 100%; }
+pre, code { overflow-x: auto; max-width: 100%; word-break: break-all; }
 table { max-width: 100%; }
 img { max-width: 100%; height: auto; }
 
@@ -355,3 +354,25 @@ img { max-width: 100%; height: auto; }
 /* Hide scrollbar utility (for nav elements) */
 .scrollbar-none::-webkit-scrollbar { display: none; }
 .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Finding cards — ensure descriptions and long text don't overflow */
+.finding-card p, .finding-card pre, .finding-card code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* Severity badge text — never wrap */
+.severity-critical, .severity-high, .severity-medium, .severity-low, .severity-info {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Dropdown menus — allow overflow on parent */
+.dropdown-parent { position: relative; }
+.dropdown-parent > .card { overflow: visible; }
+
+/* Responsive flex wrapping */
+@media (max-width: 768px) {
+  .flex-wrap-mobile { flex-wrap: wrap; }
+}

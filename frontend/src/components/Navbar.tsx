@@ -71,21 +71,36 @@ export default function Navbar() {
           <ShieldCheck className="w-4.5 h-4.5 text-white" />
         </div>
         {branding?.logo_url && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={branding.logo_url.startsWith("http") ? branding.logo_url : `${getApiBase()}${branding.logo_url}`}
-            alt="Org logo"
-            className="w-8 h-8 rounded-lg object-cover border"
-            style={{ borderColor: "var(--border-subtle)" }}
-          />
+          <picture>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={branding.logo_url.startsWith("http") ? branding.logo_url : `${getApiBase()}${branding.logo_url}`}
+              alt={branding?.name || "Organization logo"}
+              className="w-8 h-8 rounded-lg object-contain border shadow-sm"
+              style={{
+                borderColor: branding?.brand_color ? `${branding.brand_color}40` : "var(--border-subtle)",
+                background: "var(--bg-elevated)",
+              }}
+              onError={(e) => {
+                const img = e.target as HTMLImageElement;
+                img.style.display = "none";
+              }}
+            />
+          </picture>
         )}
         <div className="hidden sm:block">
           <span className="font-bold text-sm tracking-tight block" style={{ color: "var(--text-primary)" }}>
-            AppSec<span className="text-indigo-500">D</span>
+            {branding?.name ? (
+              <span style={{ color: branding?.brand_color || "var(--text-primary)" }}>
+                {branding.name}
+              </span>
+            ) : (
+              <>AppSec<span className="text-indigo-500">D</span></>
+            )}
           </span>
-          {branding?.name && (
-            <span className="text-[10px] block leading-none" style={{ color: "var(--text-muted)" }}>
-              {branding.name}
+          {branding?.description && (
+            <span className="text-[10px] block leading-none truncate max-w-[140px]" style={{ color: "var(--text-muted)" }}>
+              {branding.description}
             </span>
           )}
         </div>

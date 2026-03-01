@@ -23,6 +23,7 @@ const PHASE_INFO: Record<string, { label: string; color: string }> = {
   transport: { label: "Transport", color: "teal" },
   infra: { label: "Infra", color: "gray" },
   tools: { label: "Tools", color: "green" },
+  ai_generated: { label: "AI Generated", color: "violet" },
 };
 
 const STATUS_CONFIG = {

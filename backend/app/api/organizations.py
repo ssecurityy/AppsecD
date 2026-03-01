@@ -93,15 +93,16 @@ async def get_my_branding(
     """Get the current user's organization branding (logo_url, brand_color, name) for Navbar."""
     org_id = getattr(current_user, "organization_id", None)
     if not org_id:
-        return {"name": None, "logo_url": None, "brand_color": None}
+        return {"name": None, "logo_url": None, "brand_color": None, "description": None}
     result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if not org:
-        return {"name": None, "logo_url": None, "brand_color": None}
+        return {"name": None, "logo_url": None, "brand_color": None, "description": None}
     return {
         "name": org.name,
         "logo_url": org.logo_url,
         "brand_color": org.brand_color,
+        "description": org.description,
     }
 
 
