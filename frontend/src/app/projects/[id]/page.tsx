@@ -84,6 +84,9 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
   const [showFindingForm, setShowFindingForm] = useState(false);
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [showCraftedPayloads, setShowCraftedPayloads] = useState(false);
+  const [generatingCommands, setGeneratingCommands] = useState(false);
+  const [generatedCommands, setGeneratedCommands] = useState<any[]>([]);
+  const [showGeneratedCommands, setShowGeneratedCommands] = useState(false);
   const [finding, setFinding] = useState({
     title: tc.title,
     severity: tc.severity,
@@ -335,9 +338,43 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
 
               {tc.tool_commands?.length > 0 && (
                 <div>
-                  <h4 className="text-xs font-semibold text-orange-400 uppercase tracking-wider mb-2 flex items-center gap-1">
-                    <Terminal className="w-3 h-3" /> Tool Commands (TARGET → your URL)
-                  </h4>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-xs font-semibold text-orange-400 uppercase tracking-wider flex items-center gap-1">
+                      <Terminal className="w-3 h-3" /> Tool Commands (TARGET → your URL)
+                    </h4>
+                    <button
+                      onClick={async () => {
+                        setGeneratingCommands(true);
+                        try {
+                          const result = await api.generateCommands({
+                            test_title: tc.title,
+                            test_description: tc.description,
+                            target_url: applicationUrl || "",
+                            vuln_type: tc.owasp_ref || "",
+                            project_id: projectId,
+                          });
+                          const cmds = result.commands || result.tool_commands || [];
+                          setGeneratedCommands(cmds);
+                          setShowGeneratedCommands(true);
+                          toast.success("Commands generated!");
+                        } catch {
+                          toast.error("Failed to generate commands");
+                        } finally {
+                          setGeneratingCommands(false);
+                        }
+                      }}
+                      disabled={generatingCommands}
+                      className="text-xs px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"
+                      style={{ color: "var(--accent-indigo)", background: "rgba(99, 102, 241, 0.1)" }}
+                    >
+                      {generatingCommands ? (
+                        <div className="w-3 h-3 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin" />
+                      ) : (
+                        <Zap className="w-3 h-3" />
+                      )}
+                      {generatingCommands ? "Generating..." : "AI Commands"}
+                    </button>
+                  </div>
                   <div className="space-y-2">
                     {tc.tool_commands.map((cmd: { tool?: string; command?: string; description?: string }, i: number) => {
                       const resolvedCmd = replaceTarget(cmd.command || "", applicationUrl);
@@ -356,6 +393,53 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                       );
                     })}
                   </div>
+
+                  {/* AI-Generated Commands Section */}
+                  {generatedCommands.length > 0 && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() => setShowGeneratedCommands(!showGeneratedCommands)}
+                        className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 mb-2"
+                      >
+                        <Zap className="w-3 h-3" />
+                        {showGeneratedCommands ? "Hide" : "Show"} AI-Generated Commands ({generatedCommands.length})
+                        {showGeneratedCommands ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      </button>
+                      <AnimatePresence>
+                        {showGeneratedCommands && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="overflow-hidden"
+                          >
+                            <div className="space-y-2 rounded-lg p-3" style={{ background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.15)" }}>
+                              {generatedCommands.map((cmd: any, i: number) => {
+                                const cmdText = typeof cmd === "string" ? cmd : cmd.command || cmd.text || "";
+                                const toolName = typeof cmd === "string" ? "" : cmd.tool || cmd.tool_name || "";
+                                const desc = typeof cmd === "string" ? "" : cmd.description || "";
+                                const resolved = replaceTarget(cmdText, applicationUrl);
+                                return (
+                                  <div key={i} className="rounded p-2" style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)" }}>
+                                    {toolName && <span className="text-xs font-bold text-indigo-400 block mb-1">{toolName}</span>}
+                                    <code className="text-xs font-mono block overflow-x-auto whitespace-pre-wrap break-all" style={{ color: "var(--text-code)" }}>{resolved}</code>
+                                    {desc && <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>{desc}</p>}
+                                    <button
+                                      onClick={() => { navigator.clipboard.writeText(resolved); toast.success("AI command copied!"); }}
+                                      className="text-xs mt-1 hover:text-white px-2 py-0.5 rounded"
+                                      style={{ color: "var(--text-muted)", background: "var(--bg-elevated)" }}
+                                    >
+                                      Copy
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -526,6 +610,8 @@ export default function ProjectDetail() {
   const [importing, setImporting] = useState(false);
   const [craftingPayload, setCraftingPayload] = useState<string | null>(null);
   const [craftedPayloads, setCraftedPayloads] = useState<Record<string, any[]>>({});
+  const [enrichingFinding, setEnrichingFinding] = useState<string | null>(null);
+  const [deduplicating, setDeduplicating] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -766,6 +852,13 @@ export default function ProjectDetail() {
                 >
                   <ShieldCheck className="w-4 h-4" /> Vuln Management
                 </Link>
+                <Link
+                  href={`/projects/${id}/dast`}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981", border: "1px solid rgba(16, 185, 129, 0.3)" }}
+                >
+                  <Zap className="w-3.5 h-3.5" /> DAST Scan
+                </Link>
                 <button
                   onClick={openFindingsPanel}
                   className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm"
@@ -814,7 +907,33 @@ export default function ProjectDetail() {
           {showFindings && (
             <div className="card p-4 mb-4">
               <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold" style={{ color: "var(--text-primary)" }}>Remediation Tracking</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold" style={{ color: "var(--text-primary)" }}>Remediation Tracking</h3>
+                  <button
+                    onClick={async () => {
+                      setDeduplicating(true);
+                      try {
+                        const res = await api.deduplicateFindings({ project_id: id });
+                        toast.success(res.message || `Deduplication complete: ${res.duplicates_found || 0} duplicates found`);
+                        loadFindings();
+                      } catch (err: unknown) {
+                        toast.error(err instanceof Error ? err.message : "Deduplication failed");
+                      } finally {
+                        setDeduplicating(false);
+                      }
+                    }}
+                    disabled={deduplicating}
+                    className="text-xs px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"
+                    style={{ color: "var(--accent-indigo)", background: "rgba(99, 102, 241, 0.1)" }}
+                  >
+                    {deduplicating ? (
+                      <div className="w-3 h-3 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin" />
+                    ) : (
+                      <Zap className="w-3 h-3" />
+                    )}
+                    {deduplicating ? "Deduplicating..." : "AI Deduplicate"}
+                  </button>
+                </div>
                 <button onClick={() => setShowFindings(false)} className="hover:text-white" style={{ color: "var(--text-secondary)" }}>×</button>
               </div>
               <div className="space-y-2">
@@ -841,6 +960,41 @@ export default function ProjectDetail() {
                         <option key={s} value={s}>{s.replace("_", " ")}</option>
                       ))}
                     </select>
+                    <button
+                      onClick={async () => {
+                        setEnrichingFinding(f.id);
+                        try {
+                          const res = await api.enrichRemediation({
+                            finding_title: f.title,
+                            finding_description: f.description,
+                            current_remediation: f.recommendation,
+                            project_id: id,
+                          });
+                          if (res.remediation || res.enriched_remediation) {
+                            await api.updateFinding(f.id, { recommendation: res.remediation || res.enriched_remediation });
+                            toast.success("Remediation enriched with AI insights");
+                            loadFindings();
+                          } else {
+                            toast.success("AI enrichment applied");
+                          }
+                        } catch (err: unknown) {
+                          toast.error(err instanceof Error ? err.message : "Enrichment failed");
+                        } finally {
+                          setEnrichingFinding(null);
+                        }
+                      }}
+                      disabled={enrichingFinding === f.id}
+                      className="text-xs px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"
+                      style={{ color: "var(--accent-indigo)", background: "rgba(99, 102, 241, 0.1)" }}
+                      title="Enrich remediation with AI"
+                    >
+                      {enrichingFinding === f.id ? (
+                        <div className="w-3 h-3 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin" />
+                      ) : (
+                        <Zap className="w-3 h-3" />
+                      )}
+                      Enrich
+                    </button>
                     <button
                       onClick={async () => {
                         try {

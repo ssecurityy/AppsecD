@@ -39,6 +39,8 @@ export default function LiveReportPage() {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
+  const [fullReport, setFullReport] = useState<any>(null);
+  const [generatingFullReport, setGeneratingFullReport] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -77,6 +79,19 @@ export default function LiveReportPage() {
       toast.error(e.message || "Summary generation failed");
     } finally {
       setSummarizing(false);
+    }
+  };
+
+  const handleFullReport = async () => {
+    setGeneratingFullReport(true);
+    try {
+      const res = await api.fullReportSummary({ project_id: id });
+      setFullReport(res);
+      toast.success("Full report analysis generated");
+    } catch (e: any) {
+      toast.error(e.message || "Full report analysis failed");
+    } finally {
+      setGeneratingFullReport(false);
     }
   };
 
@@ -187,12 +202,20 @@ export default function LiveReportPage() {
               <span className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm">1</span>
               Executive Summary
             </h2>
-            <button onClick={handleSummarize} disabled={summarizing}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
-              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--accent-indigo)" }}>
-              {summarizing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-              {summarizing ? "Generating..." : "AI Summary"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={handleSummarize} disabled={summarizing}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--accent-indigo)" }}>
+                {summarizing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                {summarizing ? "Generating..." : "AI Summary"}
+              </button>
+              <button onClick={handleFullReport} disabled={generatingFullReport}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                style={{ background: "rgba(147, 51, 234, 0.1)", border: "1px solid rgba(147, 51, 234, 0.3)", color: "#9333ea" }}>
+                {generatingFullReport ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                {generatingFullReport ? "Analyzing..." : "Full Report Analysis"}
+              </button>
+            </div>
           </div>
           {aiSummary && (
             <div className="mb-4 p-4 rounded-xl" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.1), rgba(147,51,234,0.1))", border: "1px solid rgba(99,102,241,0.2)" }}>
@@ -201,6 +224,37 @@ export default function LiveReportPage() {
                 <span className="text-xs font-semibold text-indigo-400">AI-Generated Executive Summary</span>
               </div>
               <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{aiSummary}</p>
+            </div>
+          )}
+          {fullReport && (
+            <div className="mb-4 space-y-3">
+              {fullReport.executive_summary && (
+                <div className="p-4 rounded-xl" style={{ background: "linear-gradient(135deg, rgba(147,51,234,0.1), rgba(99,102,241,0.1))", border: "1px solid rgba(147,51,234,0.2)" }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-purple-400" />
+                    <span className="text-xs font-semibold text-purple-400">Executive Summary</span>
+                  </div>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{fullReport.executive_summary}</p>
+                </div>
+              )}
+              {fullReport.technical_summary && (
+                <div className="p-4 rounded-xl" style={{ background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.15)" }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                    <span className="text-xs font-semibold text-indigo-400">Technical Summary</span>
+                  </div>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{fullReport.technical_summary}</p>
+                </div>
+              )}
+              {fullReport.strategic_recommendations && (
+                <div className="p-4 rounded-xl" style={{ background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.15)" }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-semibold text-emerald-400">Strategic Recommendations</span>
+                  </div>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{fullReport.strategic_recommendations}</p>
+                </div>
+              )}
             </div>
           )}
           <div className="grid md:grid-cols-2 gap-6">

@@ -358,4 +358,37 @@ export const api = {
     request(`/security-intel/feature-flags${orgId ? `?org_id=${orgId}` : ""}`),
   updateFeatureFlags: (data: { org_id: string; flags: Record<string, boolean> }) =>
     request("/security-intel/feature-flags", { method: "PUT", body: JSON.stringify(data) }),
+
+  // AI Enhanced Features
+  analyzeEndpoint: (data: { endpoint: string; method?: string; parameters?: string; request_sample?: string; response_sample?: string; framework?: string; project_id?: string }) =>
+    request("/ai-assist/analyze-endpoint", { method: "POST", body: JSON.stringify(data) }),
+  generateSimilarTests: (data: { existing_test: object; target_context: string; project_id?: string }) =>
+    request("/ai-assist/generate-similar-tests", { method: "POST", body: JSON.stringify(data) }),
+  missingTests: (data: { project_id: string }) =>
+    request("/ai-assist/missing-tests", { method: "POST", body: JSON.stringify(data) }),
+  frameworkTests: (data: { framework: string; version?: string; features?: string[]; project_id?: string }) =>
+    request("/ai-assist/framework-tests", { method: "POST", body: JSON.stringify(data) }),
+  enrichRemediation: (data: { finding_title: string; finding_description?: string; current_remediation?: string; app_framework?: string; app_language?: string; project_id?: string }) =>
+    request("/ai-assist/enrich-remediation", { method: "POST", body: JSON.stringify(data) }),
+  deduplicateFindings: (data: { project_id: string }) =>
+    request("/ai-assist/deduplicate-findings", { method: "POST", body: JSON.stringify(data) }),
+  queryFindings: (data: { query: string; project_id?: string }) =>
+    request("/ai-assist/query-findings", { method: "POST", body: JSON.stringify(data) }),
+  vulnerabilityTrends: (data: { project_ids?: string[] }) =>
+    request("/ai-assist/vulnerability-trends", { method: "POST", body: JSON.stringify(data) }),
+  cvePayloads: (data: { cve_id: string; cve_description?: string; affected_product?: string; project_id?: string }) =>
+    request("/ai-assist/cve-payloads", { method: "POST", body: JSON.stringify(data) }),
+  generateCommands: (data: { test_title: string; test_description?: string; target_url?: string; parameters?: string; vuln_type?: string; project_id?: string }) =>
+    request("/ai-assist/generate-commands", { method: "POST", body: JSON.stringify(data) }),
+  interpretResults: (data: { tool_name: string; raw_output: string; test_context?: string; project_id?: string }) =>
+    request("/ai-assist/interpret-results", { method: "POST", body: JSON.stringify(data) }),
+  fullReportSummary: (data: { project_id: string }) =>
+    request("/ai-assist/full-report-summary", { method: "POST", body: JSON.stringify(data) }),
+
+  // DAST
+  dastScan: (data: { project_id: string; target_url?: string; checks?: string[] }) =>
+    request("/dast/scan", { method: "POST", body: JSON.stringify(data) }),
+  dastCheck: (data: { target_url: string; check: string }) =>
+    request("/dast/check", { method: "POST", body: JSON.stringify(data) }),
+  dastChecks: () => request("/dast/checks"),
 };
