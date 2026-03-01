@@ -242,4 +242,49 @@ export const api = {
   payloadSources: () => request("/payloads/sources"),
   sourceFiles: (sourceSlug: string) =>
     request(`/payloads/sources/${encodeURIComponent(sourceSlug)}/files`),
+
+  // LLM & JIRA test connections
+  testLlmConnection: () => request("/admin/settings/llm/test", { method: "POST" }),
+  testJiraConnection: () => request("/admin/settings/jira/test", { method: "POST" }),
+
+  // Auto-suggest finding
+  autoSuggestFinding: (data: { test_title: string; test_description?: string; notes?: string }) =>
+    request("/findings/auto-suggest", { method: "POST", body: JSON.stringify(data) }),
+
+  // Report summarize
+  summarizeReport: (projectId: string) =>
+    request(`/projects/${projectId}/report/summarize`, { method: "POST" }),
+
+  // Burp XML import
+  importBurpXml: async (projectId: string, file: File) => {
+    const token = getToken();
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API}/findings/import/burp?project_id=${projectId}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Import failed");
+    }
+    return res.json();
+  },
+
+  // Async report
+  startAsyncReport: (projectId: string, format: string) =>
+    request(`/projects/${projectId}/report/async?format=${format}`, { method: "POST" }),
+  getAsyncReportStatus: async (projectId: string, taskId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/projects/${projectId}/report/async/${taskId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 202) return { status: "pending" };
+    if (res.ok) {
+      const blob = await res.blob();
+      return { status: "ready", blob };
+    }
+    throw new Error("Failed to get report status");
+  },
 };
