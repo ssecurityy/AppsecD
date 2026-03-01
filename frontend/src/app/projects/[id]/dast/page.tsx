@@ -43,6 +43,10 @@ export default function DastScanPage() {
         setAvailableChecks(r.checks || []);
         setSelectedChecks((r.checks || []).map((c: any) => c.id));
       }).catch(() => {});
+      try {
+        const saved = localStorage.getItem(`dast_result_${id}`);
+        if (saved) setScanResult(JSON.parse(saved));
+      } catch {}
     }
   }, [id]);
 
@@ -56,6 +60,7 @@ export default function DastScanPage() {
         checks: selectedChecks.length < availableChecks.length ? selectedChecks : undefined,
       });
       setScanResult(result);
+      try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(result)); } catch {}
       if (result.findings_created > 0) {
         toast.success(`Scan complete! ${result.findings_created} finding(s) auto-created.`);
       } else if (result.failed === 0) {
