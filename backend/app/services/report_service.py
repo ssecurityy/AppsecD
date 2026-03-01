@@ -98,9 +98,11 @@ def build_report_data(project: dict, findings: list, phases: list, project_id: s
     for f in sorted_findings:
         f["compliance"] = get_compliance_mapping(cwe_id=f.get("cwe_id"), owasp_category=f.get("owasp_category"))
     org = organization or {"name": "AppSecD", "logo_base64": None, "brand_color": "#2563eb"}
+    ai = project.get("ai_report_content") or {}
     return {
         "project": project,
         "organization": org,
+        "ai_report_content": ai,
         "findings": sorted_findings,
         "phases": phases,
         "project_id": project_id,
@@ -142,6 +144,27 @@ def generate_html(data: dict) -> str:
     def _sev_badge(severity: str) -> str:
         s = severity.lower()
         return f'<span class="sev-badge sev-badge-{s}">{severity}</span>'
+
+    # AI report content section (when AI features utilized)
+    def _ai_exec_section(d: dict) -> str:
+        ai = d.get("ai_report_content") or {}
+        if not ai:
+            return ""
+        out = []
+        exec_sum = ai.get("executive_summary") or ai.get("ai_summary")
+        if exec_sum:
+            out.append(f'<div class="ai-exec-block"><div class="ai-exec-label">AI-Generated Executive Summary</div><p class="ai-exec-text">{_html_escape(str(exec_sum))}</p></div>')
+        tech = ai.get("technical_summary")
+        if tech:
+            out.append(f'<div class="ai-exec-block"><div class="ai-exec-label">Technical Summary</div><p class="ai-exec-text">{_html_escape(str(tech))}</p></div>')
+        strat = ai.get("strategic_recommendations")
+        if strat:
+            if isinstance(strat, list):
+                strat = "\n".join(f"• {s}" for s in strat)
+            out.append(f'<div class="ai-exec-block"><div class="ai-exec-label">Strategic Recommendations</div><p class="ai-exec-text" style="white-space:pre-wrap;">{_html_escape(str(strat))}</p></div>')
+        if not out:
+            return ""
+        return '<div class="ai-exec-summary">' + "".join(out) + "</div>"
 
     # Build severity distribution rows
     sev_rows = "".join(
@@ -588,6 +611,10 @@ def generate_html(data: dict) -> str:
         .exec-summary p {{ margin: 0.5rem 0; }}
         .exec-summary ul {{ margin: 0.75rem 0; padding-left: 1.5rem; }}
         .exec-summary li {{ margin: 0.35rem 0; }}
+        .ai-exec-summary {{ margin-bottom: 1.5rem; }}
+        .ai-exec-block {{ background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%); padding: 1.25rem; border-radius: var(--radius-sm); margin-bottom: 1rem; border-left: 4px solid var(--primary-light); }}
+        .ai-exec-label {{ font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--primary); margin-bottom: 0.5rem; }}
+        .ai-exec-text {{ margin: 0; font-size: 0.95rem; line-height: 1.65; color: var(--text-secondary); }}
 
         /* ============================================================
            Risk Badge
@@ -1122,6 +1149,7 @@ def generate_html(data: dict) -> str:
 
             <!-- 1. Executive Summary -->
             <h2 class="section-heading" id="exec-summary"><span class="section-number">1</span> Executive Summary</h2>
+            {_ai_exec_section(data)}
             <div class="exec-summary">
                 <p>This report presents the findings of a security assessment conducted on <strong>{_html_escape(p.get('application_name', ''))}</strong>.
                 The assessment evaluated the application against industry-standard security controls including OWASP Top 10, CWE Top 25, and related frameworks.</p>
@@ -1676,6 +1704,36 @@ def generate_docx(data: dict) -> bytes:
     # 1. Executive Summary
     # ============================================================
     _add_heading_styled(doc, "1. Executive Summary", level=1)
+    ai = data.get("ai_report_content") or {}
+    if ai:
+        exec_sum = ai.get("executive_summary") or ai.get("ai_summary")
+        if exec_sum:
+            p_ai = doc.add_paragraph()
+            run = p_ai.add_run("AI-Generated Executive Summary")
+            run.bold = True
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor.from_string(primary_light)
+            doc.add_paragraph(str(exec_sum), style="Normal")
+            doc.add_paragraph()
+        tech = ai.get("technical_summary")
+        if tech:
+            p_tech = doc.add_paragraph()
+            run = p_tech.add_run("Technical Summary")
+            run.bold = True
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor.from_string(primary_light)
+            doc.add_paragraph(str(tech), style="Normal")
+            doc.add_paragraph()
+        strat = ai.get("strategic_recommendations")
+        if strat:
+            p_strat = doc.add_paragraph()
+            run = p_strat.add_run("Strategic Recommendations")
+            run.bold = True
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor.from_string("0ea5e9")
+            strat_text = "\n".join(f"• {s}" for s in strat) if isinstance(strat, list) else str(strat)
+            doc.add_paragraph(strat_text, style="Normal")
+            doc.add_paragraph()
     doc.add_paragraph(
         f"This report presents the findings of a security assessment conducted on "
         f"{p.get('application_name', '')}. The assessment evaluated the application against "
@@ -2289,6 +2347,36 @@ def generate_pdf(data: dict) -> bytes:
     pdf.add_page()
     pdf.set_text_color(0, 0, 0)
     pdf.section_heading(1, "Executive Summary")
+    ai = data.get("ai_report_content") or {}
+    if ai:
+        exec_sum = ai.get("executive_summary") or ai.get("ai_summary")
+        if exec_sum:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(30, 58, 95)
+            pdf.cell(0, 6, "AI-Generated Executive Summary", ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(0, 0, 0)
+            pdf.multi_cell(190, 5, safe_text(str(exec_sum), 2000))
+            pdf.ln(2)
+        tech = ai.get("technical_summary")
+        if tech:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(30, 58, 95)
+            pdf.cell(0, 6, "Technical Summary", ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(0, 0, 0)
+            pdf.multi_cell(190, 5, safe_text(str(tech), 2000))
+            pdf.ln(2)
+        strat = ai.get("strategic_recommendations")
+        if strat:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(14, 165, 233)
+            pdf.cell(0, 6, "Strategic Recommendations", ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(0, 0, 0)
+            strat_text = "\n".join(f"• {s}" for s in strat) if isinstance(strat, list) else str(strat)
+            pdf.multi_cell(190, 5, safe_text(strat_text, 2000))
+            pdf.ln(4)
     pdf.set_font("Helvetica", "", 10)
     pdf.multi_cell(190, 5, f"This report presents the findings of a security assessment on {safe_text(p.get('application_name', ''), 80)}. "
         "The assessment evaluated the application against OWASP Top 10, CWE Top 25, MITRE ATT&CK, ISO 27001, and NIST 800-53 frameworks.")

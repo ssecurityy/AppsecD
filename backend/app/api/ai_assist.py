@@ -580,7 +580,14 @@ async def full_report_summary_api(
         "testing_type": project.testing_type,
         "environment": project.environment,
     }
-    return summarize_full_report(
+    result = summarize_full_report(
         project_dict, findings, [],
         provider=provider or "", model=model or "", api_key=api_key or "",
     )
+    if result:
+        existing = (project.ai_report_content or {}) if hasattr(project, "ai_report_content") and project.ai_report_content else {}
+        merged = {**existing, **{k: v for k, v in result.items() if v is not None}}
+        project.ai_report_content = merged
+        await db.commit()
+        await db.refresh(project)
+    return result

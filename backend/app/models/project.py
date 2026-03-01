@@ -34,6 +34,7 @@ class Project(Base):
     failed_count = Column(Integer, default=0)
     na_count = Column(Integer, default=0)
     risk_rating = Column(String(20), default="medium")
+    ai_report_content = Column(JSONB, nullable=True)  # executive_summary, technical_summary, strategic_recommendations, ai_summary, risk_rating, key_statistics
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

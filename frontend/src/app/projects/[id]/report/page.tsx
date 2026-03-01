@@ -46,7 +46,22 @@ export default function LiveReportPage() {
   useEffect(() => {
     if (!id) return;
     api.getReportData(id)
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        const ai = d?.ai_report_content;
+        if (ai) {
+          if (ai.ai_summary || ai.executive_summary) setAiSummary(ai.ai_summary || ai.executive_summary);
+          if (ai.executive_summary || ai.technical_summary || ai.strategic_recommendations) {
+            setFullReport({
+              executive_summary: ai.executive_summary,
+              technical_summary: ai.technical_summary,
+              strategic_recommendations: ai.strategic_recommendations,
+              risk_rating: ai.risk_rating,
+              key_statistics: ai.key_statistics,
+            });
+          }
+        }
+      })
       .catch((e: Error) => { setError(e.message); toast.error(e.message); })
       .finally(() => setLoading(false));
   }, [id]);
@@ -252,7 +267,11 @@ export default function LiveReportPage() {
                     <Sparkles className="w-4 h-4 text-emerald-400" />
                     <span className="text-xs font-semibold text-emerald-400">Strategic Recommendations</span>
                   </div>
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{fullReport.strategic_recommendations}</p>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>
+                    {Array.isArray(fullReport.strategic_recommendations)
+                      ? fullReport.strategic_recommendations.join("\n\n")
+                      : fullReport.strategic_recommendations}
+                  </p>
                 </div>
               )}
             </div>

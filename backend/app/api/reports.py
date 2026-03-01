@@ -55,6 +55,15 @@ async def _load_org_branding(db, project) -> dict:
     }
 
 
+async def _save_ai_report_content(db, project, content: dict):
+    """Merge and persist AI report content to project."""
+    existing = (project.ai_report_content or {}) if hasattr(project, "ai_report_content") else {}
+    merged = {**existing, **{k: v for k, v in content.items() if v is not None}}
+    project.ai_report_content = merged
+    await db.commit()
+    await db.refresh(project)
+
+
 def finding_to_dict(f, evidence_from_result=None):
     ev = evidence_from_result if evidence_from_result else []
     if not ev and getattr(f, "evidence_urls", None):
@@ -85,7 +94,7 @@ def finding_to_dict(f, evidence_from_result=None):
 
 
 def project_to_dict(p):
-    return {
+    d = {
         "id": str(p.id),
         "name": p.name,
         "application_name": p.application_name,
@@ -106,6 +115,9 @@ def project_to_dict(p):
         "failed_count": p.failed_count or 0,
         "na_count": p.na_count or 0,
     }
+    if hasattr(p, "ai_report_content") and p.ai_report_content:
+        d["ai_report_content"] = p.ai_report_content
+    return d
 
 
 @router.get("/{project_id}/report")
@@ -355,6 +367,7 @@ async def summarize_report(
         if critical_high:
             summary += f"{critical_high} are Critical/High severity requiring immediate attention. "
         summary += f"Testing covered {project.tested_count or 0} of {project.total_test_cases or 0} test cases."
+        _save_ai_report_content(db, project, {"ai_summary": summary, "executive_summary": summary})
         return {"summary": summary, "mode": "rule_based"}
 
     try:
@@ -381,6 +394,7 @@ Be professional, concise, and actionable."""
             max_tokens=300,
         )
         summary = (response.choices[0].message.content or "").strip()
+        _save_ai_report_content(db, project, {"ai_summary": summary, "executive_summary": summary})
         return {"summary": summary, "mode": "llm"}
     except Exception as e:
         return {"summary": f"Failed to generate LLM summary: {str(e)}", "mode": "error"}
