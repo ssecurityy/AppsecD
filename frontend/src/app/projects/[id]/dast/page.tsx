@@ -1,17 +1,20 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState, useRef } from "react";
+import { useParams } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
 import Navbar from "@/components/Navbar";
 import { api } from "@/lib/api";
 import toast from "react-hot-toast";
 import { 
   Shield, Play, CheckCircle, XCircle, AlertTriangle, Loader2, 
-  ArrowLeft, RefreshCw, ChevronDown, ChevronUp, Globe, Lock,
+  ArrowLeft, ChevronDown, ChevronUp, Globe, Lock,
   Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
   Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput
 } from "lucide-react";
 import Link from "next/link";
+
+const STUCK_THRESHOLD_SEC = 30;
+const POLL_INTERVAL_MS = 1500;
 
 const CHECK_ICONS: Record<string, any> = {
   security_headers: Shield, ssl_tls: Lock, cookie_security: Cookie,
@@ -29,14 +32,18 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 export default function DastScanPage() {
   const { id } = useParams();
-  const router = useRouter();
   const { user, hydrate } = useAuthStore();
   const [project, setProject] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanId, setScanId] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<any>(null);
   const [scanResult, setScanResult] = useState<any>(null);
+  const [stuck, setStuck] = useState(false);
   const [availableChecks, setAvailableChecks] = useState<any[]>([]);
   const [selectedChecks, setSelectedChecks] = useState<string[]>([]);
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
+  const [initialExpandDone, setInitialExpandDone] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => { hydrate(); }, [hydrate]);
 
@@ -54,28 +61,102 @@ export default function DastScanPage() {
     }
   }, [id]);
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
   const handleScan = async () => {
     if (!project) return;
     setScanning(true);
     setScanResult(null);
+    setScanProgress(null);
+    setScanId(null);
+    setStuck(false);
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
     try {
-      const result = await api.dastScan({
+      const res = await api.dastScan({
         project_id: id as string,
         checks: selectedChecks.length < availableChecks.length ? selectedChecks : undefined,
-      });
-      setScanResult(result);
-      try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(result)); } catch {}
-      if (result.findings_created > 0) {
-        toast.success(`Scan complete! ${result.findings_created} finding(s) auto-created.`);
-      } else if (result.failed === 0) {
-        toast.success("All checks passed!");
-      } else {
-        toast(`Scan complete: ${result.failed} issue(s) found`, { icon: "⚠️" });
-      }
+      }) as { scan_id: string; project_id: string; target_url: string };
+      setScanId(res.scan_id);
+      const poll = async () => {
+        try {
+          const prog = await api.dastScanProgress(res.scan_id) as {
+            status: string;
+            current_check?: string;
+            completed_count: number;
+            total: number;
+            results: any[];
+            last_updated: number;
+            error?: string;
+            target_url?: string;
+            passed?: number;
+            failed?: number;
+            errors?: number;
+            duration_seconds?: number;
+            findings_created?: number;
+            finding_titles?: string[];
+          };
+          setScanProgress(prog);
+          if (prog.error) {
+            setStuck(false);
+            setScanning(false);
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            toast.error(prog.error);
+            return;
+          }
+          const age = (Date.now() / 1000) - prog.last_updated;
+          setStuck(prog.status === "running" && age > STUCK_THRESHOLD_SEC);
+          if (prog.status === "completed") {
+            setScanning(false);
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            const result = {
+              target_url: prog.target_url || project.application_url,
+              total_checks: prog.results?.length ?? prog.total ?? 0,
+              passed: prog.passed ?? 0,
+              failed: prog.failed ?? 0,
+              errors: prog.errors ?? 0,
+              duration_seconds: prog.duration_seconds ?? 0,
+              results: prog.results ?? [],
+              findings_created: prog.findings_created ?? 0,
+              finding_titles: prog.finding_titles ?? [],
+            };
+            setScanResult(result);
+            setInitialExpandDone(false);
+            try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(result)); } catch {}
+            if (result.findings_created > 0) {
+              toast.success(`Scan complete! ${result.findings_created} finding(s) auto-created.`);
+            } else if (result.failed === 0) {
+              toast.success("All checks passed!");
+            } else {
+              toast(`Scan complete: ${result.failed} issue(s) found`, { icon: "⚠️" });
+            }
+          }
+        } catch (e) {
+          setScanning(false);
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+          toast.error("Failed to fetch scan progress");
+        }
+      };
+      poll();
+      pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Scan failed");
-    } finally {
       setScanning(false);
+      toast.error(err instanceof Error ? err.message : "Scan failed");
     }
   };
 
@@ -92,6 +173,15 @@ export default function DastScanPage() {
       return next;
     });
   };
+
+  // Auto-expand failed checks when results first load
+  useEffect(() => {
+    if (scanResult?.results && !initialExpandDone) {
+      const failedIds = new Set((scanResult.results as any[]).filter((r: any) => r.status === "failed").map((r: any) => r.check_id));
+      setExpandedResults(prev => new Set([...Array.from(prev), ...Array.from(failedIds)]));
+      setInitialExpandDone(true);
+    }
+  }, [scanResult, initialExpandDone]);
 
   if (!user) return null;
 
@@ -160,13 +250,85 @@ export default function DastScanPage() {
           </div>
         </div>
 
-        {/* Results */}
+        {/* Live Progress - Which scan is running */}
+        {scanning && (
+          <div className="rounded-xl p-4 space-y-4" style={{ background: "var(--bg-card)", border: stuck ? "1px solid #dc2626" : "1px solid var(--border-subtle)" }}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h2 className="font-semibold" style={{ color: "var(--text-primary)" }}>Scan in Progress</h2>
+                <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                  Target: {project?.application_url || scanProgress?.target_url} {scanId && `• ID: ${scanId.slice(0, 8)}…`}
+                </p>
+              </div>
+              {stuck && (
+                <span className="flex items-center gap-1.5 text-sm font-medium px-3 py-1 rounded" style={{ background: "rgba(220, 38, 38, 0.15)", color: "#dc2626" }}>
+                  <AlertTriangle className="w-4 h-4" /> Stuck — no updates for &gt;{STUCK_THRESHOLD_SEC}s
+                </span>
+              )}
+            </div>
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span style={{ color: "var(--text-secondary)" }}>
+                  {scanProgress?.current_check ? (
+                    <span className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                      {scanProgress.current_check}
+                    </span>
+                  ) : (
+                    "Starting..."
+                  )}
+                </span>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  {scanProgress?.completed_count ?? 0} / {scanProgress?.total ?? 0} completed
+                </span>
+              </div>
+              <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--bg-elevated)" }}>
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${scanProgress?.total ? Math.min(100, (100 * (scanProgress?.completed_count ?? 0)) / scanProgress.total) : 0}%`,
+                    background: stuck ? "#dc2626" : "#2563eb",
+                  }}
+                />
+              </div>
+            </div>
+            {(scanProgress?.results?.length ?? 0) > 0 && (
+              <div className="pt-2">
+                <p className="text-xs font-medium mb-2" style={{ color: "var(--text-secondary)" }}>Completed checks</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(scanProgress?.results ?? []).map((r: any) => (
+                    <span
+                      key={r.check_id}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded"
+                      style={{
+                        background: r.status === "passed" ? "rgba(22, 163, 74, 0.15)" : r.status === "failed" ? "rgba(220, 38, 38, 0.15)" : "var(--bg-elevated)",
+                        color: r.status === "passed" ? "#16a34a" : r.status === "failed" ? "#dc2626" : "var(--text-secondary)",
+                      }}
+                    >
+                      {r.status === "passed" ? <CheckCircle className="w-3 h-3" /> : r.status === "failed" ? <XCircle className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                      {r.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Results - Scan Complete */}
         {scanResult && (
           <div className="space-y-4">
-            {/* Summary */}
+            {/* Summary - Scan Complete */}
             <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
               <div className="flex items-center justify-between mb-2">
-                <h2 className="font-semibold" style={{ color: "var(--text-primary)" }}>Scan Results</h2>
+                <div>
+                  <h2 className="font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                    <CheckCircle className="w-5 h-5 text-emerald-500" /> Scan Complete
+                  </h2>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
+                    Target: {scanResult.target_url}
+                  </p>
+                </div>
                 <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
                   {scanResult.duration_seconds}s | {scanResult.total_checks} checks
                 </span>
@@ -215,23 +377,46 @@ export default function DastScanPage() {
                     </div>
                   </button>
                   {expanded && (
-                    <div className="px-4 pb-4 space-y-2 text-sm" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                      {check.evidence && (
-                        <div><strong style={{ color: "var(--text-primary)" }}>Evidence:</strong><pre className="mt-1 p-2 rounded text-xs overflow-x-auto" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{check.evidence}</pre></div>
-                      )}
-                      {check.request_raw && (
-                        <div>
-                          <strong style={{ color: "var(--text-primary)" }}>Request:</strong>
-                          <pre className="mt-1 p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "3px solid #dc2626" : undefined }}>{check.request_raw}</pre>
+                    <div className="px-4 pb-4 space-y-4 text-sm" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                      {/* Status callout: failed = highlight issue, passed = everything correct */}
+                      {check.status === "failed" && (
+                        <div className="p-3 rounded-lg" style={{ background: "rgba(220, 38, 38, 0.12)", border: "1px solid rgba(220, 38, 38, 0.3)" }}>
+                          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "#dc2626" }}>
+                            <XCircle className="w-4 h-4" /> Issue
+                          </p>
+                          <p className="text-sm mt-1" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                          {check.evidence && <p className="text-xs mt-2 font-mono" style={{ color: "var(--text-secondary)" }}>{check.evidence}</p>}
                         </div>
                       )}
+                      {check.status === "passed" && (
+                        <div className="p-3 rounded-lg" style={{ background: "rgba(22, 163, 74, 0.12)", border: "1px solid rgba(22, 163, 74, 0.3)" }}>
+                          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "#16a34a" }}>
+                            <CheckCircle className="w-4 h-4" /> All checks correct
+                          </p>
+                          <p className="text-sm mt-1" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                        </div>
+                      )}
+                      {check.status === "error" && (
+                        <div className="p-3 rounded-lg" style={{ background: "rgba(202, 138, 4, 0.12)", border: "1px solid rgba(202, 138, 4, 0.3)" }}>
+                          <p className="text-sm font-semibold flex items-center gap-2" style={{ color: "#ca8a04" }}>
+                            <AlertTriangle className="w-4 h-4" /> Error
+                          </p>
+                          <p className="text-sm mt-1" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                        </div>
+                      )}
+                      {/* Request — always show when available */}
+                      {check.request_raw && (
+                        <div>
+                          <p className="text-xs font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Request</p>
+                          <pre className="p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "4px solid #dc2626" : "4px solid var(--border-subtle)" }}>{check.request_raw}</pre>
+                        </div>
+                      )}
+                      {/* Response — always show when available */}
                       {check.response_raw && (
                         <div>
-                          <strong style={{ color: "var(--text-primary)" }}>Response:</strong>
-                          <pre className="mt-1 p-2 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-48 overflow-y-auto" style={{ background: check.status === "failed" ? "rgba(220, 38, 38, 0.08)" : "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "3px solid #dc2626" : undefined }}>{check.response_raw}</pre>
-                          {check.status === "failed" && (
-                            <span className="text-xs font-medium mt-1 inline-block" style={{ color: "#dc2626" }}>Anomaly detected — review response above</span>
-                          )}
+                          <p className="text-xs font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Response</p>
+                          <pre className="p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-64 overflow-y-auto" style={{ background: check.status === "failed" ? "rgba(220, 38, 38, 0.06)" : "var(--bg-elevated)", color: "var(--text-secondary)", borderLeft: check.status === "failed" ? "4px solid #dc2626" : "4px solid var(--border-subtle)" }}>{check.response_raw}</pre>
+                          {check.status === "failed" && <p className="text-xs font-medium mt-1" style={{ color: "#dc2626" }}>Anomaly detected — review response above</p>}
                         </div>
                       )}
                       {check.reproduction_steps && (

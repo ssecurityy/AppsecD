@@ -12,7 +12,7 @@ import re
 import os
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, urljoin
 
 logger = logging.getLogger(__name__)
@@ -322,12 +322,16 @@ def check_ssl_tls(target_url: str) -> DastResult:
     )
     parsed = urlparse(target_url)
     if parsed.scheme != "https":
+        resp = _safe_get(target_url)
         result.status = "failed"
         result.severity = "high"
         result.description = "Target does not use HTTPS"
         result.remediation = "Enable HTTPS with a valid TLS certificate"
         result.reproduction_steps = f"1. Navigate to {target_url}\n2. Observe protocol is HTTP, not HTTPS"
         result.evidence = f"URL scheme: {parsed.scheme}"
+        if resp:
+            result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+            result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:1500] if resp.text else "")
         return result
 
     host = parsed.hostname
@@ -359,14 +363,20 @@ def check_ssl_tls(target_url: str) -> DastResult:
                 else:
                     result.status = "passed"
                     result.description = f"SSL/TLS configuration OK (Protocol: {protocol})"
+                result.request_raw = f"TLS connect to {host}:{port}\nSNI: {host}"
+                result.response_raw = f"Protocol: {protocol}\nCipher: {cipher[0] if cipher else 'N/A'}\nCert subject: {cert.get('subject', '')}"
     except ssl.SSLCertVerificationError as e:
         result.status = "failed"
         result.severity = "high"
         result.description = f"SSL certificate verification failed: {str(e)[:200]}"
         result.remediation = "Install a valid SSL certificate from a trusted CA"
+        result.request_raw = f"TLS connect to {parsed.hostname}:{parsed.port or 443}\nSNI: {parsed.hostname}"
+        result.response_raw = f"Error: SSL certificate verification failed\n{str(e)[:500]}"
     except Exception as e:
         result.status = "error"
         result.description = f"SSL check error: {str(e)[:200]}"
+        result.request_raw = f"TLS connect to {parsed.hostname}:{parsed.port or 443}"
+        result.response_raw = f"Error: {str(e)[:500]}"
     return result
 
 
@@ -391,6 +401,8 @@ def check_cookie_security(target_url: str) -> DastResult:
         result.status = "passed"
         result.description = "No cookies set on this page"
         result.details = {"cookies_found": 0}
+        result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+        result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:1500] if resp.text else "")
         return result
 
     issues = []
@@ -1214,39 +1226,89 @@ ALL_CHECKS = [
 ]
 
 
-def run_dast_scan(target_url: str, checks: list[str] | None = None) -> dict:
-    """Run DAST scan with WAF-aware throttling, UA rotation, reachability probe."""
+_dast_progress: dict[str, dict] = {}
+_dast_progress_lock = __import__("threading").Lock()
+
+
+def run_dast_scan(
+    target_url: str,
+    checks: list[str] | None = None,
+    progress_scan_id: str | None = None,
+    progress_meta: dict | None = None,
+    on_progress: Callable | None = None,
+) -> dict:
+    """Run DAST scan with optional progress callback for UI streaming."""
     global _scan_ctx
     results = []
     selected = ALL_CHECKS if not checks else [(n, f) for n, f in ALL_CHECKS if n in checks]
-    
+    total = len(selected)
+
+    def _emit(index: int, check_name: str, result_dict: dict | None) -> None:
+        if on_progress:
+            on_progress(index, total, check_name, result_dict)
+        if progress_scan_id:
+            with _dast_progress_lock:
+                entry = {
+                    "status": "completed" if index >= total else "running",
+                    "current_index": index,
+                    "current_check": check_name if index < total else None,
+                    "completed_count": index,
+                    "total": total,
+                    "results": results,
+                    "last_updated": time.time(),
+                }
+                if progress_meta:
+                    entry.update(progress_meta)
+                _dast_progress[progress_scan_id] = entry
+
     # Phase 1: Resolve reachable base URL (slow, evades WAF)
+    if progress_scan_id:
+        with _dast_progress_lock:
+            entry = {
+                "status": "running",
+                "current_check": "Resolving target URL...",
+                "completed_count": 0,
+                "total": total,
+                "results": [],
+                "last_updated": time.time(),
+            }
+            if progress_meta:
+                entry.update(progress_meta)
+            _dast_progress[progress_scan_id] = entry
     resolved = _resolve_base_url(target_url)
     effective_url = (resolved or target_url).rstrip("/") or target_url
-    _scan_ctx = ScanContext(resolved)  # use resolved for rewriting same-host requests
-    
+    _scan_ctx = ScanContext(resolved)
+
     start = time.time()
     try:
-        for name, check_fn in selected:
+        for i, (name, check_fn) in enumerate(selected):
+            if progress_scan_id:
+                with _dast_progress_lock:
+                    if progress_scan_id in _dast_progress:
+                        _dast_progress[progress_scan_id]["current_check"] = name
+                        _dast_progress[progress_scan_id]["last_updated"] = time.time()
             try:
                 r = check_fn(effective_url)
-                results.append(r.to_dict())
+                rd = r.to_dict()
+                results.append(rd)
+                _emit(i + 1, name, rd)
             except Exception as e:
-                results.append(DastResult(
+                rd = DastResult(
                     check_id=f"DAST-ERR-{name}",
                     title=f"Error in {name}",
                     status="error",
                     description=str(e)[:200],
-                ).to_dict())
+                ).to_dict()
+                results.append(rd)
+                _emit(i + 1, name, rd)
     finally:
         _scan_ctx = None
-    
+
     duration = round(time.time() - start, 2)
     passed = sum(1 for r in results if r["status"] == "passed")
     failed = sum(1 for r in results if r["status"] == "failed")
     errors = sum(1 for r in results if r["status"] == "error")
-    
-    return {
+    final = {
         "target_url": target_url,
         "total_checks": len(results),
         "passed": passed,
@@ -1255,3 +1317,35 @@ def run_dast_scan(target_url: str, checks: list[str] | None = None) -> dict:
         "duration_seconds": duration,
         "results": results,
     }
+    if progress_scan_id:
+        with _dast_progress_lock:
+            _dast_progress[progress_scan_id] = {
+                "status": "completed",
+                "current_check": None,
+                "completed_count": total,
+                "total": total,
+                "results": results,
+                "last_updated": time.time(),
+                "target_url": target_url,
+                "passed": passed,
+                "failed": failed,
+                "errors": errors,
+                "duration_seconds": duration,
+            }
+    return final
+
+
+def get_dast_progress(scan_id: str) -> dict | None:
+    """Return current progress for a scan. None if unknown."""
+    with _dast_progress_lock:
+        return _dast_progress.get(scan_id)
+
+
+def list_dast_progress(max_age_sec: float = 3600) -> list[dict]:
+    """Return all scans (active + recent) for dashboard. Evict entries older than max_age_sec."""
+    now = time.time()
+    with _dast_progress_lock:
+        expired = [sid for sid, v in _dast_progress.items() if isinstance(v, dict) and (now - v.get("last_updated", 0)) > max_age_sec]
+        for sid in expired:
+            del _dast_progress[sid]
+        return [{"scan_id": sid, **(v if isinstance(v, dict) else {})} for sid, v in _dast_progress.items()]

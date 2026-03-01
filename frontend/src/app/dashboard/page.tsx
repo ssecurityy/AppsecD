@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import {
   Plus, FolderOpen, ShieldCheck, Target, AlertTriangle, TrendingUp,
   ChevronRight, Building2, Users, Crown, Zap, BookOpen, BarChart3,
-  Activity, Clock, Flame, Award, Shield
+  Activity, Clock, Flame, Award, Shield, CheckCircle
 } from "lucide-react";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [users, setUsers] = useState<any[]>([]);
   const [trendData, setTrendData] = useState<{ by_date: { date: string; total: number; dast: number; manual: number }[]; by_severity: Record<string, number> } | null>(null);
   const [trendLoading, setTrendLoading] = useState(true);
+  const [dastScans, setDastScans] = useState<any[]>([]);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -43,6 +44,9 @@ export default function Dashboard() {
       .then((r: any) => setTrendData(r || { by_date: [], by_severity: {} }))
       .catch(() => setTrendData({ by_date: [], by_severity: {} }))
       .finally(() => setTrendLoading(false));
+    api.dastScans()
+      .then((r: any) => setDastScans(r?.scans ?? []))
+      .catch(() => setDastScans([]));
 
     if (isAdmin(user?.role)) {
       api.listOrganizations().then(setOrgs).catch(() => {});
@@ -156,6 +160,48 @@ export default function Dashboard() {
             </motion.div>
           ))}
         </div>
+
+        {/* DAST Activity */}
+        {dastScans.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
+            className="rounded-xl p-4 border border-indigo-500/20" style={{ background: "var(--bg-card)" }}>
+            <h3 className="text-sm font-semibold flex items-center gap-2 mb-3" style={{ color: "var(--text-primary)" }}>
+              <Shield className="w-4 h-4 text-indigo-400" /> DAST Scan Activity
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {dastScans.slice(0, 10).map((s: any) => {
+                const isRunning = s.status === "running";
+                const target = s.target_url || s.project_id || "—";
+                return (
+                  <Link
+                    key={s.scan_id}
+                    href={s.project_id ? `/projects/${s.project_id}/dast` : "/projects"}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all"
+                    style={{
+                      background: isRunning ? "rgba(99, 102, 241, 0.12)" : "var(--bg-elevated)",
+                      border: `1px solid ${isRunning ? "rgba(99, 102, 241, 0.3)" : "var(--border-subtle)"}`,
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {isRunning ? (
+                      <Activity className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                    ) : s.status === "completed" ? (
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                    )}
+                    <span className="truncate max-w-[180px]" title={target}>{target}</span>
+                    {isRunning && (
+                      <span style={{ color: "var(--text-muted)" }}>
+                        {s.completed_count ?? 0}/{s.total ?? 0}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
 
         {/* Admin overview - Orgs & Users */}
         {isSuperAdmin(user?.role) && orgs.length > 0 && (
