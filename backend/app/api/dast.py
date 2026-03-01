@@ -221,6 +221,7 @@ async def get_scan_history(
                 "passed": row.passed,
                 "failed": row.failed,
                 "errors_count": row.errors_count,
+                "total_checks": (row.passed or 0) + (row.failed or 0) + (row.errors_count or 0),
                 "duration_seconds": row.duration_seconds,
                 "findings_created": row.findings_created,
                 "created_at": row.created_at.isoformat() if row.created_at else None,

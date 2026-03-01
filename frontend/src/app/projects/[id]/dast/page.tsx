@@ -76,7 +76,7 @@ export default function DastScanPage() {
         } catch {}
       });
       // Load scan history
-      api.dastProjectHistory(id as string).then((r: any) => {
+      api.dastProjectHistory(id as string, 50).then((r: any) => {
         setScanHistory(r?.scans ?? []);
       }).catch(() => {});
       // If a scan is still running for this project, resume polling
@@ -183,7 +183,7 @@ export default function DastScanPage() {
             setScanResult(result);
             setInitialExpandDone(false);
             try { localStorage.setItem(`dast_result_${id}`, JSON.stringify(result)); } catch {}
-            api.dastProjectHistory(id as string).then((r: any) => setScanHistory(r?.scans ?? [])).catch(() => {});
+            api.dastProjectHistory(id as string, 50).then((r: any) => setScanHistory(r?.scans ?? [])).catch(() => {});
             setTimeout(() => {
               api.dastProjectLatest(id as string).then((r: any) => {
                 setScanResult(r);
@@ -270,11 +270,11 @@ export default function DastScanPage() {
           </button>
         </div>
 
-        {/* Previous Scan Summary & History */}
+        {/* Previous Scan Summary & Full History */}
         {(scanResult || scanHistory.length > 0) && (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-4">
             {scanResult && (
-              <div className="rounded-xl p-4 flex items-center gap-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+              <div className="rounded-xl p-4 flex items-center gap-4 flex-wrap" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
                 <div className="flex items-center gap-2">
                   <History className="w-5 h-5" style={{ color: "var(--accent-indigo)" }} />
                   <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Last Scan</span>
@@ -289,6 +289,9 @@ export default function DastScanPage() {
                   {scanResult.duration_seconds != null && (
                     <span style={{ color: "var(--text-secondary)" }}>{scanResult.duration_seconds}s</span>
                   )}
+                  <span style={{ color: "var(--text-secondary)" }}>
+                    {(scanResult.passed ?? 0) + (scanResult.failed ?? 0) + (scanResult.errors ?? 0)} total
+                  </span>
                   <span className="flex items-center gap-1">
                     <CheckCircle className="w-4 h-4 text-emerald-500" />
                     <span style={{ color: "#16a34a" }}>{scanResult.passed ?? 0} Passed</span>
@@ -297,28 +300,42 @@ export default function DastScanPage() {
                     <XCircle className="w-4 h-4 text-red-500" />
                     <span style={{ color: "#dc2626" }}>{scanResult.failed ?? 0} Failed</span>
                   </span>
+                  {(scanResult.findings_created ?? 0) > 0 && (
+                    <span style={{ color: "#ea580c" }}>{scanResult.findings_created} findings</span>
+                  )}
                 </div>
               </div>
             )}
             {scanHistory.length > 0 && (
               <div className="rounded-xl p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
-                <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center gap-2 mb-3">
                   <History className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
-                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Scan History</span>
+                  <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>All Scan History</span>
+                  <span className="text-xs" style={{ color: "var(--text-muted)" }}>({scanHistory.length} scans)</span>
                 </div>
-                <div className="space-y-1.5 max-h-28 overflow-y-auto">
-                  {scanHistory.slice(0, 5).map((s: any) => (
-                    <div key={s.id || s.scan_id} className="flex items-center justify-between text-xs py-1" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-                      <span style={{ color: "var(--text-secondary)" }}>
-                        {s.created_at ? new Date(s.created_at).toLocaleString() : "—"}
-                      </span>
-                      <span className="flex gap-2">
-                        <span style={{ color: "#16a34a" }}>{s.passed ?? 0}P</span>
-                        <span style={{ color: "#dc2626" }}>{s.failed ?? 0}F</span>
-                        <span style={{ color: "var(--text-muted)" }}>{s.duration_seconds ?? 0}s</span>
-                      </span>
+                <div className="overflow-y-auto" style={{ maxHeight: "300px" }}>
+                  <div className="min-w-[400px]">
+                    <div className="flex gap-4 px-2 py-1.5 text-xs font-medium" style={{ color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)" }}>
+                      <span className="flex-1 min-w-[140px]">Date & Time</span>
+                      <span className="w-12">Total</span>
+                      <span className="w-10">Passed</span>
+                      <span className="w-10">Failed</span>
+                      <span className="w-12">Duration</span>
+                      <span className="w-14">Findings</span>
                     </div>
-                  ))}
+                    {scanHistory.map((s: any) => (
+                      <div key={s.id || s.scan_id} className="flex gap-4 py-2 px-2 rounded hover:bg-white/5 items-center text-xs" style={{ borderBottom: "1px solid var(--border-subtle)" }} title={s.target_url}>
+                        <span className="flex-1 min-w-[140px]" style={{ color: "var(--text-secondary)" }}>
+                          {s.created_at ? new Date(s.created_at).toLocaleString() : "—"}
+                        </span>
+                        <span className="w-12" style={{ color: "var(--text-primary)" }}>{s.total_checks ?? (s.passed ?? 0) + (s.failed ?? 0) + (s.errors_count ?? 0)}</span>
+                        <span className="w-10" style={{ color: "#16a34a" }}>{s.passed ?? 0}</span>
+                        <span className="w-10" style={{ color: "#dc2626" }}>{s.failed ?? 0}</span>
+                        <span className="w-12" style={{ color: "var(--text-muted)" }}>{s.duration_seconds ?? 0}s</span>
+                        <span className="w-14" style={{ color: (s.findings_created ?? 0) > 0 ? "#ea580c" : "var(--text-muted)" }}>{s.findings_created ?? 0}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
