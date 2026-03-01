@@ -1,5 +1,5 @@
 """Findings API with Vulnerability Management."""
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
@@ -384,3 +384,73 @@ async def create_jira_issue(
     if not out:
         raise HTTPException(502, "Failed to create JIRA issue. Check JIRA configuration and connectivity.")
     return {"jira_key": out["key"], "jira_url": out["url"]}
+
+
+@router.post("/import/burp")
+async def import_burp_xml(
+    project_id: str = Query(...),
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import findings from Burp Suite XML export."""
+    from app.services.burp_import_service import parse_burp_xml
+
+    if not file.filename or not file.filename.endswith(".xml"):
+        raise HTTPException(400, "Only XML files are accepted")
+
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 50MB)")
+
+    xml_str = content.decode("utf-8", errors="replace")
+    parsed = parse_burp_xml(xml_str)
+
+    if not parsed:
+        raise HTTPException(400, "No findings found in XML. Ensure it is a valid Burp Suite XML export.")
+
+    import uuid as _uuid
+    created = []
+    for f_data in parsed:
+        finding = Finding(
+            project_id=_uuid.UUID(project_id),
+            title=f_data["title"],
+            severity=f_data["severity"],
+            description=f_data.get("description", ""),
+            affected_url=f_data.get("affected_url", ""),
+            recommendation=f_data.get("recommendation", ""),
+            request=f_data.get("request", ""),
+            response=f_data.get("response", ""),
+            status="open",
+            created_by=current_user.id,
+        )
+        db.add(finding)
+        created.append(f_data["title"])
+
+    await db.commit()
+    return {"imported": len(created), "findings": created}
+
+
+@router.post("/auto-suggest")
+async def auto_suggest_finding(
+    payload: dict,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """When a test case fails, suggest a finding with pre-filled data."""
+    from app.services.ai_assist_service import suggest_finding
+    from app.services.admin_settings_service import get_llm_config
+
+    title = payload.get("test_title", "")
+    description = payload.get("test_description", "")
+    fail_notes = payload.get("notes", "")
+    combined_desc = f"{description}\n\nTester Notes: {fail_notes}" if fail_notes else description
+
+    provider, model, api_key = await get_llm_config(db)
+    suggestion = suggest_finding(title, combined_desc, "medium", provider=provider, model=model, api_key=api_key)
+
+    return {
+        "title": title,
+        "description": combined_desc,
+        **suggestion,
+    }
