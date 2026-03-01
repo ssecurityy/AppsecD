@@ -501,6 +501,17 @@ async def import_burp_xml(
     if not parsed:
         raise HTTPException(400, "No findings found in XML. Ensure it is a valid Burp Suite XML export.")
 
+    # Optional LLM enhancement
+    try:
+        from app.services.llm_enhanced_service import enhance_burp_findings
+        from app.services.org_settings_service import get_llm_config
+        org_id = current_user.organization_id
+        provider, model, api_key = await get_llm_config(db, org_id)
+        if api_key:
+            parsed = enhance_burp_findings(parsed, provider=provider or "", model=model or "", api_key=api_key or "")
+    except Exception:
+        pass  # LLM enhancement is optional
+
     import uuid as _uuid
     created = []
     for f_data in parsed:
