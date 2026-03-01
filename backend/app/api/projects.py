@@ -76,14 +76,6 @@ async def detect_technology(
         return {"stack_profile": {}, "_error": "URL required", "_detected": False}
     result = _detect(url)
     stack_profile = {k: v for k, v in result.items() if not k.startswith("_")}
-    if result.get("frontend"):
-        stack_profile["frontend"] = result["frontend"]
-    if result.get("backend"):
-        stack_profile["backend"] = result["backend"]
-    if result.get("server"):
-        stack_profile["server"] = result.get("server", [])
-    if result.get("cms"):
-        stack_profile["cms"] = result.get("cms", [])
     return {"stack_profile": stack_profile, "_detected": result.get("_detected", False), "_error": result.get("_error")}
 
 

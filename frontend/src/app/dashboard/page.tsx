@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [orgs, setOrgs] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [trendData, setTrendData] = useState<{ by_date: { date: string; total: number; dast: number; manual: number }[]; by_severity: Record<string, number> } | null>(null);
+  const [trendLoading, setTrendLoading] = useState(true);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => {
@@ -37,7 +38,11 @@ export default function Dashboard() {
       .then((r: any) => setProjects(r?.items ?? (Array.isArray(r) ? r : [])))
       .catch(() => {})
       .finally(() => setLoading(false));
-    api.getDashboardFindingsTrend().then(setTrendData).catch(() => setTrendData(null));
+    setTrendLoading(true);
+    api.getDashboardFindingsTrend()
+      .then((r: any) => setTrendData(r || { by_date: [], by_severity: {} }))
+      .catch(() => setTrendData({ by_date: [], by_severity: {} }))
+      .finally(() => setTrendLoading(false));
 
     if (isAdmin(user?.role)) {
       api.listOrganizations().then(setOrgs).catch(() => {});
@@ -210,19 +215,25 @@ export default function Dashboard() {
           </motion.div>
         )}
 
-        {/* Vulnerability & Findings Trend Charts */}
-        {(stats.findings > 0 || (trendData?.by_date?.length ?? 0) > 0) && (
+        {/* Vulnerability & Findings Trend Charts — always visible for trend awareness */}
+        {user && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
             className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {trendData?.by_date && trendData.by_date.length > 0 && (
-              <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
-                className="card p-5 overflow-hidden" style={{ borderColor: "var(--border-subtle)" }}>
-                <h3 className="text-sm font-semibold flex items-center gap-2 mb-4" style={{ color: "var(--text-primary)" }}>
-                  <TrendingUp className="w-4 h-4 text-indigo-400" /> Issues Trend
-                </h3>
+            {/* Issues Trend — GET /projects/trend/findings */}
+            <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
+              className="card p-5 overflow-hidden" style={{ borderColor: "var(--border-subtle)" }}>
+              <h3 className="text-sm font-semibold flex items-center gap-2 mb-4" style={{ color: "var(--text-primary)" }}>
+                <TrendingUp className="w-4 h-4 text-indigo-400" /> Issues Trend
+              </h3>
+              {trendLoading ? (
+                <div className="h-48 flex items-center justify-center" style={{ background: "var(--bg-elevated)", borderRadius: 8 }}>
+                  <motion.div animate={{ opacity: [0.4, 0.8, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }}
+                    className="text-xs" style={{ color: "var(--text-muted)" }}>Loading trend...</motion.div>
+                </div>
+              ) : trendData?.by_date && trendData.by_date.length > 0 ? (
                 <div className="h-48">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={trendData.by_date} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                    <AreaChart data={[...(trendData.by_date)].sort((a, b) => (a.date || "").localeCompare(b.date || ""))} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
                       <defs>
                         <linearGradient id="dastGradDash" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="#10b981" stopOpacity={0.5} />
@@ -236,15 +247,21 @@ export default function Dashboard() {
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                       <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="var(--text-muted)" />
                       <YAxis tick={{ fontSize: 10 }} stroke="var(--text-muted)" />
-                      <Tooltip contentStyle={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)", borderRadius: 8 }} labelFormatter={(l) => `Date: ${l}`} />
+                      <Tooltip contentStyle={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)", borderRadius: 8 }} labelStyle={{ color: "var(--text-primary)" }} labelFormatter={(l) => `Date: ${l}`} formatter={(value: number | undefined) => [value ?? 0, ""]} />
                       <Legend />
-                      <Area type="monotone" dataKey="dast" name="DAST" stackId="1" stroke="#10b981" fill="url(#dastGradDash)" strokeWidth={2} />
-                      <Area type="monotone" dataKey="manual" name="Manual" stackId="1" stroke="#6366f1" fill="url(#manualGradDash)" strokeWidth={2} />
+                      <Area type="monotone" dataKey="dast" name="DAST" stackId="1" stroke="#10b981" fill="url(#dastGradDash)" strokeWidth={2} isAnimationActive />
+                      <Area type="monotone" dataKey="manual" name="Manual" stackId="1" stroke="#6366f1" fill="url(#manualGradDash)" strokeWidth={2} isAnimationActive />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
-              </motion.div>
-            )}
+              ) : (
+                <div className="h-48 flex flex-col items-center justify-center rounded-lg" style={{ background: "var(--bg-elevated)", border: "1px dashed var(--border-subtle)" }}>
+                  <TrendingUp className="w-10 h-10 mb-2" style={{ color: "var(--text-muted)", opacity: 0.5 }} />
+                  <p className="text-xs text-center px-4" style={{ color: "var(--text-muted)" }}>No findings yet. Run DAST scans or add manual findings to see date-wise trends.</p>
+                </div>
+              )}
+            </motion.div>
+            {/* Vulnerability Distribution by severity */}
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }}
               className="card p-5" style={{ borderColor: "var(--border-subtle)" }}>
               <div className="flex items-center justify-between mb-4">
@@ -258,20 +275,13 @@ export default function Dashboard() {
                   const sevCounts: Record<string, number> = trendData?.by_severity && Object.keys(trendData.by_severity).length > 0
                     ? { critical: 0, high: 0, medium: 0, low: 0, info: 0, ...trendData.by_severity }
                     : {};
-                  if (Object.keys(sevCounts).length === 0) {
-                    const fc = (p: any) => p.finding_count ?? p.failed_count ?? 0;
-                    projects.forEach(p => {
-                      const cnt = fc(p);
-                      if (cnt > 0) {
-                        sevCounts["high"] = (sevCounts["high"] || 0) + Math.ceil(cnt * 0.3);
-                        sevCounts["medium"] = (sevCounts["medium"] || 0) + Math.ceil(cnt * 0.4);
-                        sevCounts["low"] = (sevCounts["low"] || 0) + Math.ceil(cnt * 0.3);
-                      }
-                    });
-                  }
                   const total = Object.values(sevCounts).reduce((a, b) => a + b, 0) || 1;
                   const order = ["critical", "high", "medium", "low", "info"];
-                  return order.filter(s => (sevCounts[s] || 0) > 0).map((sev, i) => (
+                  const segments = order.filter(s => (sevCounts[s] || 0) > 0);
+                  if (segments.length === 0) {
+                    return <div className="w-full h-full flex items-center justify-center" style={{ background: "var(--bg-elevated)", borderRadius: 4 }} />;
+                  }
+                  return segments.map((sev, i) => (
                     <motion.div key={sev} initial={{ width: 0 }} animate={{ width: `${((sevCounts[sev] || 0) / total) * 100}%` }}
                       transition={{ delay: 0.5 + i * 0.05, duration: 0.6 }}
                       className={`${SEVERITY_COLORS[sev] || "bg-gray-500"}`} title={`${sev}: ${sevCounts[sev]}`} />

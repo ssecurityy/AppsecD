@@ -184,6 +184,7 @@ export default function NewProject() {
                             const res = await api.detectTech(info.application_url);
                             if (res.stack_profile && res._detected) {
                               const sp = res.stack_profile;
+                              const all = [...(sp.frontend || []), ...(sp.backend || []), ...(sp.cms || []), ...(sp.api || []), ...(sp.waf || [])].slice(0, 8);
                               setStack(prev => ({
                                 ...prev,
                                 frontend: Array.from(new Set([...prev.frontend, ...(sp.frontend || [])])),
@@ -191,7 +192,7 @@ export default function NewProject() {
                                 cms: sp.cms?.length ? (sp.cms[0] || "none") : prev.cms,
                                 api_type: Array.from(new Set([...prev.api_type, ...(sp.api || []).map((a: string) => a.toLowerCase())])),
                               }));
-                              toast.success(`Detected: ${[...(sp.frontend || []), ...(sp.backend || []), ...(sp.cms || [])].slice(0, 5).join(", ") || "tech stack"}`);
+                              toast.success(`Detected: ${all.join(", ") || "tech stack"}`);
                             } else {
                               toast.error(res._error || "Could not detect technology");
                             }
