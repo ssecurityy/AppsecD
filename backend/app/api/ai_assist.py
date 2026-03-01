@@ -209,3 +209,378 @@ async def craft_payload(
         "source": "fallback",
         "message": "LLM call failed. Returning original payloads.",
     }
+
+
+# ─── Helper: resolve org_id from project or user ───
+
+async def _resolve_org_id(project_id: str | None, current_user, db: AsyncSession) -> str | None:
+    """Resolve organization ID from project or user."""
+    org_id = None
+    if project_id:
+        proj = await db.execute(select(Project).where(Project.id == project_id))
+        p = proj.scalar_one_or_none()
+        if p and p.organization_id:
+            org_id = p.organization_id
+    if not org_id and current_user.organization_id:
+        org_id = current_user.organization_id
+    return org_id
+
+
+# ─── Request Models for LLM-enhanced endpoints ───
+
+class AnalyzeEndpointRequest(BaseModel):
+    endpoint: str
+    method: str = "GET"
+    parameters: str = ""
+    request_sample: str = ""
+    response_sample: str = ""
+    framework: str = ""
+    project_id: str | None = None
+
+class GenerateSimilarTestsRequest(BaseModel):
+    existing_test: dict
+    target_context: str
+    project_id: str | None = None
+
+class MissingTestsRequest(BaseModel):
+    project_id: str
+
+class FrameworkTestsRequest(BaseModel):
+    framework: str
+    version: str = ""
+    features: list[str] = []
+    project_id: str | None = None
+
+class EnrichRemediationRequest(BaseModel):
+    finding_title: str
+    finding_description: str = ""
+    current_remediation: str = ""
+    app_framework: str = ""
+    app_language: str = ""
+    project_id: str | None = None
+
+class DeduplicateFindingsRequest(BaseModel):
+    project_id: str
+
+class QueryFindingsRequest(BaseModel):
+    query: str
+    project_id: str | None = None
+
+class VulnerabilityTrendsRequest(BaseModel):
+    project_ids: list[str] | None = None
+
+class CvePayloadsRequest(BaseModel):
+    cve_id: str
+    cve_description: str = ""
+    affected_product: str = ""
+    project_id: str | None = None
+
+class GenerateCommandsRequest(BaseModel):
+    test_title: str
+    test_description: str = ""
+    target_url: str = ""
+    parameters: str = ""
+    vuln_type: str = ""
+    project_id: str | None = None
+
+class InterpretResultsRequest(BaseModel):
+    tool_name: str
+    raw_output: str
+    test_context: str = ""
+    project_id: str | None = None
+
+class FullReportSummaryRequest(BaseModel):
+    project_id: str
+
+
+# ─── 1. Analyze Endpoint ───
+
+@router.post("/analyze-endpoint")
+async def analyze_endpoint_api(
+    payload: AnalyzeEndpointRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyze an endpoint for potential vulnerabilities."""
+    from app.services.llm_enhanced_service import analyze_endpoint
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return analyze_endpoint(
+        payload.endpoint, payload.method, payload.parameters,
+        payload.request_sample, payload.response_sample, payload.framework,
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 2. Generate Similar Tests ───
+
+@router.post("/generate-similar-tests")
+async def generate_similar_tests_api(
+    payload: GenerateSimilarTestsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate similar test cases from an existing one."""
+    from app.services.llm_enhanced_service import generate_similar_tests
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return {
+        "test_cases": generate_similar_tests(
+            payload.existing_test, payload.target_context,
+            provider=provider or "", model=model or "", api_key=api_key or "",
+        )
+    }
+
+
+# ─── 3. Missing Tests ───
+
+@router.post("/missing-tests")
+async def missing_tests_api(
+    payload: MissingTestsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggest tests that are missing from the current scope."""
+    from app.services.llm_enhanced_service import suggest_missing_tests
+    from app.models.result import ProjectTestResult
+    import uuid
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    proj = await db.execute(select(Project).where(Project.id == uuid.UUID(payload.project_id)))
+    project = proj.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    results = await db.execute(select(ProjectTestResult).where(ProjectTestResult.project_id == uuid.UUID(payload.project_id)))
+    tested_phases = list(set())
+    return suggest_missing_tests(
+        project.stack_profile or {}, tested_phases, project.tested_count or 0, project.total_test_cases or 0,
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 4. Framework Tests ───
+
+@router.post("/framework-tests")
+async def framework_tests_api(
+    payload: FrameworkTestsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate framework-specific security tests."""
+    from app.services.llm_enhanced_service import generate_framework_tests
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return {
+        "test_cases": generate_framework_tests(
+            payload.framework, payload.version, payload.features,
+            provider=provider or "", model=model or "", api_key=api_key or "",
+        )
+    }
+
+
+# ─── 5. Enrich Remediation ───
+
+@router.post("/enrich-remediation")
+async def enrich_remediation_api(
+    payload: EnrichRemediationRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Enrich remediation with app-specific, actionable guidance."""
+    from app.services.llm_enhanced_service import enrich_remediation
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return enrich_remediation(
+        payload.finding_title, payload.finding_description, payload.current_remediation,
+        payload.app_framework, payload.app_language,
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 6. Deduplicate Findings ───
+
+@router.post("/deduplicate-findings")
+async def deduplicate_findings_api(
+    payload: DeduplicateFindingsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyze findings for duplicates and suggest merges."""
+    from app.services.llm_enhanced_service import deduplicate_findings
+    from app.models.finding import Finding
+    import uuid
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    result = await db.execute(select(Finding).where(Finding.project_id == uuid.UUID(payload.project_id)))
+    findings = [{"title": f.title, "severity": f.severity, "cwe_id": f.cwe_id, "affected_url": f.affected_url, "description": f.description} for f in result.scalars().all()]
+    return deduplicate_findings(findings, provider=provider or "", model=model or "", api_key=api_key or "")
+
+
+# ─── 7. Query Findings (Natural Language) ───
+
+@router.post("/query-findings")
+async def query_findings_api(
+    payload: QueryFindingsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Convert natural language to structured finding filters."""
+    from app.services.llm_enhanced_service import query_findings_nl
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return query_findings_nl(
+        payload.query,
+        available_severities=["critical", "high", "medium", "low", "info"],
+        available_statuses=["open", "confirmed", "mitigated", "fixed", "accepted_risk", "fp"],
+        available_cwes=[],
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 8. Vulnerability Trends ───
+
+@router.post("/vulnerability-trends")
+async def vulnerability_trends_api(
+    payload: VulnerabilityTrendsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyze vulnerability trends across projects."""
+    from app.services.llm_enhanced_service import analyze_vulnerability_trends
+    from app.models.finding import Finding
+    org_id = current_user.organization_id
+    provider, model, api_key = await get_llm_config(db, org_id)
+    projects = await db.execute(select(Project))
+    projects_data = []
+    for p in projects.scalars().all():
+        findings = await db.execute(select(Finding).where(Finding.project_id == p.id))
+        all_f = findings.scalars().all()
+        projects_data.append({
+            "name": p.application_name,
+            "finding_count": len(all_f),
+            "critical": sum(1 for f in all_f if (f.severity or "").lower() == "critical"),
+            "high": sum(1 for f in all_f if (f.severity or "").lower() == "high"),
+            "top_cwes": list(set(f.cwe_id for f in all_f if f.cwe_id))[:5],
+        })
+    return analyze_vulnerability_trends(projects_data, provider=provider or "", model=model or "", api_key=api_key or "")
+
+
+# ─── 9. CVE Payloads ───
+
+@router.post("/cve-payloads")
+async def cve_payloads_api(
+    payload: CvePayloadsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate proof-of-concept payloads from a CVE."""
+    from app.services.llm_enhanced_service import generate_cve_payloads
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return generate_cve_payloads(
+        payload.cve_id, payload.cve_description, payload.affected_product,
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 10. Generate Tool Commands ───
+
+@router.post("/generate-commands")
+async def generate_commands_api(
+    payload: GenerateCommandsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate ready-to-run tool commands for a test case."""
+    from app.services.llm_enhanced_service import generate_tool_commands
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return generate_tool_commands(
+        payload.test_title, payload.test_description, payload.target_url,
+        payload.parameters, payload.vuln_type,
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 11. Interpret Tool Results ───
+
+@router.post("/interpret-results")
+async def interpret_results_api(
+    payload: InterpretResultsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Interpret tool output and suggest pass/fail + finding."""
+    from app.services.llm_enhanced_service import interpret_tool_results
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    return interpret_tool_results(
+        payload.tool_name, payload.raw_output, payload.test_context,
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
+
+
+# ─── 12. Full Report Summary ───
+
+@router.post("/full-report-summary")
+async def full_report_summary_api(
+    payload: FullReportSummaryRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a comprehensive report narrative."""
+    from app.services.llm_enhanced_service import summarize_full_report
+    from app.models.finding import Finding
+    from app.models.result import ProjectTestResult
+    import uuid
+    org_id = await _resolve_org_id(payload.project_id, current_user, db)
+    from app.api.security_intel import check_feature_enabled
+    if not await check_feature_enabled(db, org_id, "ai_finding_suggest"):
+        raise HTTPException(403, "AI features are disabled for your organization.")
+    provider, model, api_key = await get_llm_config(db, org_id)
+    proj = await db.execute(select(Project).where(Project.id == uuid.UUID(payload.project_id)))
+    project = proj.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    findings_result = await db.execute(select(Finding).where(Finding.project_id == uuid.UUID(payload.project_id)))
+    findings = [{"title": f.title, "severity": f.severity, "description": f.description, "cwe_id": f.cwe_id} for f in findings_result.scalars().all()]
+    project_dict = {
+        "application_name": project.application_name,
+        "application_url": project.application_url,
+        "testing_type": project.testing_type,
+        "environment": project.environment,
+    }
+    return summarize_full_report(
+        project_dict, findings, [],
+        provider=provider or "", model=model or "", api_key=api_key or "",
+    )
