@@ -949,7 +949,7 @@ export default function ProjectDetail() {
                         <Tooltip
                           contentStyle={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-subtle)", borderRadius: 8 }}
                           labelStyle={{ color: "var(--text-primary)" }}
-                          formatter={(value: number) => [value, ""]}
+                          formatter={(value: number | undefined) => [value ?? 0, ""]}
                           labelFormatter={(label) => `Date: ${label}`}
                         />
                         <Legend />

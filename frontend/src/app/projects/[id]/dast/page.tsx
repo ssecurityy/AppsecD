@@ -9,7 +9,7 @@ import {
   Shield, Play, CheckCircle, XCircle, AlertTriangle, Loader2, 
   ArrowLeft, RefreshCw, ChevronDown, ChevronUp, Globe, Lock,
   Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
-  Code, Database, BookOpen, Header, Wrench, HardDrive, FormInput
+  Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput
 } from "lucide-react";
 import Link from "next/link";
 
@@ -18,7 +18,7 @@ const CHECK_ICONS: Record<string, any> = {
   cors: Globe, info_disclosure: Server, http_methods: Zap,
   robots_txt: FileText, directory_listing: Folder, open_redirect: ExternalLink,
   rate_limiting: Clock, xss_basic: Code, sqli_error: Database,
-  api_docs_exposure: BookOpen, host_header_injection: Header, crlf_injection: Wrench,
+  api_docs_exposure: BookOpen, host_header_injection: Layers, crlf_injection: Wrench,
   sensitive_data: HardDrive, sri: Shield, cache_control: Clock,
   form_autocomplete: FormInput, backup_files: FileText,
 };
