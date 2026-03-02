@@ -63,6 +63,7 @@ DAST_CHECK_TO_PHASE = {
     "DAST-UIR-01": "transport", "DAST-COOKP-01": "auth", "DAST-REDIR-03": "pre_auth",
     "DAST-TAO-01": "recon", "DAST-ALTSVC-01": "transport", "DAST-HSTS-02": "transport",
     "DAST-CD-01": "pre_auth", "DAST-PRAGMA-01": "pre_auth",
+    "DAST-CRYP-02": "transport",  # Padding Oracle (WSTG-CRYP-02)
 }
 from datetime import datetime, date
 import uuid

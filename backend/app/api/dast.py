@@ -13,6 +13,8 @@ from app.core.database import get_db, AsyncSessionLocal
 from app.models.project import Project
 from app.models.finding import Finding
 from app.models.dast_scan_result import DastScanResult
+from app.models.test_case import TestCase
+from app.models.result import ProjectTestResult
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,44 @@ async def _run_scan_background(
                         f.recheck_notes = "DAST scan passed — vulnerability no longer detected"
                         f.recheck_date = datetime.utcnow()
                         f.recheck_by = user_id
+
+            # Sync DAST results to ProjectTestResult for mapped WSTG test cases
+            DAST_CHECK_TO_WSTG = {"DAST-CRYP-02": "WSTG-CRYP-02"}
+            from datetime import datetime as dt
+            for check in result["results"]:
+                check_id = check.get("check_id", "")
+                wstg_id = DAST_CHECK_TO_WSTG.get(check_id)
+                if not wstg_id:
+                    continue
+                status_map = {"passed": "passed", "failed": "failed", "error": "failed"}
+                new_status = status_map.get((check.get("status") or "").lower())
+                if not new_status:
+                    continue
+                ptr_q = (
+                    select(ProjectTestResult, TestCase)
+                    .join(TestCase, ProjectTestResult.test_case_id == TestCase.id)
+                    .where(
+                        ProjectTestResult.project_id == project_uuid,
+                        TestCase.module_id == wstg_id,
+                        ProjectTestResult.is_applicable == True,
+                    )
+                )
+                ptr_rows = (await db.execute(ptr_q)).all()
+                for ptr, tc in ptr_rows:
+                    ptr.status = new_status
+                    ptr.tester_id = user_id
+                    ptr.completed_at = dt.utcnow()
+                    if check.get("evidence"):
+                        ptr.evidence = [{"filename": "dast_evidence", "url": "", "description": check["evidence"]}]
+                    if check.get("request_raw"):
+                        ptr.request_captured = check["request_raw"]
+                    if check.get("response_raw"):
+                        ptr.response_captured = check["response_raw"]
+                    if check.get("reproduction_steps"):
+                        ptr.reproduction_steps = check["reproduction_steps"]
+                    ptr.tool_used = "DAST (Navigator)"
+                    ptr.payload_used = check.get("evidence", "")
+
             await db.commit()
         except Exception as e:
             logger.exception("DAST findings creation failed for %s", scan_id)

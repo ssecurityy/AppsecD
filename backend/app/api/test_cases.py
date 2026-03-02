@@ -136,6 +136,9 @@ async def get_project_test_cases(
         d["evidence"] = ptr.evidence or []
         d["tool_used"] = ptr.tool_used
         d["payload_used"] = ptr.payload_used
+        d["request_captured"] = ptr.request_captured
+        d["response_captured"] = ptr.response_captured
+        d["reproduction_steps"] = ptr.reproduction_steps
         d["time_spent_seconds"] = ptr.time_spent_seconds or 0
         out.append(d)
     return {"items": out, "total": total, "limit": limit, "offset": offset}
