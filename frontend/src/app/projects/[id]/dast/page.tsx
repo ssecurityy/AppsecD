@@ -7,10 +7,10 @@ import { api } from "@/lib/api";
 import toast from "react-hot-toast";
 import { 
   Shield, Play, CheckCircle, XCircle, AlertTriangle, Loader2, 
-  ArrowLeft, ChevronDown, Globe, Lock,
-  Cookie, Server, FileText, Folder, ExternalLink, Zap, Clock,
+  ArrowLeft, ChevronDown, ChevronRight, Globe, Lock,
+  Cookie, Server, FileText, Folder, File, ExternalLink, Zap, Clock,
   Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput,
-  History, Calendar, Filter, ChevronRight, Search, LayoutGrid
+  History, Calendar, Filter, Search, LayoutGrid
 } from "lucide-react";
 import Link from "next/link";
 
@@ -61,9 +61,64 @@ export default function DastScanPage() {
   const [resultSearch, setResultSearch] = useState("");
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [dirsSectionExpanded, setDirsSectionExpanded] = useState(false);
+  const [dastActiveTab, setDastActiveTab] = useState<"results" | "directories">("results");
   const [ffufScanning, setFfufScanning] = useState<string | null>(null);
   const [ffufResults, setFfufResults] = useState<Record<string, { discovered: { path: string; status: number }[]; wordlist_used: string }>>({});
+  const [ffufExhaustiveJobId, setFfufExhaustiveJobId] = useState<string | null>(null);
+  const [ffufExhaustiveScanning, setFfufExhaustiveScanning] = useState(false);
+  const exhaustivePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [dirTreeExpanded, setDirTreeExpanded] = useState<Set<string>>(new Set(["/"]));
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  type PathItem = { path: string; status: number };
+  const buildPathTree = (items: PathItem[]): { name: string; fullPath: string; status?: number; children: any[]; isFile: boolean } => {
+    const root: any = { name: "/", fullPath: "/", children: [], isFile: false };
+    const addPath = (parts: string[], status: number, node: any, fullSoFar: string) => {
+      if (parts.length === 0) return;
+      const [first, ...rest] = parts;
+      const seg = first || "";
+      if (!seg) return;
+      const childPath = fullSoFar === "/" ? `/${seg}` : `${fullSoFar}/${seg}`;
+      let child = node.children.find((c: any) => c.name === seg);
+      if (!child) {
+        child = { name: seg, fullPath: childPath, status: rest.length === 0 ? status : undefined, children: [], isFile: rest.length === 0 && !seg.match(/\/$/) };
+        node.children.push(child);
+      } else if (rest.length === 0 && child.status == null) {
+        child.status = status;
+      }
+      addPath(rest, status, child, childPath);
+    };
+    for (const it of items) {
+      const p = (it.path || "/").replace(/\/+/g, "/").replace(/^\//, "").replace(/\/$/, "") || "";
+      const parts = p ? p.split("/") : [];
+      addPath(parts, it.status, root, "/");
+    }
+    const sortChildren = (n: any) => {
+      n.children.sort((a: any, b: any) => {
+        if (a.children?.length && !b.children?.length) return -1;
+        if (!a.children?.length && b.children?.length) return 1;
+        return (a.name || "").localeCompare(b.name || "");
+      });
+      n.children.forEach(sortChildren);
+    };
+    sortChildren(root);
+    return root;
+  };
+
+  const allDiscoveredPaths = (() => {
+    const dirCheck = (scanResult?.results || []).find((r: any) => r.check_id === "DAST-DIR-02");
+    const base = (dirCheck?.details?.discovered || []) as PathItem[];
+    const fromFfuf = Object.values(ffufResults).flatMap((r) => r.discovered);
+    const byPath = new Map<string, number>();
+    for (const x of [...base, ...fromFfuf]) {
+      const p = (x.path || "").replace(/\/+$/, "") || "/";
+      const norm = p === "" || p === "/" ? "/" : p.startsWith("/") ? p : `/${p}`;
+      if (!byPath.has(norm)) byPath.set(norm, x.status);
+    }
+    return Array.from(byPath.entries()).map(([path, status]) => ({ path, status }));
+  })();
+
+  const pathTreeRoot = allDiscoveredPaths.length > 0 ? buildPathTree(allDiscoveredPaths) : null;
 
   useEffect(() => { hydrate(); }, [hydrate]);
 
@@ -253,6 +308,45 @@ export default function DastScanPage() {
     return (dirCheck?.details?.discovered || []) as { path: string; status: number }[];
   })();
 
+  const handleRunExhaustive = async () => {
+    const target = scanResult?.target_url || project?.application_url;
+    if (!target || !id) return;
+    setFfufExhaustiveScanning(true);
+    setFfufExhaustiveJobId(null);
+    try {
+      const res = await api.dastFfufExhaustive({ project_id: id as string, target_url: target, base_path: "/" }) as { job_id: string };
+      setFfufExhaustiveJobId(res.job_id);
+      const poll = async () => {
+        try {
+          const prog = await api.dastFfufExhaustiveProgress(res.job_id) as { status: string; discovered?: { path: string; status: number }[]; wordlists_used?: string[]; test_case_updated?: boolean };
+          if (prog.status === "completed") {
+            setFfufExhaustiveScanning(false);
+            setFfufExhaustiveJobId(null);
+            if (exhaustivePollRef.current) { clearInterval(exhaustivePollRef.current); exhaustivePollRef.current = null; }
+            const disc = prog.discovered || [];
+            setFfufResults(prev => ({ ...prev, "/": { discovered: disc, wordlist_used: (prog.wordlists_used || []).join(", ") } }));
+            const msg = disc.length > 0
+              ? (prog.test_case_updated ? `Found ${disc.length} path(s). Directory Discovery test case auto-marked.` : `Found ${disc.length} path(s)`)
+              : (prog.test_case_updated ? `Directory bruteforce completed. No paths discovered. Test case auto-marked.` : `Directory bruteforce completed. No paths discovered.`);
+            toast.success(msg);
+          } else if (prog.status === "error") {
+            setFfufExhaustiveScanning(false);
+            setFfufExhaustiveJobId(null);
+            if (exhaustivePollRef.current) { clearInterval(exhaustivePollRef.current); exhaustivePollRef.current = null; }
+            toast.error((prog as any).error || "Exhaustive scan failed");
+          }
+        } catch (_) {}
+      };
+      poll();
+      exhaustivePollRef.current = setInterval(poll, 2000);
+    } catch (e) {
+      setFfufExhaustiveScanning(false);
+      toast.error(e instanceof Error ? e.message : "Failed to start exhaustive scan");
+    }
+  };
+
+  useEffect(() => () => { if (exhaustivePollRef.current) clearInterval(exhaustivePollRef.current); }, []);
+
   const handleRunFullWordlist = async (basePath: string) => {
     const target = scanResult?.target_url || project?.application_url;
     if (!target) return;
@@ -382,13 +476,31 @@ export default function DastScanPage() {
                   <span className="w-10">Time</span>
                 </div>
                 {scanHistory.map((s: any) => (
-                  <div key={s.id || s.scan_id} className="flex gap-4 py-1.5 px-2 text-xs rounded hover:bg-white/5" style={{ borderBottom: "1px solid var(--border-subtle)" }} title={s.target_url}>
+                  <button
+                    key={s.id || s.scan_id}
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const data = await api.dastProjectScan(id as string, s.scan_id);
+                        setScanResult(data);
+                        setDastActiveTab("results");
+                        hasSetFilterForScan.current = null;
+                        setInitialExpandDone(false);
+                        toast.success("Loaded scan from " + (s.created_at ? new Date(s.created_at).toLocaleString() : "history"));
+                      } catch (e) {
+                        toast.error("Failed to load scan");
+                      }
+                    }}
+                    className="w-full flex gap-4 py-1.5 px-2 text-xs rounded hover:bg-white/10 cursor-pointer text-left transition-colors"
+                    style={{ borderBottom: "1px solid var(--border-subtle)" }}
+                    title={`Click to view vulnerabilities — ${s.target_url || ""}`}
+                  >
                     <span className="flex-1 min-w-[130px]" style={{ color: "var(--text-secondary)" }}>{s.created_at ? new Date(s.created_at).toLocaleString() : "—"}</span>
                     <span className="w-10" style={{ color: "var(--text-primary)" }}>{s.total_checks ?? "-"}</span>
                     <span className="w-8" style={{ color: "#16a34a" }}>{s.passed ?? 0}</span>
                     <span className="w-8" style={{ color: "#dc2626" }}>{s.failed ?? 0}</span>
                     <span className="w-10" style={{ color: "var(--text-muted)" }}>{s.duration_seconds ?? 0}s</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -519,6 +631,133 @@ export default function DastScanPage() {
         {/* Results - Scan Complete */}
         {scanResult && (
           <div className="space-y-4">
+            {/* Tabs: Scan Results | Directory Bruteforce */}
+            <div className="flex gap-1 p-1 rounded-xl" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+              <button
+                onClick={() => setDastActiveTab("results")}
+                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "results" ? "text-white" : ""}`}
+                style={{
+                  background: dastActiveTab === "results" ? "var(--accent-indigo)" : "transparent",
+                  color: dastActiveTab === "results" ? "white" : "var(--text-secondary)",
+                }}
+              >
+                <Shield className="w-4 h-4" />
+                Scan Results
+              </button>
+              <button
+                onClick={() => setDastActiveTab("directories")}
+                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "directories" ? "text-white" : ""}`}
+                style={{
+                  background: dastActiveTab === "directories" ? "var(--accent-indigo)" : "transparent",
+                  color: dastActiveTab === "directories" ? "white" : "var(--text-secondary)",
+                }}
+              >
+                <Folder className="w-4 h-4" />
+                Directory Bruteforce
+                {allDiscoveredPaths.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: dastActiveTab === "directories" ? "rgba(255,255,255,0.25)" : "rgba(37,99,235,0.2)", color: "inherit" }}>{allDiscoveredPaths.length}</span>
+                )}
+              </button>
+            </div>
+
+            {dastActiveTab === "directories" ? (
+              /* Directory Bruteforce Tab - Tree View */
+              <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                <div className="p-3 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <h2 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                        <Folder className="w-4 h-4" style={{ color: "var(--accent-indigo)" }} />
+                        Discovered Directories & Files
+                      </h2>
+                      <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+                        Tree view of paths from directory discovery and ffuf scans. Run full wordlist on any path for deeper discovery.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleRunExhaustive}
+                      disabled={ffufExhaustiveScanning || !scanResult?.target_url && !project?.application_url}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
+                      style={{ background: ffufExhaustiveScanning ? "#4b5563" : "#7c3aed", color: "white" }}
+                    >
+                      {ffufExhaustiveScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      {ffufExhaustiveScanning ? "Exhaustive scan running..." : "Run Exhaustive (all wordlists)"}
+                    </button>
+                  </div>
+                </div>
+                <div className="p-3 max-h-[500px] overflow-y-auto">
+                  {!pathTreeRoot || pathTreeRoot.children.length === 0 ? (
+                    <div className="py-12 text-center" style={{ color: "var(--text-muted)" }}>
+                      <Folder className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No directories or files discovered yet</p>
+                      <p className="text-xs mt-1">Run a scan with &quot;Directory Discovery&quot; check enabled, or use &quot;Run Exhaustive&quot; to run all wordlists in background</p>
+                      <button
+                        onClick={handleRunExhaustive}
+                        disabled={ffufExhaustiveScanning || (!scanResult?.target_url && !project?.application_url)}
+                        className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium mx-auto"
+                        style={{ background: ffufExhaustiveScanning ? "#4b5563" : "#7c3aed", color: "white" }}
+                      >
+                        {ffufExhaustiveScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                        {ffufExhaustiveScanning ? "Scanning..." : "Run Exhaustive"}
+                      </button>
+                    </div>
+                  ) : (
+                    (() => {
+                      const toggleDir = (fp: string) => setDirTreeExpanded((s) => { const n = new Set(s); if (n.has(fp)) n.delete(fp); else n.add(fp); return n; });
+                      const renderNode = (node: any, depth: number, isLast: boolean, prefix: string) => {
+                        const fp = node.fullPath || "/";
+                        const hasChildren = node.children && node.children.length > 0;
+                        const expanded = dirTreeExpanded.has(fp);
+                        const Icon = hasChildren ? Folder : File;
+                        const statusColor = node.status ? (node.status >= 200 && node.status < 300 ? "#16a34a" : node.status >= 400 ? "#dc2626" : "#ca8a04") : "var(--text-muted)";
+                        const ffufData = ffufResults[fp];
+                        const isScanning = ffufScanning === fp;
+                        return (
+                          <div key={fp} className="select-none">
+                            <div className="flex items-center gap-2 py-1 group" style={{ paddingLeft: `${depth * 16}px` }}>
+                              <span className="text-xs font-mono w-4 shrink-0" style={{ color: "var(--text-muted)" }}>{prefix}</span>
+                              <button
+                                onClick={() => hasChildren && toggleDir(fp)}
+                                className="p-0.5 rounded hover:bg-white/5"
+                                style={{ color: "var(--text-muted)" }}
+                              >
+                                {hasChildren ? <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} /> : <span className="w-3.5 inline-block" />}
+                              </button>
+                              <Icon className="w-4 h-4 shrink-0" style={{ color: hasChildren ? "var(--accent-indigo)" : "var(--text-secondary)" }} />
+                              <span className="text-xs font-mono truncate flex-1 min-w-0" style={{ color: "var(--text-primary)" }}>{node.name}{hasChildren ? "/" : ""}</span>
+                              {node.status != null && <span className="text-xs shrink-0" style={{ color: statusColor }}>HTTP {node.status}</span>}
+                              {ffufData && <span className="text-xs shrink-0" style={{ color: "#16a34a" }}>+{ffufData.discovered.length}</span>}
+                              <button
+                                onClick={() => handleRunFullWordlist(fp === "/" ? "" : fp)}
+                                disabled={isScanning}
+                                className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded text-xs font-medium shrink-0 transition-opacity"
+                                style={{ background: "var(--accent-indigo)", color: "white" }}
+                              >
+                                {isScanning ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "Run Wordlist"}
+                              </button>
+                            </div>
+                            {hasChildren && expanded && node.children.map((child: any, i: number) => {
+                              const isLastChild = i === node.children.length - 1;
+                              const line = depth === 0 ? (isLastChild ? "└──" : "├──") : (isLastChild ? "└──" : "├──");
+                              return renderNode(child, depth + 1, isLastChild, line);
+                            })}
+                          </div>
+                        );
+                      };
+                      return (
+                        <div className="font-mono text-sm">
+                          {pathTreeRoot.children.map((child: any, i: number) => {
+                            const isLast = i === pathTreeRoot.children.length - 1;
+                            return renderNode(child, 0, isLast, isLast ? "└──" : "├──");
+                          })}
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
+              </div>
+            ) : (
+            <>
             {/* Filter & Summary Bar */}
             <div className="rounded-xl p-3 space-y-2" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
               <div className="flex flex-wrap items-center gap-2">
@@ -722,6 +961,8 @@ export default function DastScanPage() {
                 })
               )}
             </div>
+            </>
+            )}
           </div>
         )}
 
