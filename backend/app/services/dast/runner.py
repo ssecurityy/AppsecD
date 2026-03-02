@@ -60,6 +60,14 @@ from .checks import (
     check_content_disposition,
     check_pragma_no_cache,
     check_padding_oracle,
+    check_jwt_security,
+    check_csrf_protection,
+    check_csp_deep,
+    check_path_traversal,
+    check_ssrf,
+    check_command_injection,
+    check_cors_deep,
+    check_http_smuggling,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,6 +127,15 @@ ALL_CHECKS = [
     ("content_disposition", check_content_disposition),
     ("pragma_no_cache", check_pragma_no_cache),
     ("padding_oracle", check_padding_oracle),
+    # Advanced security checks
+    ("jwt_security", check_jwt_security),
+    ("csrf_protection", check_csrf_protection),
+    ("csp_deep", check_csp_deep),
+    ("path_traversal", check_path_traversal),
+    ("ssrf", check_ssrf),
+    ("command_injection", check_command_injection),
+    ("cors_deep", check_cors_deep),
+    ("http_smuggling", check_http_smuggling),
 ]
 
 _redis_sync = None

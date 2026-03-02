@@ -58,6 +58,16 @@ from .misc import (
     check_trace_xst,
 )
 from .crypto import check_padding_oracle
+from .advanced import (
+    check_jwt_security,
+    check_csrf_protection,
+    check_csp_deep,
+    check_path_traversal,
+    check_ssrf,
+    check_command_injection,
+    check_cors_deep,
+    check_http_smuggling,
+)
 
 __all__ = [
     "check_security_headers",
@@ -113,4 +123,12 @@ __all__ = [
     "check_content_disposition",
     "check_pragma_no_cache",
     "check_padding_oracle",
+    "check_jwt_security",
+    "check_csrf_protection",
+    "check_csp_deep",
+    "check_path_traversal",
+    "check_ssrf",
+    "check_command_injection",
+    "check_cors_deep",
+    "check_http_smuggling",
 ]

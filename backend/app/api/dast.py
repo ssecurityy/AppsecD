@@ -246,6 +246,15 @@ async def _run_scan_background(
                 "DAST-CORP-01": "WSTG-CONF-07",
                 "DAST-CSD-01": "WSTG-CONF-07",
                 "DAST-AGE-01": "WSTG-CONF-07",
+                # Advanced checks
+                "DAST-JWT-01": "WSTG-SESS-01",
+                "DAST-CSRF-01": "WSTG-SESS-05",
+                "DAST-CSP-01": "WSTG-CONF-07",
+                "DAST-LFI-01": "WSTG-INPV-12",
+                "DAST-SSRF-01": "WSTG-INPV-19",
+                "DAST-CMDI-01": "WSTG-INPV-12",
+                "DAST-CORS-02": "WSTG-CLNT-07",
+                "DAST-SMUGGLE-01": "WSTG-CONF-07",
             }
             from datetime import datetime as dt
             for check in result["results"]:
