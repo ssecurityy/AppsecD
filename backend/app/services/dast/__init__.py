@@ -14,6 +14,12 @@ from .runner import (
     _dast_progress_set,
     _dast_progress_get,
 )
+from .crawler import (
+    run_crawl,
+    run_recursive_directory_scan,
+    fetch_url_content,
+    get_crawl_progress,
+)
 
 __all__ = [
     "DastResult",
@@ -33,4 +39,8 @@ __all__ = [
     "ALL_CHECKS",
     "_dast_progress_set",
     "_dast_progress_get",
+    "run_crawl",
+    "run_recursive_directory_scan",
+    "fetch_url_content",
+    "get_crawl_progress",
 ]

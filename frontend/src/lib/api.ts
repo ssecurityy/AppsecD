@@ -396,6 +396,8 @@ export const api = {
     request(`/dast/scan/${scanId}`, { method: "GET" }),
   dastProjectLatest: (projectId: string) =>
     request(`/dast/project/${projectId}/latest`, { method: "GET" }),
+  dastProjectScan: (projectId: string, scanId: string) =>
+    request(`/dast/project/${projectId}/scan/${scanId}`, { method: "GET" }),
   dastProjectHistory: (projectId: string, limit = 20) =>
     request(`/dast/project/${projectId}/history?limit=${limit}`, { method: "GET" }),
   dastScans: () => request("/dast/scans", { method: "GET" }),
@@ -404,4 +406,30 @@ export const api = {
   dastChecks: () => request("/dast/checks"),
   dastFfufScan: (data: { target_url: string; base_path?: string; wordlist?: string }) =>
     request("/dast/ffuf-scan", { method: "POST", body: JSON.stringify(data) }),
+  dastFfufExhaustive: (data: { project_id: string; target_url: string; base_path?: string }) =>
+    request("/dast/ffuf-exhaustive", { method: "POST", body: JSON.stringify(data) }),
+  dastFfufExhaustiveProgress: (jobId: string) =>
+    request(`/dast/ffuf-exhaustive/${jobId}`, { method: "GET" }),
+
+  // Crawler / Spider
+  dastCrawl: (data: { project_id: string; target_url?: string; auth_config?: any; max_depth?: number; crawl_scope?: string; run_param_discovery?: boolean }) =>
+    request("/dast/crawl", { method: "POST", body: JSON.stringify(data) }),
+  dastCrawlProgress: (crawlId: string) =>
+    request(`/dast/crawl/${crawlId}`, { method: "GET" }),
+  dastCrawlHistory: (projectId: string, limit = 20) =>
+    request(`/dast/crawl/project/${projectId}/history?limit=${limit}`, { method: "GET" }),
+  dastCrawlLatest: (projectId: string) =>
+    request(`/dast/crawl/project/${projectId}/latest`, { method: "GET" }),
+  dastCrawlSession: (projectId: string, crawlId: string) =>
+    request(`/dast/crawl/project/${projectId}/session/${crawlId}`, { method: "GET" }),
+
+  // Recursive Directory Scan
+  dastDirScan: (data: { project_id: string; target_url: string; base_path?: string; max_depth?: number; wordlist?: string; auth_config?: any }) =>
+    request("/dast/dir-scan", { method: "POST", body: JSON.stringify(data) }),
+  dastDirScanProgress: (jobId: string) =>
+    request(`/dast/dir-scan/${jobId}`, { method: "GET" }),
+
+  // Fetch URL content
+  dastFetchUrl: (data: { url: string; auth_config?: any }) =>
+    request("/dast/fetch-url", { method: "POST", body: JSON.stringify(data) }),
 };

@@ -14,6 +14,7 @@ from .org_setting import OrgSetting
 from .stored_cve import StoredCVE
 from .org_feature_flag import OrgFeatureFlag
 from .dast_scan_result import DastScanResult
+from .crawl_session import CrawlSession
 
 __all__ = [
     "User", "Project", "Organization", "Category", "TestCase", "ProjectTestResult",
@@ -25,4 +26,5 @@ __all__ = [
     "StoredCVE",
     "OrgFeatureFlag",
     "DastScanResult",
+    "CrawlSession",
 ]

@@ -73,16 +73,30 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 async def _get_dast_results_by_phase(db: AsyncSession, project_id: str) -> dict:
-    """Fetch latest DAST scan and aggregate passed/failed by phase."""
+    """Aggregate DAST results across all scans, using latest result per check_id.
+    Partial scans (single check) only add/update that check; they do not wipe others."""
     from sqlalchemy import desc
     r = await db.execute(
-        select(DastScanResult).where(DastScanResult.project_id == project_id).order_by(desc(DastScanResult.created_at)).limit(1)
+        select(DastScanResult)
+        .where(DastScanResult.project_id == project_id, DastScanResult.status == "completed")
+        .order_by(desc(DastScanResult.created_at))
+        .limit(50)
     )
-    scan = r.scalar_one_or_none()
-    if not scan or not scan.results:
+    scans = r.scalars().all()
+    # Build: check_id -> latest result (first seen = most recent due to desc order)
+    latest_per_check: dict[str, dict] = {}
+    for scan in scans:
+        if not scan.results:
+            continue
+        for res in scan.results:
+            check_id = res.get("check_id", "")
+            if not check_id or check_id in latest_per_check:
+                continue
+            latest_per_check[check_id] = res
+    if not latest_per_check:
         return {}
     agg: dict[str, dict] = {}
-    for res in scan.results:
+    for res in latest_per_check.values():
         check_id = res.get("check_id", "")
         if check_id.startswith("DAST-ERR-"):
             phase = "recon"
