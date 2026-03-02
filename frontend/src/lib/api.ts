@@ -412,9 +412,11 @@ export const api = {
     request(`/dast/ffuf-exhaustive/${jobId}`, { method: "GET" }),
   dastLastDiscoveredPaths: (projectId: string) =>
     request(`/dast/project/${projectId}/last-discovered-paths`, { method: "GET" }),
+  dastLastDirScan: (projectId: string) =>
+    request(`/dast/project/${projectId}/last-dir-scan`, { method: "GET" }),
 
   // Crawler / Spider
-  dastCrawl: (data: { project_id: string; target_url?: string; auth_config?: any; max_depth?: number; crawl_scope?: string; run_param_discovery?: boolean }) =>
+  dastCrawl: (data: { project_id: string; target_url?: string; auth_config?: any; max_depth?: number; crawl_scope?: string; run_param_discovery?: boolean; use_playwright?: boolean }) =>
     request("/dast/crawl", { method: "POST", body: JSON.stringify(data) }),
   dastCrawlProgress: (crawlId: string) =>
     request(`/dast/crawl/${crawlId}`, { method: "GET" }),

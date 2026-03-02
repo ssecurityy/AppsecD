@@ -81,6 +81,26 @@ git clone --depth 1 https://github.com/danielmiessler/SecLists.git data/SecLists
 
 ---
 
+## 4b. DAST Tools (install all as per application)
+
+One command installs Katana, ffuf, Arjun, Playwright+Chromium, TruffleHog, Retire.js:
+
+```bash
+cd /opt/navigator
+./scripts/install-dast-tools.sh
+```
+
+Requires: Go (installed automatically if missing). Installs:
+- **Katana** – web crawler ([projectdiscovery/katana](https://github.com/projectdiscovery/katana)); Spider tab primary. If native binary hangs, **Docker** fallback is used (`docker run projectdiscovery/katana`).
+- **ffuf** – directory/file fuzzer
+- **Arjun** – parameter discovery (pip, in backend venv)
+- **Playwright + Chromium** – JS/SPA crawling; installs system deps (libxcb, libatk, etc.) + `playwright install chromium`
+- **TruffleHog** – secret scanning in JS/config files
+- **Retire.js** – JS library vulnerability scan
+- **spider_rs** (optional) – high-performance crawler fallback
+
+---
+
 ## 5. Python Dependencies (Backend)
 
 See `backend/requirements.txt`. Key packages:

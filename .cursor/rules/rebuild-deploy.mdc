@@ -1,0 +1,58 @@
+---
+description: Navigator rebuild & deploy process — follow when user says "rebuild", "deploy", or "serve fresh"
+alwaysApply: true
+---
+
+# Navigator Rebuild & Deploy Process
+
+When the user asks to **rebuild**, **deploy**, or **serve fresh** the frontend, follow this sequence exactly.
+
+## 1. Kill Orphan Processes
+
+Ensure no old Next.js processes are serving stale content:
+
+```bash
+# Find and kill orphan next dev / next-server on port 3000
+ps aux | grep -E 'next|node.*navigator/frontend' | grep -v grep
+# Kill PIDs: next dev, next-server, and their parent sh
+kill <pids>
+ss -tlnp | grep 3000   # Verify port 3000 is free
+```
+
+## 2. Clear Cache & Rebuild
+
+```bash
+cd /opt/navigator/frontend
+rm -rf .next
+npm run build
+```
+
+## 3. Restart Navigator via PM2
+
+```bash
+pm2 delete navigator-frontend 2>/dev/null
+cd /opt/navigator
+pm2 start ecosystem.config.cjs --only navigator-frontend
+pm2 save
+```
+
+## 4. Reload Nginx (NPM)
+
+Ports 80/443 are used by **Nginx Proxy Manager** (Docker), not system nginx:
+
+```bash
+docker exec nginx_proxy_app_1 nginx -t && docker exec nginx_proxy_app_1 nginx -s reload
+```
+
+## 5. Verify
+
+```bash
+ss -tlnp | grep 3000
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/
+```
+
+## Notes
+
+- **Single frontend instance**: Only one Next.js process should listen on 3000. Kill orphans before starting.
+- **Backend**: If backend needs restart: `pm2 reload navigator-backend`
+- **User override**: If user explicitly asks to restart nginx, follow their instruction (they may override process-protection).

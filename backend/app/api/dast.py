@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
 
 from app.api.auth import get_current_user
 from app.services.project_permissions import user_can_read_project
@@ -52,6 +52,7 @@ class CrawlRequest(BaseModel):
     max_depth: int = 3
     crawl_scope: str = "host"  # host, subdomain, all
     run_param_discovery: bool = True
+    use_playwright: bool = False  # JS/SPA deepening (requires playwright)
 
 
 class RecursiveDirScanRequest(BaseModel):
@@ -643,6 +644,30 @@ async def get_last_discovered_paths(
     return {"discovered": discovered, "wordlists_used": wordlists_used}
 
 
+@router.get("/project/{project_id}/last-dir-scan")
+async def get_last_dir_scan(
+    project_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return last recursive directory scan from CrawlSession (crawl_type=directory). Survives reload/logout."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied")
+    q = (
+        select(CrawlSession)
+        .where(CrawlSession.project_id == uuid.UUID(project_id), CrawlSession.crawl_type == "directory")
+        .order_by(desc(CrawlSession.created_at))
+        .limit(1)
+    )
+    row = (await db.execute(q)).scalar_one_or_none()
+    if not row:
+        return {"flat": [], "total_found": 0, "target_url": ""}
+    flat = list(row.directory_flat or [])
+    # Normalize to {path, status} for frontend tree
+    normalized = [{"path": x.get("path", x) if isinstance(x, dict) else str(x), "status": x.get("status", 200) if isinstance(x, dict) else 200} for x in flat if (isinstance(x, dict) and x.get("path")) or (isinstance(x, str) and x)]
+    return {"flat": normalized, "total_found": len(normalized), "target_url": row.target_url or ""}
+
+
 # ──────────────────────────────────────────────────────────
 #  Spider / Crawler Endpoints
 # ──────────────────────────────────────────────────────────
@@ -650,7 +675,7 @@ async def get_last_discovered_paths(
 async def _run_crawl_background(
     crawl_id: str, project_id: str, target_url: str,
     auth_config: dict | None, max_depth: int, crawl_scope: str,
-    run_param_discovery: bool, user_id: uuid.UUID,
+    run_param_discovery: bool, use_playwright: bool, user_id: uuid.UUID,
 ):
     """Run crawler in background, persist results to CrawlSession."""
     from app.services.dast.crawler import run_crawl, _crawl_progress_set
@@ -662,7 +687,7 @@ async def _run_crawl_background(
     try:
         result = await asyncio.to_thread(
             run_crawl, target_url, auth_config, max_depth, crawl_scope,
-            None, crawl_id, 600, run_param_discovery,
+            None, crawl_id, 600, run_param_discovery, use_playwright,
         )
     except Exception as e:
         logger.exception("Crawl %s failed", crawl_id)
@@ -690,6 +715,10 @@ async def _run_crawl_background(
                 forms=result.get("forms", []),
                 js_files=result.get("js_files", []),
                 pages=result.get("pages", []),
+                deeplinks=result.get("deeplinks", []),
+                js_sca=result.get("js_sca"),
+                retire_results=result.get("retire_results"),
+                crawler_used=stats.get("crawler_used"),
                 total_urls=stats.get("total_urls", 0),
                 total_endpoints=stats.get("api_endpoints", 0),
                 total_parameters=stats.get("parameters", 0),
@@ -721,6 +750,9 @@ async def _run_crawl_background(
         "forms": result.get("forms", [])[:100],
         "js_files": result.get("js_files", [])[:100],
         "pages": result.get("pages", [])[:200],
+        "deeplinks": result.get("deeplinks", []),
+        "js_sca": result.get("js_sca"),
+        "retire_results": result.get("retire_results"),
     })
 
 
@@ -743,7 +775,7 @@ async def start_crawl(
     background_tasks.add_task(
         _run_crawl_background, crawl_id, payload.project_id, target_url,
         payload.auth_config, payload.max_depth, payload.crawl_scope,
-        payload.run_param_discovery, current_user.id,
+        payload.run_param_discovery, payload.use_playwright, current_user.id,
     )
     return {"crawl_id": crawl_id, "project_id": payload.project_id, "target_url": target_url}
 
@@ -788,6 +820,7 @@ async def get_crawl_history(
                 "status": row.status,
                 "crawl_type": row.crawl_type,
                 "auth_type": row.auth_type,
+                "crawler_used": getattr(row, "crawler_used", None),
                 "total_urls": row.total_urls,
                 "total_endpoints": row.total_endpoints,
                 "total_parameters": row.total_parameters,
@@ -832,6 +865,10 @@ async def get_latest_crawl(
         "forms": row.forms or [],
         "js_files": row.js_files or [],
         "pages": row.pages or [],
+        "deeplinks": getattr(row, "deeplinks", None) or [],
+        "js_sca": getattr(row, "js_sca", None),
+        "retire_results": getattr(row, "retire_results", None),
+        "crawler_used": getattr(row, "crawler_used", None),
         "total_urls": row.total_urls,
         "total_endpoints": row.total_endpoints,
         "total_parameters": row.total_parameters,
@@ -872,6 +909,10 @@ async def get_crawl_session(
         "forms": row.forms or [],
         "js_files": row.js_files or [],
         "pages": row.pages or [],
+        "deeplinks": getattr(row, "deeplinks", None) or [],
+        "js_sca": getattr(row, "js_sca", None),
+        "retire_results": getattr(row, "retire_results", None),
+        "crawler_used": getattr(row, "crawler_used", None),
         "directory_tree": row.directory_tree or [],
         "directory_flat": row.directory_flat or [],
         "total_urls": row.total_urls,

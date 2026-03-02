@@ -39,6 +39,12 @@ class CrawlSession(Base):
     directory_tree = Column(JSONB, default=list)  # Nested tree [{path, status, type, children: [...]}]
     directory_flat = Column(JSONB, default=list)  # Flat list [{path, status, type, depth}]
 
+    # JS/crawl enhancements
+    deeplinks = Column(JSONB, default=list)  # Discovered deeplinks (app://, intent://)
+    js_sca = Column(JSONB, nullable=True)  # {libraries, vulnerabilities, summary}
+    retire_results = Column(JSONB, nullable=True)  # Retire.js output
+    crawler_used = Column(String(32), nullable=True)  # katana | spider_rs | httpx
+
     error = Column(Text, nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

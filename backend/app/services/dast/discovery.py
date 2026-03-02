@@ -21,9 +21,19 @@ from .wordlists import (
 logger = logging.getLogger(__name__)
 
 
+def _find_ffuf() -> str:
+    """Find ffuf binary."""
+    import shutil
+    for p in ("/usr/local/bin/ffuf", "/usr/bin/ffuf"):
+        if os.path.isfile(p):
+            return p
+    return shutil.which("ffuf") or "ffuf"
+
+
 def _run_ffuf_discovery(target_url: str, wordlist_path: str, max_paths: int) -> list[dict]:
     """Run ffuf for directory discovery. Returns list of {path, status}."""
     try:
+        ffuf_bin = _find_ffuf()
         parsed = urlparse(target_url)
         base = f"{parsed.scheme}://{parsed.netloc}"
         u = f"{base.rstrip('/')}/FUZZ"
@@ -32,11 +42,12 @@ def _run_ffuf_discovery(target_url: str, wordlist_path: str, max_paths: int) -> 
         try:
             proc = subprocess.run(
                 [
-                    "ffuf", "-u", u, "-w", wordlist_path,
-                    "-mc", "200,201,301,302,401,403", "-fc", "404",
-                    "-t", "20", "-o", outpath, "-of", "json",
+                    ffuf_bin, "-u", u, "-w", wordlist_path,
+                    "-mc", "200,201,204,301,302,307,401,403,405", "-fc", "404",
+                    "-t", "25", "-o", outpath, "-of", "json",
+                    "-s", "-r",  # silent, follow redirects
                 ],
-                capture_output=True, timeout=90, env={**os.environ},
+                capture_output=True, timeout=120, env={**os.environ},
             )
             if proc.returncode != 0:
                 return []
@@ -73,15 +84,17 @@ def run_ffuf_full_scan(
     wordlist_key, wordlist_path = resolved
     wordlist_path = str(wordlist_path)
 
+    ffuf_bin = _find_ffuf()
     outpath = None
     try:
         fd, outpath = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         proc = subprocess.run(
             [
-                "ffuf", "-u", fuzz_url, "-w", wordlist_path,
+                ffuf_bin, "-u", fuzz_url, "-w", wordlist_path,
                 "-mc", "200,201,204,301,302,307,401,403,405", "-fc", "404",
                 "-t", "25", "-o", outpath, "-of", "json",
+                "-s", "-r",  # silent, follow redirects
             ],
             capture_output=True, timeout=180, env={**os.environ},
         )

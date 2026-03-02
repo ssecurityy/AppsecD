@@ -411,6 +411,8 @@ Burp Scanner automatically checks for many vulnerabilities that align with Navig
 
 ## 7. Internal Application Support
 
+> **Detailed guide:** See [DAST_VPN_INTERNAL_TARGETS.md](./DAST_VPN_INTERNAL_TARGETS.md) for the full solution (SaaS + VPN targets, agent architecture, alternatives).
+
 ### 6.1 Challenge
 
 - Internal apps (e.g., `http://internal-app.local:8080`) are not reachable from Navigator's cloud/server.

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -29,9 +30,36 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Tool paths
 # ---------------------------------------------------------------------------
-KATANA_BIN = "/usr/local/bin/katana"
-ARJUN_BIN = "/opt/navigator/backend/venv/bin/arjun"
-FFUF_BIN = "/usr/local/bin/ffuf"
+def _find_katana() -> str:
+    """Find katana binary: /usr/local/bin/katana, /usr/bin/katana, or PATH."""
+    for p in ("/usr/local/bin/katana", "/usr/bin/katana"):
+        if os.path.isfile(p):
+            return p
+    found = shutil.which("katana")
+    return found or "/usr/local/bin/katana"
+
+
+def _find_ffuf() -> str:
+    """Find ffuf binary: /usr/local/bin/ffuf, /usr/bin/ffuf, or PATH."""
+    for p in ("/usr/local/bin/ffuf", "/usr/bin/ffuf"):
+        if os.path.isfile(p):
+            return p
+    found = shutil.which("ffuf")
+    return found or "/usr/local/bin/ffuf"
+
+
+def _find_arjun() -> str:
+    """Find arjun: venv bin or PATH."""
+    venv_arjun = "/opt/navigator/backend/venv/bin/arjun"
+    if os.path.isfile(venv_arjun):
+        return venv_arjun
+    found = shutil.which("arjun")
+    return found or venv_arjun
+
+
+KATANA_BIN = None  # Set at runtime via _find_katana()
+ARJUN_BIN = None   # Set at runtime via _find_arjun()
+FFUF_BIN = None    # Set at runtime via _find_ffuf()
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -217,34 +245,38 @@ def _run_katana(
       - response.status_code, response.headers, response.body (partial)
       - timestamp
     """
-    if not os.path.isfile(KATANA_BIN):
-        logger.warning("katana binary not found at %s", KATANA_BIN)
+    katana_bin = _find_katana()
+    if not os.path.isfile(katana_bin):
+        logger.warning("katana binary not found at %s", katana_bin)
         return []
 
-    scope_flag = {
-        "host": "-fs", "subdomain": "-fs", "all": "-fs"
-    }
+    # Katana field-scope: fqdn=single host, rdn=root+subdomains, dn=domain keyword
+    scope_flag = {"host": "-fs", "subdomain": "-fs", "all": "-fs"}
     scope_value = {
-        "host": "hn",    # host name
-        "subdomain": "dn",  # domain name (includes subdomains)
-        "all": "rdn",    # root domain name
+        "host": "fqdn",    # single host (www.example.com)
+        "subdomain": "rdn",  # root domain + subdomains (*.example.com)
+        "all": "dn",       # domain keyword (example)
     }
 
     cmd = [
-        KATANA_BIN,
+        katana_bin,
         "-u", target_url,
+        "-duc",        # disable update check (avoids blocking on startup)
         "-jc",         # JavaScript crawling
-        "-kf",         # known files (robots.txt, sitemap.xml, etc.)
         "-ef", "png,jpg,jpeg,gif,svg,ico,css,woff,woff2,ttf,eot,otf,mp4,mp3,webm,webp,avif",
         "-d", str(max_depth),
-        "-json",
+        "-j",          # JSONL output (Katana v1.4+ uses -j/-jsonl, not -json)
         "-silent",
-        "-nc",          # no color
+        "-nc",         # no color
         "-timeout", "10",
         "-retry", "2",
-        "-rate-limit", "50",
-        "-c", "10",     # concurrency
+        "-rl", "50",   # rate limit (requests/sec)
+        "-c", "10",    # concurrency
+        "-ct", str(min(120, max(30, timeout // 2))),  # crawl duration limit (seconds)
     ]
+    # Known files (robots, sitemap) - Katana v1.4+ requires depth >= 3 for -kf
+    if max_depth >= 3:
+        cmd = cmd[:4] + ["-kf", "all"] + cmd[4:]
 
     # Add scope filtering
     scope_key = crawl_scope if crawl_scope in scope_value else "host"
@@ -262,7 +294,7 @@ def _run_katana(
             cmd,
             capture_output=True,
             timeout=timeout,
-            env={**os.environ, "HOME": os.environ.get("HOME", "/tmp")},
+            env={**os.environ, "HOME": os.environ.get("HOME", "/tmp"), "KATANA_UPDATE_CHECK": "false"},
         )
         stdout = proc.stdout.decode("utf-8", errors="ignore")
         stderr = proc.stderr.decode("utf-8", errors="ignore")
@@ -289,10 +321,65 @@ def _run_katana(
     except subprocess.TimeoutExpired:
         logger.warning("katana timed out after %ds", timeout)
     except FileNotFoundError:
-        logger.warning("katana not found at %s", KATANA_BIN)
+        logger.warning("katana not found at %s", katana_bin)
     except Exception as exc:
         logger.error("katana error: %s", exc)
 
+    return results[:MAX_URLS_PER_CRAWL]
+
+
+def _run_katana_docker(
+    target_url: str,
+    auth_headers: dict[str, str],
+    max_depth: int = 3,
+    crawl_scope: str = "host",
+    timeout: int = DEFAULT_CRAWL_TIMEOUT,
+) -> list[dict]:
+    """
+    Run katana via Docker when native binary hangs or fails.
+    Uses projectdiscovery/katana image. Output: plain URLs, converted to katana-compatible dicts.
+    """
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        logger.debug("docker not found, cannot use Katana Docker fallback")
+        return []
+
+    scope_value = {"host": "fqdn", "subdomain": "rdn", "all": "dn"}
+    scope_key = crawl_scope if crawl_scope in scope_value else "host"
+    scope = scope_value[scope_key]
+    crawl_sec = min(120, max(30, timeout // 2))
+
+    cmd = [
+        docker_bin, "run", "--rm",
+        "-e", "KATANA_UPDATE_CHECK=false",
+        "projectdiscovery/katana:latest",
+        "-u", target_url,
+        "-duc", "-d", str(max_depth), "-fs", scope,
+        "-ef", "png,jpg,jpeg,gif,svg,ico,css,woff,woff2,ttf,eot,otf,mp4,mp3,webm,webp,avif",
+        "-silent", "-nc", "-timeout", "10", "-ct", str(crawl_sec),
+    ]
+    for name, value in auth_headers.items():
+        cmd.extend(["-H", f"{name}: {value}"])
+
+    logger.info("Running katana via Docker: %s", target_url)
+    results: list[dict] = []
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout,
+            env={**os.environ},
+        )
+        stdout = proc.stdout.decode("utf-8", errors="ignore")
+        for line in stdout.strip().splitlines():
+            line = line.strip()
+            if line.startswith("http") and line not in {r.get("request", {}).get("endpoint") for r in results}:
+                results.append({"request": {"endpoint": line, "method": "GET"}})
+        logger.info("katana Docker returned %d results", len(results))
+    except subprocess.TimeoutExpired:
+        logger.warning("katana Docker timed out after %ds", timeout)
+    except Exception as exc:
+        logger.debug("katana Docker error: %s", exc)
     return results[:MAX_URLS_PER_CRAWL]
 
 
@@ -313,17 +400,22 @@ def _parse_katana_results(raw_results: list[dict]) -> dict:
     raw_entries: list[dict] = []
 
     for item in raw_results:
-        # Extract endpoint URL
-        request_data = item.get("request", {})
+        # Extract endpoint URL (Katana JSONL: endpoint/url at root or in request)
+        request_data = item.get("request") or {}
         if isinstance(request_data, str):
             endpoint = request_data
             method = "GET"
             req_body = ""
-        else:
+        elif isinstance(request_data, dict):
             endpoint = request_data.get("endpoint", "") or request_data.get("url", "")
             method = request_data.get("method", "GET") or "GET"
             req_body = request_data.get("body", "") or ""
-
+        else:
+            endpoint = item.get("endpoint", "") or item.get("url", "")
+            method = item.get("method", "GET") or "GET"
+            req_body = ""
+        if not endpoint:
+            endpoint = item.get("endpoint", "") or item.get("url", "")
         if not endpoint:
             continue
 
@@ -451,6 +543,33 @@ def _parse_katana_results(raw_results: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# spider_rs fallback (optional - pip install spider_rs)
+# ---------------------------------------------------------------------------
+def _run_spider_rs(target_url: str, max_urls: int = 500) -> list[dict]:
+    """
+    Use spider_rs when installed - high-performance Rust crawler.
+    Returns list in katana-compatible format.
+    """
+    try:
+        from spider_rs import Website
+
+        website = Website(target_url)
+        website.crawl()
+        links = website.get_links() or []
+    except ImportError:
+        return []
+    except Exception as e:
+        logger.debug("spider_rs crawl failed: %s", e)
+        return []
+
+    return [
+        {"request": {"endpoint": url, "method": "GET"}}
+        for url in links[:max_urls]
+        if url and isinstance(url, str) and url.startswith("http")
+    ]
+
+
+# ---------------------------------------------------------------------------
 # httpx fallback crawl (when katana is not available)
 # ---------------------------------------------------------------------------
 
@@ -459,7 +578,7 @@ def _httpx_fallback_crawl(
     target_url: str,
     auth_headers: dict[str, str],
     max_depth: int = 2,
-    max_urls: int = 200,
+    max_urls: int = 400,
 ) -> list[dict]:
     """
     Basic link-extraction crawl using httpx + regex.
@@ -483,6 +602,8 @@ def _httpx_fallback_crawl(
             elif tag == "script" and "src" in attrs_dict:
                 self.links.append(attrs_dict["src"])
             elif tag == "img" and "src" in attrs_dict:
+                self.links.append(attrs_dict["src"])
+            elif tag == "iframe" and "src" in attrs_dict:
                 self.links.append(attrs_dict["src"])
             elif tag == "form":
                 self._current_form = {
@@ -634,8 +755,9 @@ def _run_arjun(
 
     Returns list of {url, parameters: [{name, type}]}.
     """
-    if not os.path.isfile(ARJUN_BIN):
-        logger.warning("arjun not found at %s", ARJUN_BIN)
+    arjun_bin = _find_arjun()
+    if not os.path.isfile(arjun_bin):
+        logger.warning("arjun not found at %s", arjun_bin)
         return []
 
     if not endpoints:
@@ -650,7 +772,7 @@ def _run_arjun(
         os.close(fd)
 
         cmd = [
-            ARJUN_BIN,
+            arjun_bin,
             "-u", endpoint,
             "--stable",
             "-oJ", outpath,
@@ -733,7 +855,7 @@ def _run_arjun(
         except subprocess.TimeoutExpired:
             logger.debug("arjun timed out for %s", endpoint)
         except FileNotFoundError:
-            logger.warning("arjun not found at %s", ARJUN_BIN)
+            logger.warning("arjun not found at %s", arjun_bin)
             break  # No point trying more endpoints
         except Exception as exc:
             logger.debug("arjun error for %s: %s", endpoint, exc)
@@ -760,6 +882,7 @@ def run_crawl(
     crawl_id: str | None = None,
     timeout: int = DEFAULT_CRAWL_TIMEOUT,
     run_param_discovery: bool = True,
+    use_playwright: bool = False,
 ) -> dict:
     """
     Run full crawl using katana (primary) with httpx fallback and arjun
@@ -774,6 +897,7 @@ def run_crawl(
         crawl_id: Optional ID for Redis progress tracking.
         timeout: Timeout in seconds for the katana process.
         run_param_discovery: Whether to run arjun for hidden parameters.
+        use_playwright: If True, run Playwright on discovered pages for JS/SPA coverage.
 
     Returns:
         {
@@ -828,12 +952,27 @@ def run_crawl(
         target_url, auth_headers, max_depth, crawl_scope, timeout
     )
 
-    # Fallback to httpx if katana returned nothing
+    # Fallback: Katana Docker (when native hangs), then spider_rs, then httpx
     if not raw_results:
-        _update_progress("crawl", 10, "Katana unavailable, falling back to httpx crawler...")
+        _update_progress("crawl", 8, "Trying Katana via Docker...")
+        raw_results = _run_katana_docker(
+            target_url, auth_headers, max_depth, crawl_scope, timeout
+        )
+        if raw_results:
+            crawler_used = "katana+docker"
+    if not raw_results:
+        try:
+            raw_results = _run_spider_rs(target_url, max_urls=500)
+            if raw_results:
+                crawler_used = "spider_rs"
+                _update_progress("crawl", 10, f"Using spider_rs: found {len(raw_results)} links")
+        except Exception as e:
+            logger.debug("spider_rs fallback failed: %s", e)
+    if not raw_results:
+        _update_progress("crawl", 10, "Katana/spider_rs unavailable, falling back to httpx crawler...")
         crawler_used = "httpx"
         raw_results = _httpx_fallback_crawl(
-            target_url, auth_headers, max_depth=min(max_depth, 2), max_urls=200
+            target_url, auth_headers, max_depth=min(max_depth, 2), max_urls=400
         )
 
     _update_progress("crawl", 50, f"Crawl complete. Processing {len(raw_results)} results...")
@@ -844,7 +983,34 @@ def run_crawl(
     _update_progress("classify", 55, "Classifying discovered URLs...")
     parsed = _parse_katana_results(raw_results)
 
+    # Optional: Playwright deepening pass for JS/SPA coverage
+    if use_playwright:
+        pages_for_playwright = [p["url"] for p in parsed.get("pages", []) if p.get("url")]
+        # Always include target_url for SPA shells (minimal crawl may have 0 pages)
+        if target_url and target_url not in pages_for_playwright:
+            pages_for_playwright.insert(0, target_url)
+        if pages_for_playwright:
+            try:
+                from .playwright_crawler import run_playwright_crawl
+
+                def _pw_progress(msg: str) -> None:
+                    _update_progress("playwright", 35, msg)
+
+                pw_results = run_playwright_crawl(
+                    target_url, auth_headers, pages_for_playwright,
+                    max_pages=min(25, len(pages_for_playwright)),
+                    progress_callback=_pw_progress,
+                )
+                if pw_results:
+                    raw_results = raw_results + pw_results
+                    parsed = _parse_katana_results(raw_results)
+                    crawler_used = f"{crawler_used}+playwright"
+                    _update_progress("playwright", 60, f"Playwright found {len(pw_results)} additional URLs")
+            except Exception as e:
+                logger.warning("Playwright deepening failed: %s", e)
+
     urls = parsed["urls"]
+
     api_endpoints = parsed["api_endpoints"]
     js_files = parsed["js_files"]
     static_assets = parsed["static_assets"]
@@ -858,6 +1024,100 @@ def run_crawl(
         f"Found {len(urls)} URLs, {len(api_endpoints)} API endpoints, "
         f"{len(js_files)} JS files, {len(forms)} forms",
     )
+
+    # -------------------------------------------------------------------
+    # Phase 2b: JS fetch, secrets, analysis (hidden URLs, deeplinks, SCA libs)
+    # -------------------------------------------------------------------
+    hidden_urls: list[str] = []
+    js_libraries: list[dict] = []
+    deeplinks: list[str] = []
+    js_sca_result: dict | None = None
+    retire_results: dict | None = None
+
+    def _fetch_js(url: str) -> str:
+        try:
+            with httpx.Client(timeout=15.0, headers={**HEADERS, **auth_headers}, follow_redirects=True, verify=False) as client:
+                r = client.get(url)
+                if r.status_code == 200:
+                    return r.text
+        except Exception:
+            pass
+        return ""
+
+    if js_files:
+        retire_results = None
+        _update_progress("secrets", 68, f"Scanning {len(js_files)} JS file(s) for secrets, URLs, libs...")
+        try:
+            from .secrets import scan_js_files
+            from .js_analysis import analyze_js
+            from .sca import scan_js_libraries, scan_js_with_retire
+
+            js_files = scan_js_files(js_files, _fetch_js)
+
+            parsed_target = urlparse(target_url)
+            base_scheme = parsed_target.scheme
+            base_netloc = parsed_target.netloc
+
+            for entry in js_files:
+                content = _fetch_js(entry.get("url", ""))
+                if not content:
+                    continue
+                js_url = entry.get("url", "")
+                analysis = analyze_js(content, js_url)
+                entry["hidden_urls"] = analysis.get("urls", [])
+                entry["deeplinks"] = analysis.get("deeplinks", [])
+                entry["libraries"] = analysis.get("libraries", [])
+
+                deeplinks.extend(analysis.get("deeplinks", []))
+                js_libraries.extend(analysis.get("libraries", []))
+
+                for u in analysis.get("urls", []):
+                    raw_url = u.get("url", "")
+                    if raw_url and raw_url.startswith("http") and raw_url not in urls:
+                        hidden_urls.append(raw_url)
+
+            # Merge hidden URLs into main url list (dedupe)
+            seen_urls = set(urls)
+            for u in hidden_urls:
+                if u not in seen_urls and len(seen_urls) < MAX_URLS_PER_CRAWL:
+                    seen_urls.add(u)
+                    urls.append(u)
+
+            # SCA on JS-identified libraries (dedupe by name+version)
+            seen_libs: set[tuple[str, str]] = set()
+            unique_libs: list[dict] = []
+            for lib in js_libraries:
+                k = (lib.get("name", ""), lib.get("version", ""))
+                if k not in seen_libs:
+                    seen_libs.add(k)
+                    unique_libs.append(lib)
+            if unique_libs:
+                _update_progress("sca", 69, f"Running SCA on {len(unique_libs)} JS library(ies)...")
+                try:
+                    js_sca_result = scan_js_libraries(unique_libs)
+                except Exception as sca_exc:
+                    logger.debug("JS SCA failed: %s", sca_exc)
+                    js_sca_result = None
+            else:
+                js_sca_result = None
+
+            # Retire.js scan for JS library vulns + SBOM
+            _update_progress("retire", 69, "Running Retire.js on JS files...")
+            try:
+                retire_results = scan_js_with_retire(js_files, _fetch_js)
+                if retire_results and retire_results.get("total_vulns", 0) > 0:
+                    by_url = retire_results.get("by_url", {})
+                    for entry in js_files:
+                        url = entry.get("url", "")
+                        if url and url in by_url:
+                            entry["retire_vulns"] = by_url[url]
+            except Exception as retire_exc:
+                logger.debug("Retire.js scan failed: %s", retire_exc)
+                retire_results = None
+        except Exception as exc:
+            logger.warning("JS secrets/analysis failed: %s", exc)
+    else:
+        retire_results = None
 
     # -------------------------------------------------------------------
     # Phase 3: Parameter discovery with arjun
@@ -930,6 +1190,7 @@ def run_crawl(
 
     duration = round(time.time() - start_time, 2)
 
+    total_secrets = sum(j.get("secrets_count", 0) for j in js_files)
     result = {
         "urls": urls,
         "api_endpoints": api_endpoints,
@@ -938,6 +1199,9 @@ def run_crawl(
         "js_files": js_files,
         "pages": pages,
         "static_assets": static_assets,
+        "deeplinks": list(dict.fromkeys(deeplinks)),  # deduped
+        "js_sca": js_sca_result,
+        "retire_results": retire_results,
         "stats": {
             "total_urls": len(urls),
             "total_parameters": len(unique_parameters),
@@ -946,6 +1210,9 @@ def run_crawl(
             "total_forms": len(forms),
             "total_pages": len(pages),
             "total_static_assets": len(static_assets),
+            "total_secrets_found": total_secrets,
+            "total_hidden_urls": len(hidden_urls),
+            "total_deeplinks": len(dict.fromkeys(deeplinks)),
             "crawler_used": crawler_used,
             "crawl_scope": crawl_scope,
             "max_depth": max_depth,
@@ -956,19 +1223,23 @@ def run_crawl(
     }
 
     _update_progress("done", 100, "Crawl complete")
-    _crawl_progress_set(
-        crawl_id,
-        {
-            "status": "completed",
-            "phase": "done",
-            "progress_pct": 100,
-            "target_url": target_url,
-            "crawl_id": crawl_id,
-            "last_updated": time.time(),
-            "elapsed_seconds": duration,
-            "stats": result["stats"],
-        },
-    )
+    progress_payload = {
+        "status": "completed",
+        "phase": "done",
+        "progress_pct": 100,
+        "target_url": target_url,
+        "crawl_id": crawl_id,
+        "last_updated": time.time(),
+        "elapsed_seconds": duration,
+        "stats": result["stats"],
+        "urls": urls[:500],
+        "api_endpoints": api_endpoints[:200],
+        "js_files": js_files[:100],
+        "deeplinks": result.get("deeplinks", []),
+        "js_sca": result.get("js_sca"),
+        "retire_results": result.get("retire_results"),
+    }
+    _crawl_progress_set(crawl_id, progress_payload)
 
     return result
 
@@ -1073,6 +1344,8 @@ def run_recursive_directory_scan(
             },
         )
 
+    ffuf_bin = _find_ffuf()
+
     def _scan_directory(path: str, depth: int) -> list[dict]:
         """Scan a single directory with ffuf and return found entries."""
         nonlocal max_depth_reached
@@ -1100,7 +1373,7 @@ def run_recursive_directory_scan(
         os.close(fd)
 
         cmd = [
-            FFUF_BIN,
+            ffuf_bin,
             "-u", fuzz_url,
             "-w", wordlist_path,
             "-mc", "200,201,204,301,302,307,401,403,405",
@@ -1184,7 +1457,7 @@ def run_recursive_directory_scan(
         except subprocess.TimeoutExpired:
             logger.debug("ffuf recursive timed out for %s", path)
         except FileNotFoundError:
-            logger.warning("ffuf not found at %s", FFUF_BIN)
+            logger.warning("ffuf not found at %s", ffuf_bin)
         except Exception as exc:
             logger.debug("ffuf recursive error for %s: %s", path, exc)
         finally:
@@ -1219,9 +1492,11 @@ def run_recursive_directory_scan(
                 node = node[part]
         return tree
 
+    flat_list = [{"path": e["path"], "status": e.get("status", 200), "type": "dir" if e.get("is_directory") else "file"} for e in (all_directories + all_files)]
     result = {
         "directories": all_directories,
         "files": all_files,
+        "flat": flat_list,
         "tree": _build_tree(all_directories + all_files),
         "stats": {
             "total_directories": len(all_directories),

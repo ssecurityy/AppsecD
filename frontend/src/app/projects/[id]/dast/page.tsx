@@ -87,8 +87,9 @@ export default function DastScanPage() {
   const [crawlDepth, setCrawlDepth] = useState(3);
   const [crawlScope, setCrawlScope] = useState("host");
   const [runParamDiscovery, setRunParamDiscovery] = useState(true);
+  const [usePlaywright, setUsePlaywright] = useState(false);
   const [crawlUrlFilter, setCrawlUrlFilter] = useState("");
-  const [crawlActiveSubTab, setCrawlActiveSubTab] = useState<"urls" | "api" | "params" | "forms" | "js">("urls");
+  const [crawlActiveSubTab, setCrawlActiveSubTab] = useState<"urls" | "api" | "params" | "forms" | "js" | "deeplinks" | "sca">("urls");
   // Recursive directory scan state
   const [recursiveDirScanning, setRecursiveDirScanning] = useState(false);
   const [recursiveDirJobId, setRecursiveDirJobId] = useState<string | null>(null);
@@ -139,8 +140,9 @@ export default function DastScanPage() {
     const base = (dirCheck?.details?.discovered || []) as PathItem[];
     const fromFfuf = Object.values(ffufResults).flatMap((r) => r.discovered);
     const fromRecursive = [
-      ...(recursiveDirResult?.directories || []).map((d: any) => ({ path: d.path || d, status: 200 })),
-      ...(recursiveDirResult?.files || []).map((f: any) => ({ path: f.path || f, status: 200 })),
+      ...(recursiveDirResult?.directories || []).map((d: any) => ({ path: d.path || d, status: d.status ?? 200 })),
+      ...(recursiveDirResult?.files || []).map((f: any) => ({ path: f.path || f, status: f.status ?? 200 })),
+      ...(recursiveDirResult?.flat || []).map((x: any) => ({ path: x.path || x, status: x.status ?? 200 })),
     ];
     const byPath = new Map<string, number>();
     for (const x of [...base, ...fromFfuf, ...fromRecursive]) {
@@ -196,6 +198,70 @@ export default function DastScanPage() {
           }));
         }
       }).catch(() => {});
+      // Load last recursive dir scan (persisted to CrawlSession) so Directory tree shows after reload
+      api.dastLastDirScan(id as string).then((r: any) => {
+        const flat = r?.flat || [];
+        if (flat.length > 0) {
+          setRecursiveDirResult({ directories: flat, files: [], flat, total_found: flat.length });
+        }
+      }).catch(() => {});
+      // Resume polling for in-progress scans (job IDs in sessionStorage)
+      try {
+        const storedExhaustive = sessionStorage.getItem(`dast_exhaustive_job_${id}`);
+        const storedRecursive = sessionStorage.getItem(`dast_recursive_job_${id}`);
+        if (storedExhaustive) {
+          setFfufExhaustiveJobId(storedExhaustive);
+          setFfufExhaustiveScanning(true);
+          const poll = async () => {
+            try {
+              const prog = await api.dastFfufExhaustiveProgress(storedExhaustive) as any;
+              if (prog.status === "completed") {
+                sessionStorage.removeItem(`dast_exhaustive_job_${id}`);
+                setFfufExhaustiveScanning(false);
+                setFfufExhaustiveJobId(null);
+                if (exhaustivePollRef.current) { clearInterval(exhaustivePollRef.current); exhaustivePollRef.current = null; }
+                const disc = prog.discovered || [];
+                setFfufResults(prev => ({ ...prev, "/": { discovered: disc, wordlist_used: (prog.wordlists_used || []).join(", ") } }));
+                toast.success(`Exhaustive scan complete: ${disc.length} path(s) found`);
+              } else if (prog.status === "error") {
+                sessionStorage.removeItem(`dast_exhaustive_job_${id}`);
+                setFfufExhaustiveScanning(false);
+                setFfufExhaustiveJobId(null);
+                if (exhaustivePollRef.current) { clearInterval(exhaustivePollRef.current); exhaustivePollRef.current = null; }
+              }
+            } catch { sessionStorage.removeItem(`dast_exhaustive_job_${id}`); setFfufExhaustiveScanning(false); }
+          };
+          poll();
+          exhaustivePollRef.current = setInterval(poll, 2000);
+        }
+        if (storedRecursive) {
+          setRecursiveDirJobId(storedRecursive);
+          setRecursiveDirScanning(true);
+          const poll = async () => {
+            try {
+              const prog = await api.dastDirScanProgress(storedRecursive) as any;
+              if (prog.status === "completed") {
+                sessionStorage.removeItem(`dast_recursive_job_${id}`);
+                setRecursiveDirScanning(false);
+                setRecursiveDirJobId(null);
+                if (recursiveDirPollRef.current) { clearInterval(recursiveDirPollRef.current); recursiveDirPollRef.current = null; }
+                const flat = prog.flat || [];
+                const dirs = flat.filter((x: any) => x.type === "dir" || (x.path || "").endsWith("/"));
+                const files = flat.filter((x: any) => x.type !== "dir" && !(x.path || "").endsWith("/"));
+                setRecursiveDirResult({ directories: dirs.length ? dirs : flat, files: files.length ? files : [], ...prog });
+                toast.success(`Recursive scan complete: ${prog.total_found || flat.length} path(s) found`);
+              } else if (prog.status === "error") {
+                sessionStorage.removeItem(`dast_recursive_job_${id}`);
+                setRecursiveDirScanning(false);
+                setRecursiveDirJobId(null);
+                if (recursiveDirPollRef.current) { clearInterval(recursiveDirPollRef.current); recursiveDirPollRef.current = null; }
+              }
+            } catch { sessionStorage.removeItem(`dast_recursive_job_${id}`); setRecursiveDirScanning(false); }
+          };
+          poll();
+          recursiveDirPollRef.current = setInterval(poll, 2000);
+        }
+      } catch {}
       // If a scan is still running for this project, resume polling
       api.dastScans().then((r: any) => {
         const active = (r?.scans ?? []).find((s: any) => s.project_id === id && s.status === "running");
@@ -359,10 +425,12 @@ export default function DastScanPage() {
     try {
       const res = await api.dastFfufExhaustive({ project_id: id as string, target_url: target, base_path: "/" }) as { job_id: string };
       setFfufExhaustiveJobId(res.job_id);
+      try { sessionStorage.setItem(`dast_exhaustive_job_${id}`, res.job_id); } catch {}
       const poll = async () => {
         try {
           const prog = await api.dastFfufExhaustiveProgress(res.job_id) as { status: string; discovered?: { path: string; status: number }[]; wordlists_used?: string[]; test_case_updated?: boolean };
           if (prog.status === "completed") {
+            try { sessionStorage.removeItem(`dast_exhaustive_job_${id}`); } catch {}
             setFfufExhaustiveScanning(false);
             setFfufExhaustiveJobId(null);
             if (exhaustivePollRef.current) { clearInterval(exhaustivePollRef.current); exhaustivePollRef.current = null; }
@@ -373,6 +441,7 @@ export default function DastScanPage() {
               : (prog.test_case_updated ? `Directory bruteforce completed. No paths discovered. Test case auto-marked. (Tip: Ensure ffuf is installed and target is reachable.)` : `Directory bruteforce completed. No paths discovered. (Tip: Install ffuf for better results.)`);
             toast.success(msg);
           } else if (prog.status === "error") {
+            try { sessionStorage.removeItem(`dast_exhaustive_job_${id}`); } catch {}
             setFfufExhaustiveScanning(false);
             setFfufExhaustiveJobId(null);
             if (exhaustivePollRef.current) { clearInterval(exhaustivePollRef.current); exhaustivePollRef.current = null; }
@@ -443,6 +512,7 @@ export default function DastScanPage() {
         max_depth: crawlDepth,
         crawl_scope: crawlScope,
         run_param_discovery: runParamDiscovery,
+        use_playwright: usePlaywright,
       }) as { crawl_id: string };
       setCrawlId(res.crawl_id);
       const poll = async () => {
@@ -478,7 +548,13 @@ export default function DastScanPage() {
         setCrawlResult({
           urls: r.urls || [], api_endpoints: r.api_endpoints || [], parameters: r.parameters || [],
           forms: r.forms || [], js_files: r.js_files || [], pages: r.pages || [],
-          stats: { total_urls: r.total_urls, api_endpoints: r.total_endpoints, parameters: r.total_parameters, forms: r.forms?.length || 0, js_files: r.total_js_files || r.js_files?.length || 0 },
+          deeplinks: r.deeplinks || [], js_sca: r.js_sca, retire_results: r.retire_results, crawler_used: r.crawler_used,
+          stats: {
+            total_urls: r.total_urls, api_endpoints: r.total_endpoints, parameters: r.total_parameters,
+            forms: r.forms?.length || 0, js_files: r.total_js_files || r.js_files?.length || 0,
+            total_deeplinks: r.deeplinks?.length || 0, total_hidden_urls: r.stats?.total_hidden_urls || 0,
+            crawler_used: r.crawler_used, total_secrets_found: r.stats?.total_secrets_found || 0,
+          },
           created_at: r.created_at, crawl_type: r.crawl_type, auth_type: r.auth_type,
         });
       }).catch(() => {});
@@ -507,15 +583,18 @@ export default function DastScanPage() {
         auth_config: buildAuthConfig(),
       }) as { job_id: string };
       setRecursiveDirJobId(res.job_id);
+      try { sessionStorage.setItem(`dast_recursive_job_${id}`, res.job_id); } catch {}
       const poll = async () => {
         try {
           const prog = await api.dastDirScanProgress(res.job_id) as any;
           if (prog.status === "completed") {
+            try { sessionStorage.removeItem(`dast_recursive_job_${id}`); } catch {}
             setRecursiveDirScanning(false);
             if (recursiveDirPollRef.current) { clearInterval(recursiveDirPollRef.current); recursiveDirPollRef.current = null; }
             setRecursiveDirResult(prog);
             toast.success(`Recursive scan complete! ${prog.total_found || 0} paths found across ${prog.depths_scanned || 0} depth levels`);
           } else if (prog.status === "error") {
+            try { sessionStorage.removeItem(`dast_recursive_job_${id}`); } catch {}
             setRecursiveDirScanning(false);
             if (recursiveDirPollRef.current) { clearInterval(recursiveDirPollRef.current); recursiveDirPollRef.current = null; }
             toast.error(prog.error || "Recursive scan failed");
@@ -805,11 +884,11 @@ export default function DastScanPage() {
         {/* Results - Scan Complete: Always show tabs when project loaded so Directory Bruteforce & Spider are accessible */}
         {project && (
           <div className="space-y-4">
-            {/* Tabs: Scan Results | Directory Bruteforce | Crawl */}
-            <div className="flex gap-1 p-1 rounded-xl" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+            {/* Tabs: Scan Results | Directory Bruteforce | Spider / Crawl — scroll on narrow screens */}
+            <div className="flex flex-nowrap overflow-x-auto gap-1 p-1 rounded-xl" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
               <button
                 onClick={() => setDastActiveTab("results")}
-                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "results" ? "text-white" : ""}`}
+                className={`flex-shrink-0 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "results" ? "text-white" : ""}`}
                 style={{
                   background: dastActiveTab === "results" ? "var(--accent-indigo)" : "transparent",
                   color: dastActiveTab === "results" ? "white" : "var(--text-secondary)",
@@ -820,7 +899,7 @@ export default function DastScanPage() {
               </button>
               <button
                 onClick={() => setDastActiveTab("directories")}
-                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "directories" ? "text-white" : ""}`}
+                className={`flex-shrink-0 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "directories" ? "text-white" : ""}`}
                 style={{
                   background: dastActiveTab === "directories" ? "var(--accent-indigo)" : "transparent",
                   color: dastActiveTab === "directories" ? "white" : "var(--text-secondary)",
@@ -834,7 +913,7 @@ export default function DastScanPage() {
               </button>
               <button
                 onClick={() => setDastActiveTab("crawl")}
-                className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "crawl" ? "text-white" : ""}`}
+                className={`flex-shrink-0 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "crawl" ? "text-white" : ""}`}
                 style={{
                   background: dastActiveTab === "crawl" ? "#7c3aed" : "transparent",
                   color: dastActiveTab === "crawl" ? "white" : "var(--text-secondary)",
@@ -891,10 +970,14 @@ export default function DastScanPage() {
                           <option value="all">All Domains</option>
                         </select>
                       </div>
-                      <div className="flex items-end">
+                      <div className="flex flex-col gap-2">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input type="checkbox" checked={runParamDiscovery} onChange={(e) => setRunParamDiscovery(e.target.checked)} className="rounded" />
                           <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Parameter Discovery (Arjun)</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={usePlaywright} onChange={(e) => setUsePlaywright(e.target.checked)} className="rounded" />
+                          <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>JS/SPA (Playwright)</span>
                         </label>
                       </div>
                     </div>
@@ -963,7 +1046,10 @@ export default function DastScanPage() {
                         <span style={{ color: "#16a34a" }}>{crawlProgress.stats.api_endpoints || 0} APIs</span>
                         <span style={{ color: "#ca8a04" }}>{crawlProgress.stats.parameters || 0} Params</span>
                         <span style={{ color: "#3b82f6" }}>{crawlProgress.stats.forms || 0} Forms</span>
-                        <span style={{ color: "#ea580c" }}>{crawlProgress.stats.js_files || 0} JS Files</span>
+                        <span style={{ color: "#ea580c" }}>{crawlProgress.stats.js_files || 0} JS</span>
+                        {(crawlProgress.stats.total_secrets_found || 0) > 0 && (
+                          <span style={{ color: "#dc2626" }}>{crawlProgress.stats.total_secrets_found} Secrets</span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -976,6 +1062,9 @@ export default function DastScanPage() {
                     <div className="rounded-xl p-3 flex flex-wrap items-center gap-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
                       <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Crawl Results</span>
                       {crawlResult.created_at && <span className="text-xs" style={{ color: "var(--text-muted)" }}>{new Date(crawlResult.created_at).toLocaleString()}</span>}
+                      {crawlResult.crawler_used && (
+                        <span className="px-2 py-0.5 rounded text-xs font-medium" style={{ background: "rgba(16,185,129,0.15)", color: "#10b981" }}>{crawlResult.crawler_used}</span>
+                      )}
                       <div className="flex flex-wrap gap-3 text-xs ml-auto">
                         <span className="flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(124,58,237,0.1)", color: "#7c3aed" }}>
                           <Link2 className="w-3 h-3" /> {crawlResult.stats?.total_urls || crawlResult.urls?.length || 0} URLs
@@ -992,17 +1081,39 @@ export default function DastScanPage() {
                         <span className="flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(234,88,12,0.1)", color: "#ea580c" }}>
                           <Code className="w-3 h-3" /> {crawlResult.js_files?.length || 0} JS
                         </span>
+                        {(crawlResult.stats?.total_secrets_found || 0) > 0 && (
+                          <span className="flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(220,38,38,0.1)", color: "#dc2626" }}>
+                            <Key className="w-3 h-3" /> {crawlResult.stats.total_secrets_found} Secrets
+                          </span>
+                        )}
+                        {(crawlResult.stats?.total_deeplinks || crawlResult.deeplinks?.length || 0) > 0 && (
+                          <span className="flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(139,92,246,0.1)", color: "#8b5cf6" }}>
+                            <Link2 className="w-3 h-3" /> {crawlResult.stats?.total_deeplinks || crawlResult.deeplinks?.length || 0} Deeplinks
+                          </span>
+                        )}
+                        {(crawlResult.stats?.total_hidden_urls || 0) > 0 && (
+                          <span className="flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>
+                            <Link2 className="w-3 h-3" /> {crawlResult.stats?.total_hidden_urls || 0} Hidden URLs
+                          </span>
+                        )}
+                        {crawlResult.retire_results?.total_vulns > 0 && (
+                          <span className="flex items-center gap-1 px-2 py-1 rounded" style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
+                            <Layers className="w-3 h-3" /> {crawlResult.retire_results.total_vulns} Retire
+                          </span>
+                        )}
                       </div>
                     </div>
 
                     {/* Sub-tabs */}
-                    <div className="flex gap-1 p-1 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                    <div className="flex flex-wrap gap-1 p-1 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
                       {([
                         { key: "urls", label: "All URLs", count: crawlResult.urls?.length || 0 },
                         { key: "api", label: "API Endpoints", count: crawlResult.api_endpoints?.length || 0 },
                         { key: "params", label: "Parameters", count: crawlResult.parameters?.length || 0 },
                         { key: "forms", label: "Forms", count: crawlResult.forms?.length || 0 },
                         { key: "js", label: "JS Files", count: crawlResult.js_files?.length || 0 },
+                        { key: "deeplinks", label: "Deeplinks", count: crawlResult.deeplinks?.length || 0 },
+                        { key: "sca", label: "JS SCA", count: (crawlResult.js_sca?.vulnerabilities?.length || 0) + (crawlResult.retire_results?.total_vulns || 0) || crawlResult.js_sca?.libraries?.length || 0 },
                       ] as const).map(tab => (
                         <button key={tab.key} onClick={() => setCrawlActiveSubTab(tab.key)}
                           className="px-3 py-1.5 rounded text-xs font-medium transition-all"
@@ -1099,13 +1210,121 @@ export default function DastScanPage() {
                         {crawlActiveSubTab === "js" && (
                           <div className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
                             {(crawlResult.js_files || []).filter((j: any) => !crawlUrlFilter || (j.url || j).toLowerCase().includes(crawlUrlFilter.toLowerCase())).map((js: any, i: number) => (
-                              <div key={i} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 text-xs">
-                                <Code className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />
-                                <span className="font-mono truncate flex-1 min-w-0" style={{ color: "var(--text-primary)" }}>{typeof js === "string" ? js : js.url}</span>
-                                {js.status_code && <span className="font-mono shrink-0" style={{ color: js.status_code < 300 ? "#16a34a" : "#ca8a04" }}>{js.status_code}</span>}
-                              </div>
+                              <details key={i} className="group">
+                                <summary className="px-3 py-2.5 hover:bg-white/5 text-xs cursor-pointer list-none flex items-center gap-2">
+                                  <ChevronRight className="w-3 h-3 shrink-0 transition-transform group-open:rotate-90" style={{ color: "var(--text-muted)" }} />
+                                  <Code className="w-3.5 h-3.5 shrink-0" style={{ color: "#ea580c" }} />
+                                  <a href={typeof js === "string" ? js : js.url} target="_blank" rel="noopener noreferrer" className="font-mono truncate flex-1 min-w-0 hover:underline" style={{ color: "#3b82f6" }} onClick={(e) => e.stopPropagation()}>{typeof js === "string" ? js : js.url}</a>
+                                  {js.status_code && <span className="font-mono shrink-0" style={{ color: js.status_code < 300 ? "#16a34a" : "#ca8a04" }}>{js.status_code}</span>}
+                                  {js.secrets_count > 0 && <span className="px-1.5 py-0.5 rounded font-medium shrink-0" style={{ background: "rgba(220,38,38,0.15)", color: "#dc2626" }}>{js.secrets_count} secret{js.secrets_count !== 1 ? "s" : ""}</span>}
+                                  {js.retire_vulns?.length > 0 && <span className="px-1.5 py-0.5 rounded font-medium shrink-0" style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>{js.retire_vulns.length} vuln{js.retire_vulns.length !== 1 ? "s" : ""}</span>}
+                                </summary>
+                                <div className="pl-6 pr-3 pb-2 space-y-2">
+                                  {js.secrets?.length > 0 && (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>Secrets</span>
+                                      {js.secrets.slice(0, 5).map((s: any, si: number) => (
+                                        <div key={si} className="px-2 py-1 rounded" style={{ background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.2)" }}>
+                                          <span className="font-medium" style={{ color: "#dc2626" }}>{s.rule_name}</span>
+                                          <span className="block font-mono text-[10px] mt-0.5 truncate" style={{ color: "var(--text-muted)" }}>{s.match_preview}</span>
+                                        </div>
+                                      ))}
+                                      {js.secrets.length > 5 && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>+{js.secrets.length - 5} more</span>}
+                                    </div>
+                                  )}
+                                  {js.retire_vulns?.length > 0 && (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>Retire.js</span>
+                                      {js.retire_vulns.slice(0, 5).map((v: any, vi: number) => (
+                                        <div key={vi} className="px-2 py-1 rounded" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                                          <span className="font-medium" style={{ color: "#ef4444" }}>{v.library?.name || v.component} {v.version}</span>
+                                          {v.identifiers?.CVE && <span className="block font-mono text-[10px]" style={{ color: "var(--text-muted)" }}>{v.identifiers.CVE.join(", ")}</span>}
+                                        </div>
+                                      ))}
+                                      {js.retire_vulns.length > 5 && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>+{js.retire_vulns.length - 5} more</span>}
+                                    </div>
+                                  )}
+                                  {js.hidden_urls?.length > 0 && (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>Hidden URLs</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {js.hidden_urls.slice(0, 8).map((u: any, ui: number) => (
+                                          <a key={ui} href={u.url || u} target="_blank" rel="noopener noreferrer" className="px-1.5 py-0.5 rounded font-mono text-[10px] truncate max-w-[200px] hover:underline" style={{ background: "var(--bg-elevated)", color: "#6366f1" }}>{u.url || u}</a>
+                                        ))}
+                                        {js.hidden_urls.length > 8 && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>+{js.hidden_urls.length - 8} more</span>}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {js.deeplinks?.length > 0 && (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>Deeplinks</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {js.deeplinks.slice(0, 5).map((d: string, di: number) => (
+                                          <span key={di} className="px-1.5 py-0.5 rounded font-mono text-[10px]" style={{ background: "rgba(139,92,246,0.15)", color: "#8b5cf6" }}>{d}</span>
+                                        ))}
+                                        {js.deeplinks.length > 5 && <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>+{js.deeplinks.length - 5} more</span>}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {js.libraries?.length > 0 && (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>Libraries</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {js.libraries.map((lib: any, li: number) => (
+                                          <span key={li} className="px-1.5 py-0.5 rounded font-mono text-[10px]" style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}>{lib.name}@{lib.version}</span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </details>
                             ))}
                             {(crawlResult.js_files || []).length === 0 && <div className="p-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>No JavaScript files discovered.</div>}
+                          </div>
+                        )}
+                        {crawlActiveSubTab === "deeplinks" && (
+                          <div className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+                            {(crawlResult.deeplinks || []).map((d: string, i: number) => (
+                              <div key={i} className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 text-xs group">
+                                <Link2 className="w-3.5 h-3.5 shrink-0" style={{ color: "#8b5cf6" }} />
+                                <span className="font-mono truncate flex-1" style={{ color: "var(--text-primary)" }}>{d}</span>
+                                <button onClick={() => { navigator.clipboard.writeText(d); toast.success("Copied"); }} className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded text-[10px]" style={{ background: "var(--bg-elevated)", color: "var(--text-muted)" }}>Copy</button>
+                              </div>
+                            ))}
+                            {(crawlResult.deeplinks || []).length === 0 && <div className="p-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>No deeplinks discovered.</div>}
+                          </div>
+                        )}
+                        {crawlActiveSubTab === "sca" && (
+                          <div className="divide-y" style={{ borderColor: "var(--border-subtle)" }}>
+                            {crawlResult.js_sca?.vulnerabilities?.map((v: any, i: number) => (
+                              <div key={`sca-${i}`} className="px-3 py-2.5 hover:bg-white/5">
+                                <div className="flex items-center gap-2">
+                                  <Layers className="w-3.5 h-3.5 shrink-0" style={{ color: "#ef4444" }} />
+                                  <span className="font-mono font-medium" style={{ color: "#ef4444" }}>{v.name}@{v.version}</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>vulnerable</span>
+                                </div>
+                                <div className="ml-6 mt-1 font-mono text-[10px]" style={{ color: "var(--text-muted)" }}>{(v.cves || []).join(", ")}</div>
+                              </div>
+                            ))}
+                            {(crawlResult.retire_results?.data || []).flatMap((d: any, di: number) => (d.vulnerabilities || []).map((v: any, vi: number) => (
+                              <div key={`retire-${di}-${vi}`} className="px-3 py-2.5 hover:bg-white/5">
+                                <div className="flex items-center gap-2">
+                                  <Layers className="w-3.5 h-3.5 shrink-0" style={{ color: "#ef4444" }} />
+                                  <span className="font-mono font-medium" style={{ color: "#ef4444" }}>{v.library?.name || v.component} {v.version}</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>Retire.js</span>
+                                </div>
+                                <div className="ml-6 mt-1 font-mono text-[10px]" style={{ color: "var(--text-muted)" }}>{v.identifiers?.CVE?.join(", ") || v.info?.join?.(" ") || d.file || ""}</div>
+                              </div>
+                            )))}
+                            {(crawlResult.js_sca?.libraries || []).filter((l: any) => !(crawlResult.js_sca?.vulnerabilities || []).some((v: any) => v.name === l.name && v.version === l.version)).map((lib: any, i: number) => (
+                              <div key={`lib-${i}`} className="px-3 py-2 hover:bg-white/5 text-xs">
+                                <span className="font-mono" style={{ color: "var(--text-secondary)" }}>{lib.name}@{lib.version}</span>
+                                <span className="ml-2 text-[10px]" style={{ color: "var(--text-muted)" }}>no known vulns</span>
+                              </div>
+                            ))}
+                            {(!crawlResult.js_sca?.libraries?.length && !crawlResult.js_sca?.vulnerabilities?.length && !crawlResult.retire_results?.total_vulns) && (
+                              <div className="p-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>No JS libraries or vulnerabilities found.</div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1127,7 +1346,24 @@ export default function DastScanPage() {
                           <button key={s.crawl_id} onClick={async () => {
                             try {
                               const data = await api.dastCrawlSession(id as string, s.crawl_id) as any;
-                              setCrawlResult({ ...data, stats: { total_urls: data.total_urls, api_endpoints: data.total_endpoints, parameters: data.total_parameters, forms: data.forms?.length || 0, js_files: data.total_js_files || data.js_files?.length || 0 } });
+                              setCrawlResult({
+                ...data,
+                deeplinks: data.deeplinks || [],
+                js_sca: data.js_sca,
+                retire_results: data.retire_results,
+                crawler_used: data.crawler_used,
+                stats: {
+                  total_urls: data.total_urls,
+                  api_endpoints: data.total_endpoints,
+                  parameters: data.total_parameters,
+                  forms: data.forms?.length || 0,
+                  js_files: data.total_js_files || data.js_files?.length || 0,
+                  total_deeplinks: data.deeplinks?.length || 0,
+                  total_hidden_urls: data.stats?.total_hidden_urls || 0,
+                  crawler_used: data.crawler_used,
+                  total_secrets_found: data.stats?.total_secrets_found || 0,
+                },
+              });
                               toast.success("Loaded crawl session");
                             } catch { toast.error("Failed to load session"); }
                           }} className="w-full flex items-center justify-between p-2 rounded hover:bg-white/5 text-xs text-left">
@@ -1222,9 +1458,9 @@ export default function DastScanPage() {
                       <p className="text-xs mt-1 max-w-md mx-auto">
                         Run &quot;Run Exhaustive&quot; (ffuf) or &quot;Recursive Scan&quot; to discover paths. Requires ffuf installed for exhaustive scan. Target: {project?.application_url || "—"}
                       </p>
-                      {ffufExhaustiveScanning && (
+                      {(ffufExhaustiveScanning || recursiveDirScanning) && (
                         <div className="mt-3 flex items-center justify-center gap-2 text-sm" style={{ color: "#7c3aed" }}>
-                          <Loader2 className="w-4 h-4 animate-spin" /> Exhaustive scan running in background — stay on this tab to see results when complete
+                          <Loader2 className="w-4 h-4 animate-spin" /> Scan running in background — results persist; refresh or return later to see them
                         </div>
                       )}
                       <div className="mt-4 flex flex-wrap gap-2 justify-center">
@@ -1271,7 +1507,20 @@ export default function DastScanPage() {
                                 {hasChildren ? <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} /> : <span className="w-3.5 inline-block" />}
                               </button>
                               <Icon className="w-4 h-4 shrink-0" style={{ color: hasChildren ? "var(--accent-indigo)" : "var(--text-secondary)" }} />
-                              <span className="text-xs font-mono truncate flex-1 min-w-0" style={{ color: "var(--text-primary)" }}>{node.name}{hasChildren ? "/" : ""}</span>
+                              {node.status != null ? (
+                                <a
+                                  href={(() => { const base = (scanResult?.target_url || project?.application_url || "").replace(/\/$/, ""); return `${base}${node.fullPath}`; })()}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs font-mono truncate flex-1 min-w-0 hover:underline"
+                                  style={{ color: node.status >= 200 && node.status < 400 ? "#3b82f6" : "var(--text-primary)" }}
+                                  title={`Open ${(scanResult?.target_url || project?.application_url || "").replace(/\/$/, "")}${node.fullPath}`}
+                                >
+                                  {node.name}{hasChildren ? "/" : ""}
+                                </a>
+                              ) : (
+                                <span className="text-xs font-mono truncate flex-1 min-w-0" style={{ color: "var(--text-primary)" }}>{node.name}{hasChildren ? "/" : ""}</span>
+                              )}
                               {node.status != null && <span className="text-xs shrink-0" style={{ color: statusColor }}>HTTP {node.status}</span>}
                               {ffufData && <span className="text-xs shrink-0" style={{ color: "#16a34a" }}>+{ffufData.discovered.length}</span>}
                               <button
@@ -1282,14 +1531,16 @@ export default function DastScanPage() {
                               >
                                 {isScanning ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "Run Wordlist"}
                               </button>
-                              {!hasChildren && node.status != null && node.status >= 200 && node.status < 400 && (
+                              {!hasChildren && node.status != null && (
                                 <button
                                   onClick={() => { const fullUrl = `${(scanResult?.target_url || project?.application_url || "").replace(/\/$/, "")}${fp}`; handleFetchUrl(fullUrl); }}
                                   disabled={fetchingUrl !== null}
-                                  className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded text-xs font-medium shrink-0 transition-opacity"
+                                  className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded text-xs font-medium shrink-0 transition-opacity flex items-center gap-1"
                                   style={{ background: "#16a34a", color: "white" }}
+                                  title="View request/response"
                                 >
                                   {fetchingUrl ? <Loader2 className="w-3 h-3 animate-spin inline" /> : <Eye className="w-3 h-3 inline" />}
+                                  View
                                 </button>
                               )}
                             </div>
