@@ -558,9 +558,9 @@ async def _run_ffuf_exhaustive_background(job_id: str, project_id: str, target_u
                 ptr.status = status
                 ptr.tester_id = user_id
                 ptr.completed_at = dt.utcnow()
-                ptr.evidence = [{"filename": "dast_ffuf_exhaustive", "url": "", "description": evidence or "No paths discovered"}]
+                ptr.evidence = [{"filename": "dast_ffuf_exhaustive", "url": "", "description": evidence or "No paths discovered", "discovered": discovered}]
                 ptr.request_captured = f"Exhaustive ffuf: {target_url}{base_path or '/'}"
-                ptr.response_raw = f"Discovered {len(discovered)} path(s)"
+                ptr.response_captured = f"Discovered {len(discovered)} path(s)"
                 ptr.reproduction_steps = f"1. Run exhaustive directory bruteforce on {target_url}{base_path or '/'}\n2. Wordlists: {result.get('wordlists_used', [])}\n3. Paths: {evidence}"
                 ptr.tool_used = "DAST (Navigator) ffuf exhaustive"
                 ptr.payload_used = evidence
@@ -610,6 +610,37 @@ async def get_ffuf_exhaustive_progress(
     if not data:
         raise HTTPException(404, "Job not found or expired")
     return data
+
+
+@router.get("/project/{project_id}/last-discovered-paths")
+async def get_last_discovered_paths(
+    project_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return last exhaustive/discovery paths from ProjectTestResult (MOD-RECON-04). Survives page reload."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied")
+    ptr_q = (
+        select(ProjectTestResult)
+        .join(TestCase, ProjectTestResult.test_case_id == TestCase.id)
+        .where(
+            ProjectTestResult.project_id == uuid.UUID(project_id),
+            TestCase.module_id == "MOD-RECON-04",
+            ProjectTestResult.is_applicable == True,
+        )
+        .order_by(ProjectTestResult.completed_at.desc().nullslast())
+        .limit(1)
+    )
+    ptr = (await db.execute(ptr_q)).scalar_one_or_none()
+    discovered = []
+    wordlists_used = []
+    if ptr and ptr.evidence:
+        for ev in ptr.evidence if isinstance(ptr.evidence, list) else []:
+            if isinstance(ev, dict) and ev.get("discovered"):
+                discovered = ev["discovered"]
+                break
+    return {"discovered": discovered, "wordlists_used": wordlists_used}
 
 
 # ──────────────────────────────────────────────────────────

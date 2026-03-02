@@ -410,6 +410,8 @@ export const api = {
     request("/dast/ffuf-exhaustive", { method: "POST", body: JSON.stringify(data) }),
   dastFfufExhaustiveProgress: (jobId: string) =>
     request(`/dast/ffuf-exhaustive/${jobId}`, { method: "GET" }),
+  dastLastDiscoveredPaths: (projectId: string) =>
+    request(`/dast/project/${projectId}/last-discovered-paths`, { method: "GET" }),
 
   // Crawler / Spider
   dastCrawl: (data: { project_id: string; target_url?: string; auth_config?: any; max_depth?: number; crawl_scope?: string; run_param_discovery?: boolean }) =>

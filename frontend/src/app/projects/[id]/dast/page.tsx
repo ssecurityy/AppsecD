@@ -138,8 +138,12 @@ export default function DastScanPage() {
     const dirCheck = (scanResult?.results || []).find((r: any) => r.check_id === "DAST-DIR-02");
     const base = (dirCheck?.details?.discovered || []) as PathItem[];
     const fromFfuf = Object.values(ffufResults).flatMap((r) => r.discovered);
+    const fromRecursive = [
+      ...(recursiveDirResult?.directories || []).map((d: any) => ({ path: d.path || d, status: 200 })),
+      ...(recursiveDirResult?.files || []).map((f: any) => ({ path: f.path || f, status: 200 })),
+    ];
     const byPath = new Map<string, number>();
-    for (const x of [...base, ...fromFfuf]) {
+    for (const x of [...base, ...fromFfuf, ...fromRecursive]) {
       const p = (x.path || "").replace(/\/+$/, "") || "/";
       const norm = p === "" || p === "/" ? "/" : p.startsWith("/") ? p : `/${p}`;
       if (!byPath.has(norm)) byPath.set(norm, x.status);
@@ -181,6 +185,16 @@ export default function DastScanPage() {
       // Load scan history
       api.dastProjectHistory(id as string, 50).then((r: any) => {
         setScanHistory(r?.scans ?? []);
+      }).catch(() => {});
+      // Load last discovered paths (exhaustive scan persisted to ProjectTestResult) so Directory tree shows after reload
+      api.dastLastDiscoveredPaths(id as string).then((r: any) => {
+        const discovered = r?.discovered || [];
+        if (discovered.length > 0) {
+          setFfufResults((prev) => ({
+            ...prev,
+            _persisted: { discovered, wordlist_used: "exhaustive (persisted)" },
+          }));
+        }
       }).catch(() => {});
       // If a scan is still running for this project, resume polling
       api.dastScans().then((r: any) => {
@@ -788,8 +802,8 @@ export default function DastScanPage() {
           </div>
         )}
 
-        {/* Results - Scan Complete */}
-        {(scanResult || dastActiveTab === "crawl") && (
+        {/* Results - Scan Complete: Always show tabs when project loaded so Directory Bruteforce & Spider are accessible */}
+        {project && (
           <div className="space-y-4">
             {/* Tabs: Scan Results | Directory Bruteforce | Crawl */}
             <div className="flex gap-1 p-1 rounded-xl" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
@@ -1166,7 +1180,7 @@ export default function DastScanPage() {
                       </select>
                       <button
                         onClick={handleRecursiveDirScan}
-                        disabled={recursiveDirScanning || (!scanResult?.target_url && !project?.application_url)}
+                        disabled={recursiveDirScanning || !project?.application_url}
                         className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
                         style={{ background: recursiveDirScanning ? "#4b5563" : "#2563eb", color: "white" }}
                       >
@@ -1175,7 +1189,7 @@ export default function DastScanPage() {
                       </button>
                       <button
                         onClick={handleRunExhaustive}
-                        disabled={ffufExhaustiveScanning || (!scanResult?.target_url && !project?.application_url)}
+                        disabled={ffufExhaustiveScanning || !project?.application_url}
                         className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
                         style={{ background: ffufExhaustiveScanning ? "#4b5563" : "#7c3aed", color: "white" }}
                       >
@@ -1205,16 +1219,34 @@ export default function DastScanPage() {
                     <div className="py-12 text-center" style={{ color: "var(--text-muted)" }}>
                       <Folder className="w-12 h-12 mx-auto mb-2 opacity-50" />
                       <p className="text-sm">No directories or files discovered yet</p>
-                      <p className="text-xs mt-1">Run a scan with &quot;Directory Discovery&quot; check enabled, or use &quot;Run Exhaustive&quot; to run all wordlists in background</p>
-                      <button
-                        onClick={handleRunExhaustive}
-                        disabled={ffufExhaustiveScanning || (!scanResult?.target_url && !project?.application_url)}
-                        className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium mx-auto"
-                        style={{ background: ffufExhaustiveScanning ? "#4b5563" : "#7c3aed", color: "white" }}
-                      >
-                        {ffufExhaustiveScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                        {ffufExhaustiveScanning ? "Scanning..." : "Run Exhaustive"}
-                      </button>
+                      <p className="text-xs mt-1 max-w-md mx-auto">
+                        Run &quot;Run Exhaustive&quot; (ffuf) or &quot;Recursive Scan&quot; to discover paths. Requires ffuf installed for exhaustive scan. Target: {project?.application_url || "—"}
+                      </p>
+                      {ffufExhaustiveScanning && (
+                        <div className="mt-3 flex items-center justify-center gap-2 text-sm" style={{ color: "#7c3aed" }}>
+                          <Loader2 className="w-4 h-4 animate-spin" /> Exhaustive scan running in background — stay on this tab to see results when complete
+                        </div>
+                      )}
+                      <div className="mt-4 flex flex-wrap gap-2 justify-center">
+                        <button
+                          onClick={handleRunExhaustive}
+                          disabled={ffufExhaustiveScanning || !project?.application_url}
+                          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+                          style={{ background: ffufExhaustiveScanning ? "#4b5563" : "#7c3aed", color: "white" }}
+                        >
+                          {ffufExhaustiveScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                          {ffufExhaustiveScanning ? "Scanning..." : "Run Exhaustive"}
+                        </button>
+                        <button
+                          onClick={handleRecursiveDirScan}
+                          disabled={recursiveDirScanning || !project?.application_url}
+                          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+                          style={{ background: recursiveDirScanning ? "#4b5563" : "#2563eb", color: "white" }}
+                        >
+                          {recursiveDirScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
+                          {recursiveDirScanning ? "Scanning..." : "Recursive Scan"}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     (() => {
