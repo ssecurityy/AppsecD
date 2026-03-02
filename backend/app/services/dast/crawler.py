@@ -581,17 +581,21 @@ def _httpx_fallback_crawl(
     max_urls: int = 400,
 ) -> list[dict]:
     """
-    Basic link-extraction crawl using httpx + regex.
-    Used when katana is unavailable.
+    Advanced link-extraction crawler using httpx.
+    Handles HTML parsing, JS URL extraction, meta refresh, sitemap/robots,
+    OpenAPI/Swagger detection, and intelligent priority queue.
     """
     from html.parser import HTMLParser
 
-    class LinkExtractor(HTMLParser):
+    class AdvancedLinkExtractor(HTMLParser):
         def __init__(self):
             super().__init__()
             self.links: list[str] = []
             self.forms: list[dict] = []
+            self.meta_redirects: list[str] = []
+            self.comments: list[str] = []
             self._current_form: dict | None = None
+            self._in_comment = False
 
         def handle_starttag(self, tag, attrs):
             attrs_dict = dict(attrs)
@@ -605,95 +609,232 @@ def _httpx_fallback_crawl(
                 self.links.append(attrs_dict["src"])
             elif tag == "iframe" and "src" in attrs_dict:
                 self.links.append(attrs_dict["src"])
+            elif tag == "video" and "src" in attrs_dict:
+                self.links.append(attrs_dict["src"])
+            elif tag == "source" and "src" in attrs_dict:
+                self.links.append(attrs_dict["src"])
+            elif tag == "area" and "href" in attrs_dict:
+                self.links.append(attrs_dict["href"])
+            elif tag == "base" and "href" in attrs_dict:
+                self.links.insert(0, attrs_dict["href"])
+            elif tag == "meta":
+                equiv = attrs_dict.get("http-equiv", "").lower()
+                content = attrs_dict.get("content", "")
+                if equiv == "refresh" and "url=" in content.lower():
+                    url_part = content.split("url=", 1)[-1] if "url=" in content.lower() else ""
+                    url_part = content.split("URL=", 1)[-1] if not url_part and "URL=" in content else url_part
+                    if url_part:
+                        self.meta_redirects.append(url_part.strip().strip("'\""))
             elif tag == "form":
                 self._current_form = {
                     "action": attrs_dict.get("action", ""),
                     "method": attrs_dict.get("method", "GET").upper(),
+                    "enctype": attrs_dict.get("enctype", ""),
                     "inputs": [],
                 }
-            elif tag == "input" and self._current_form is not None:
-                name = attrs_dict.get("name", "")
-                if name:
-                    self._current_form["inputs"].append(
-                        {
+            elif self._current_form is not None:
+                if tag in ("input", "select", "textarea"):
+                    name = attrs_dict.get("name", "")
+                    if name:
+                        self._current_form["inputs"].append({
                             "name": name,
                             "type": attrs_dict.get("type", "text"),
                             "value": attrs_dict.get("value", ""),
-                        }
-                    )
+                            "tag": tag,
+                        })
+            if "data-url" in attrs_dict:
+                self.links.append(attrs_dict["data-url"])
+            if "data-href" in attrs_dict:
+                self.links.append(attrs_dict["data-href"])
+            if "data-src" in attrs_dict:
+                self.links.append(attrs_dict["data-src"])
+            if "data-action" in attrs_dict:
+                self.links.append(attrs_dict["data-action"])
 
         def handle_endtag(self, tag):
             if tag == "form" and self._current_form is not None:
                 self.forms.append(self._current_form)
                 self._current_form = None
 
+        def handle_comment(self, data):
+            self.comments.append(data)
+            for m in re.finditer(r'(?:href|src|url|action)\s*=\s*["\']?([^\s"\'<>]+)', data, re.IGNORECASE):
+                self.links.append(m.group(1))
+
+        def handle_data(self, data):
+            if self._current_form and self._current_form.get("_in_textarea"):
+                return
+            for m in re.finditer(r'(?:window\.location|location\.href|location\.assign)\s*=\s*["\']([^"\']+)', data):
+                self.links.append(m.group(1))
+
     parsed_target = urlparse(target_url)
     base_domain = parsed_target.netloc
     base_scheme = parsed_target.scheme
 
     visited: set[str] = set()
-    queue: list[tuple[str, int]] = [(target_url, 0)]
+    queue: list[tuple[str, int, int]] = [(target_url, 0, 10)]
     results: list[dict] = []
     request_headers = {**HEADERS, **auth_headers}
+    cookie_jar: dict[str, str] = {}
 
-    while queue and len(results) < max_urls:
-        url, depth = queue.pop(0)
+    _ROBOTS_CHECKED = False
+    _SITEMAP_CHECKED = False
+    _OPENAPI_CHECKED = False
 
-        # Normalize
-        if url in visited:
-            continue
-        visited.add(url)
+    def _add_to_queue(url: str, depth: int, priority: int = 5):
+        if url not in visited and len(queue) < max_urls * 2:
+            queue.append((url, depth, priority))
+            queue.sort(key=lambda x: (-x[2], x[1]))
 
-        if depth > max_depth:
-            continue
+    def _check_robots_sitemap():
+        nonlocal _ROBOTS_CHECKED, _SITEMAP_CHECKED
+        root = f"{base_scheme}://{base_domain}"
+        if not _ROBOTS_CHECKED:
+            _ROBOTS_CHECKED = True
+            try:
+                with httpx.Client(timeout=httpx.Timeout(10.0), headers=request_headers, verify=False, follow_redirects=True) as c:
+                    r = c.get(f"{root}/robots.txt")
+                    if r.status_code == 200 and r.text:
+                        results.append({"request": {"endpoint": f"{root}/robots.txt", "method": "GET"}, "response": {"status_code": 200, "headers": dict(r.headers), "body": r.text[:2000]}})
+                        for line in r.text.splitlines():
+                            line = line.strip()
+                            if line.lower().startswith(("allow:", "disallow:", "sitemap:")):
+                                parts = line.split(":", 1)
+                                if len(parts) == 2:
+                                    path = parts[1].strip()
+                                    if path.startswith("http"):
+                                        _add_to_queue(path, 1, 8)
+                                    elif path.startswith("/"):
+                                        _add_to_queue(f"{root}{path}", 1, 8)
+            except Exception:
+                pass
+        if not _SITEMAP_CHECKED:
+            _SITEMAP_CHECKED = True
+            for sp in ["/sitemap.xml", "/sitemap_index.xml", "/sitemap.txt"]:
+                try:
+                    with httpx.Client(timeout=httpx.Timeout(10.0), headers=request_headers, verify=False, follow_redirects=True) as c:
+                        r = c.get(f"{root}{sp}")
+                        if r.status_code == 200 and r.text:
+                            results.append({"request": {"endpoint": f"{root}{sp}", "method": "GET"}, "response": {"status_code": 200}})
+                            for m in re.finditer(r'<loc>([^<]+)</loc>', r.text):
+                                _add_to_queue(m.group(1).strip(), 1, 7)
+                            for line in r.text.splitlines():
+                                line = line.strip()
+                                if line.startswith("http"):
+                                    _add_to_queue(line, 1, 7)
+                            break
+                except Exception:
+                    pass
 
-        try:
-            with httpx.Client(
-                timeout=TIMEOUT,
-                headers=request_headers,
-                verify=False,
-                follow_redirects=True,
-            ) as client:
+    def _check_openapi():
+        nonlocal _OPENAPI_CHECKED
+        if _OPENAPI_CHECKED:
+            return
+        _OPENAPI_CHECKED = True
+        root = f"{base_scheme}://{base_domain}"
+        api_doc_paths = [
+            "/openapi.json", "/swagger.json", "/api-docs", "/swagger/v1/swagger.json",
+            "/v1/openapi.json", "/v2/swagger.json", "/api/openapi.json",
+            "/docs", "/redoc", "/swagger-ui.html", "/api/docs",
+        ]
+        for path in api_doc_paths:
+            try:
+                with httpx.Client(timeout=httpx.Timeout(8.0), headers=request_headers, verify=False, follow_redirects=True) as c:
+                    r = c.get(f"{root}{path}")
+                    if r.status_code == 200:
+                        results.append({"request": {"endpoint": f"{root}{path}", "method": "GET"}, "response": {"status_code": 200, "headers": dict(r.headers), "body": r.text[:2000]}})
+                        try:
+                            spec = r.json()
+                            paths = spec.get("paths", {})
+                            for api_path, methods in paths.items():
+                                full = f"{root}{api_path}"
+                                for method in methods:
+                                    if method.upper() in ("GET", "POST", "PUT", "DELETE", "PATCH"):
+                                        results.append({"request": {"endpoint": full, "method": method.upper()}, "tag": "openapi"})
+                        except Exception:
+                            pass
+                        break
+            except Exception:
+                pass
+
+    _check_robots_sitemap()
+    _check_openapi()
+
+    with httpx.Client(timeout=TIMEOUT, headers=request_headers, verify=False, follow_redirects=True) as client:
+        while queue and len(results) < max_urls:
+            url, depth, _prio = queue.pop(0)
+
+            norm_url = url.split("#")[0].rstrip("/") or url
+            if norm_url in visited:
+                continue
+            visited.add(norm_url)
+            visited.add(url)
+
+            if depth > max_depth:
+                continue
+
+            try:
                 resp = client.get(url)
 
-            results.append(
-                {
+                if resp.cookies:
+                    for name, value in resp.cookies.items():
+                        cookie_jar[name] = value
+
+                results.append({
                     "request": {"endpoint": url, "method": "GET"},
                     "response": {
                         "status_code": resp.status_code,
                         "headers": dict(resp.headers),
                         "body": resp.text[:2000] if resp.text else "",
                     },
-                }
-            )
+                })
 
-            # Only parse HTML for links
-            content_type = resp.headers.get("content-type", "")
-            if "text/html" not in content_type:
-                continue
+                content_type = resp.headers.get("content-type", "")
 
-            parser = LinkExtractor()
-            try:
-                parser.feed(resp.text or "")
-            except Exception:
-                pass
+                if "application/json" in content_type:
+                    try:
+                        data = resp.json()
+                        for key in ("url", "href", "link", "next", "redirect", "location"):
+                            val = data.get(key, "")
+                            if isinstance(val, str) and val.startswith(("http", "/")):
+                                abs_url = _resolve_link(val, url, base_scheme, base_domain)
+                                if abs_url:
+                                    _add_to_queue(abs_url, depth + 1, 6)
+                    except Exception:
+                        pass
+                    continue
 
-            # Process extracted links
-            for link in parser.links:
-                absolute = _resolve_link(link, url, base_scheme, base_domain)
-                if absolute and absolute not in visited:
-                    link_parsed = urlparse(absolute)
-                    if link_parsed.netloc == base_domain:
-                        queue.append((absolute, depth + 1))
+                if "text/html" not in content_type and "application/xhtml" not in content_type:
+                    continue
 
-            # Process forms
-            for form in parser.forms:
-                action = form.get("action", "")
-                absolute_action = _resolve_link(
-                    action, url, base_scheme, base_domain
-                ) or url
-                results.append(
-                    {
+                html_text = resp.text or ""
+                parser = AdvancedLinkExtractor()
+                try:
+                    parser.feed(html_text)
+                except Exception:
+                    pass
+
+                for link in parser.links:
+                    absolute = _resolve_link(link, url, base_scheme, base_domain)
+                    if absolute and absolute.split("#")[0] not in visited:
+                        link_parsed = urlparse(absolute)
+                        if link_parsed.netloc == base_domain:
+                            prio = 5
+                            if _API_PATTERNS.search(absolute):
+                                prio = 9
+                            elif _INTERESTING_EXTENSIONS.search(absolute):
+                                prio = 8
+                            _add_to_queue(absolute, depth + 1, prio)
+
+                for redirect_url in parser.meta_redirects:
+                    absolute = _resolve_link(redirect_url, url, base_scheme, base_domain)
+                    if absolute:
+                        _add_to_queue(absolute, depth, 7)
+
+                for form in parser.forms:
+                    action = form.get("action", "")
+                    absolute_action = _resolve_link(action, url, base_scheme, base_domain) or url
+                    results.append({
                         "request": {
                             "endpoint": absolute_action,
                             "method": form.get("method", "GET"),
@@ -704,15 +845,22 @@ def _httpx_fallback_crawl(
                             ),
                         },
                         "tag": "form",
-                    }
-                )
+                    })
+                    if absolute_action not in visited:
+                        _add_to_queue(absolute_action, depth + 1, 8)
 
-            # Small delay to be polite
-            time.sleep(0.3)
+                for m in re.finditer(r'(?:["\'`])(/[a-zA-Z0-9_/\-.]+(?:\?[^"\'`]*)?)["\'\`]', html_text):
+                    path = m.group(1)
+                    if len(path) > 2 and not _STATIC_EXTENSIONS.search(path):
+                        abs_url = f"{base_scheme}://{base_domain}{path}"
+                        if abs_url not in visited:
+                            _add_to_queue(abs_url, depth + 1, 4)
 
-        except Exception as exc:
-            logger.debug("httpx crawl error for %s: %s", url, exc)
-            continue
+                time.sleep(0.15)
+
+            except Exception as exc:
+                logger.debug("httpx crawl error for %s: %s", url, exc)
+                continue
 
     return results
 
@@ -932,6 +1080,7 @@ def run_crawl(
             {
                 "status": "running",
                 "phase": phase,
+                "pct": pct,
                 "progress_pct": pct,
                 "message": message,
                 "target_url": target_url,

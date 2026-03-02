@@ -138,6 +138,30 @@ async def _run_scan_background(
                         finding.request = check["request_raw"]
                     if check.get("response_raw"):
                         finding.response = check["response_raw"]
+
+                    # AI-enrich finding with Gemini interpretation
+                    try:
+                        from app.services.dast.ai_analysis import interpret_scan_result
+                        from app.services.admin_settings_service import get_llm_config as _get_llm
+                        provider, model, api_key = await _get_llm(db)
+                        if not api_key:
+                            from app.core.config import get_settings
+                            s = get_settings()
+                            if s.google_api_key:
+                                provider, model, api_key = "google", "gemini-2.5-flash", s.google_api_key
+                        if api_key:
+                            enriched = interpret_scan_result(
+                                check, target_url,
+                                provider=provider, model=model, api_key=api_key,
+                            )
+                            ai = enriched.get("ai_analysis", {})
+                            if ai.get("interpretation"):
+                                finding.description += f"\n\n**AI Analysis:**\n{ai['interpretation']}"
+                            if ai.get("remediation_steps"):
+                                finding.recommendation += "\n\n**AI Remediation:**\n" + "\n".join(f"- {s}" for s in ai["remediation_steps"])
+                    except Exception as ai_err:
+                        logger.debug("AI enrichment skipped for %s: %s", check.get("title", ""), ai_err)
+
                     db.add(finding)
                     findings_created.append(check["title"])
                 elif check["status"] == "passed":
@@ -1247,3 +1271,108 @@ async def ai_interpret_result(
         provider=provider, model=model, api_key=api_key,
     )
     return result
+
+
+class AICoverageGapsRequest(BaseModel):
+    project_id: str
+    target_url: str | None = None
+
+
+@router.post("/ai/coverage-gaps")
+async def ai_coverage_gaps(
+    payload: AICoverageGapsRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Analyze test coverage gaps: compare crawl output vs existing test results."""
+    if not await user_can_read_project(db, current_user, payload.project_id):
+        raise HTTPException(403, "Access denied")
+
+    project_uuid = uuid.UUID(payload.project_id)
+    project = (await db.execute(select(Project).where(Project.id == project_uuid))).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    latest_crawl = await db.execute(
+        select(CrawlSession)
+        .where(CrawlSession.project_id == project_uuid, CrawlSession.status == "completed")
+        .order_by(desc(CrawlSession.created_at)).limit(1)
+    )
+    crawl = latest_crawl.scalar_one_or_none()
+
+    tested_q = await db.execute(
+        select(ProjectTestResult)
+        .where(ProjectTestResult.project_id == project_uuid, ProjectTestResult.status.in_(["passed", "failed"]))
+    )
+    tested_count = len(tested_q.scalars().all())
+
+    total_q = await db.execute(
+        select(ProjectTestResult).where(ProjectTestResult.project_id == project_uuid, ProjectTestResult.is_applicable == True)
+    )
+    total_applicable = len(total_q.scalars().all())
+
+    latest_scan = await db.execute(
+        select(DastScanResult)
+        .where(DastScanResult.project_id == project_uuid, DastScanResult.status == "completed")
+        .order_by(desc(DastScanResult.created_at)).limit(1)
+    )
+    scan = latest_scan.scalar_one_or_none()
+    checks_run = len(scan.results) if scan and scan.results else 0
+
+    from app.services.dast_service import ALL_CHECKS
+    total_checks = len(ALL_CHECKS)
+
+    crawl_stats = {}
+    if crawl:
+        crawl_stats = {
+            "total_urls": crawl.total_urls or 0,
+            "api_endpoints": crawl.total_endpoints or 0,
+            "parameters": crawl.total_parameters or 0,
+            "forms": crawl.total_forms or 0,
+            "js_files": crawl.total_js_files or 0,
+        }
+
+    provider, model, api_key = await _get_llm_config(db)
+    if not api_key:
+        return {
+            "test_coverage_pct": round((tested_count / total_applicable * 100) if total_applicable else 0, 1),
+            "dast_coverage_pct": round((checks_run / total_checks * 100) if total_checks else 0, 1),
+            "tested": tested_count,
+            "total_applicable": total_applicable,
+            "checks_run": checks_run,
+            "total_checks": total_checks,
+            "crawl_stats": crawl_stats,
+            "gaps": [],
+            "recommendations": ["Run a full DAST scan", "Complete manual test cases"],
+        }
+
+    from app.services.dast.ai_analysis import _call_llm, _parse_json
+    import json
+    prompt = f"""You are a security testing expert. Analyze the test coverage gaps for this project.
+
+Project: {project.application_name} ({project.application_url})
+Test Coverage: {tested_count}/{total_applicable} test cases completed ({round((tested_count/total_applicable*100) if total_applicable else 0)}%)
+DAST Coverage: {checks_run}/{total_checks} automated checks run ({round((checks_run/total_checks*100) if total_checks else 0)}%)
+Crawl Stats: {json.dumps(crawl_stats)}
+Has Crawl Data: {"Yes" if crawl else "No"}
+Has DAST Scan: {"Yes" if scan else "No"}
+
+Identify coverage gaps and prioritize what should be tested next.
+Respond in JSON:
+{{"gaps": [{{"area": "area name", "severity": "critical|high|medium", "description": "what is missing"}}], "recommendations": ["specific action 1", "specific action 2"], "priority_tests": ["test_type_1", "test_type_2"], "overall_coverage_assessment": "brief assessment"}}"""
+
+    raw = await asyncio.to_thread(_call_llm, provider, model, api_key, prompt)
+    parsed = _parse_json(raw)
+
+    base = {
+        "test_coverage_pct": round((tested_count / total_applicable * 100) if total_applicable else 0, 1),
+        "dast_coverage_pct": round((checks_run / total_checks * 100) if total_checks else 0, 1),
+        "tested": tested_count,
+        "total_applicable": total_applicable,
+        "checks_run": checks_run,
+        "total_checks": total_checks,
+        "crawl_stats": crawl_stats,
+    }
+    if parsed and isinstance(parsed, dict):
+        return {**base, **parsed}
+    return {**base, "gaps": [], "recommendations": ["Run full DAST scan", "Complete manual test cases"]}

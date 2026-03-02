@@ -448,4 +448,6 @@ export const api = {
     request("/dast/ai/categorize-paths", { method: "POST", body: JSON.stringify(data) }),
   dastAiInterpretResult: (data: { check_result: any; target_url: string }) =>
     request("/dast/ai/interpret-result", { method: "POST", body: JSON.stringify(data) }),
+  dastAiCoverageGaps: (data: { project_id: string; target_url?: string }) =>
+    request("/dast/ai/coverage-gaps", { method: "POST", body: JSON.stringify(data) }),
 };
