@@ -48,7 +48,7 @@ def check_security_headers(target_url: str) -> DastResult:
     else:
         result.status = "passed"
         result.description = "All security headers present"
-    result.details = {"missing": missing, "present": findings, "dangerous": dangerous, "response_code": resp.status_code}
+    result.details = {"missing": missing, "present": findings, "dangerous": dangerous, "response_code": resp.status_code, "payload_tested": "Headers: x-frame-options, x-content-type-options, strict-transport-security, content-security-policy, x-xss-protection, referrer-policy, permissions-policy"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
     return result
@@ -63,13 +63,19 @@ def check_cache_control(target_url: str) -> DastResult:
     paths = ["/", "/login", "/dashboard", "/api/user", "/profile", "/admin"]
     base = f"{urlparse(target_url).scheme}://{urlparse(target_url).netloc}"
     issues = []
+    sample_resp = None
     for path in paths:
         r = safe_get(urljoin(base, path))
+        if not sample_resp and r:
+            sample_resp = r
         if r and r.status_code == 200:
             cc = r.headers.get("cache-control", "").lower()
             if "no-store" not in cc and "no-cache" not in cc and "private" not in cc:
                 issues.append({"path": path, "cache_control": cc or "(none)"})
-    result.details = {"paths_checked": paths, "missing_no_store": issues}
+    result.details = {"paths_checked": paths, "missing_no_store": issues, "payload_tested": f"GET {paths}"}
+    if sample_resp:
+        result.request_raw = f"GET {base}/ HTTP/1.1\nHost: {urlparse(target_url).netloc}\n(Checked paths: {', '.join(paths)})"
+        result.response_raw = f"HTTP/1.1 {sample_resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in sample_resp.headers.items()) + "\n\n(Cache-Control: " + (sample_resp.headers.get("cache-control") or "(none)") + ")"
     if issues:
         result.status = "failed"
         result.severity = "low"
@@ -101,7 +107,9 @@ def check_sri(target_url: str) -> DastResult:
             idx = body.find(src)
             if idx >= 0 and "integrity=" not in body[max(0, idx - 150) : idx + 250]:
                 no_sri.append(src[:80])
-    result.details = {"external_scripts": [s[:80] for s in script_tags if (s.startswith("http") or s.startswith("//"))][:20], "missing_sri": no_sri[:10]}
+    result.details = {"external_scripts": [s[:80] for s in script_tags if (s.startswith("http") or s.startswith("//"))][:20], "missing_sri": no_sri[:10], "payload_tested": "External <script src> tags for missing integrity= attribute"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (body[:2000] if body else "")
     if no_sri:
         result.status = "failed"
         result.severity = "low"
@@ -183,7 +191,9 @@ def check_xss_protection_header(target_url: str) -> DastResult:
         result.description = "Could not reach target"
         return result
     xss = resp.headers.get("x-xss-protection", "").lower()
-    result.details = {"value": xss or "(not set)"}
+    result.details = {"value": xss or "(not set)", "payload_tested": "Response header X-XSS-Protection"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
     if "1; mode=block" in xss or "1" in xss:
         result.status = "passed"
         result.description = "X-XSS-Protection present"
@@ -208,7 +218,9 @@ def check_csp_reporting(target_url: str) -> DastResult:
         return result
     csp = resp.headers.get("content-security-policy", "") or resp.headers.get("content-security-policy-report-only", "")
     has_report = "report-uri" in csp or "report-to" in csp
-    result.details = {"has_report": has_report}
+    result.details = {"has_report": has_report, "payload_tested": "CSP header for report-uri/report-to"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
     if not csp:
         result.status = "passed"
         result.description = "No CSP (reporting N/A)"
@@ -240,7 +252,9 @@ def check_expect_ct(target_url: str) -> DastResult:
         result.description = "Target is HTTP; Expect-CT N/A"
         return result
     ect = resp.headers.get("expect-ct", "")
-    result.details = {"expect_ct": ect or "(not set)"}
+    result.details = {"expect_ct": ect or "(not set)", "payload_tested": "Response header Expect-CT"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {parsed.netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
     if not ect:
         result.status = "failed"
         result.severity = "info"
@@ -265,7 +279,9 @@ def check_permissions_policy(target_url: str) -> DastResult:
         return result
     headers = {k.lower(): v for k, v in resp.headers.items()}
     pp = headers.get("permissions-policy", headers.get("feature-policy", ""))
-    result.details = {"value": pp or "(not set)"}
+    result.details = {"value": pp or "(not set)", "payload_tested": "Response header Permissions-Policy"}
+    result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+    result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
     if not pp:
         result.status = "failed"
         result.severity = "low"
@@ -292,7 +308,7 @@ def check_content_type_sniffing(target_url: str) -> DastResult:
     xcto = resp.headers.get("x-content-type-options", "").lower()
     body = (resp.text or "").strip()[:500]
     looks_json = body.startswith("{") or body.startswith("[")
-    result.details = {"content_type": ct, "x_content_type_options": xcto or "(not set)", "body_start": body[:100]}
+    result.details = {"content_type": ct, "x_content_type_options": xcto or "(not set)", "body_start": body[:100], "payload_tested": "X-Content-Type-Options: nosniff; Content-Type vs body"}
     issues = []
     if not xcto or "nosniff" not in xcto:
         issues.append("X-Content-Type-Options: nosniff missing")
@@ -327,7 +343,7 @@ def check_clickjacking(target_url: str) -> DastResult:
     csp = headers.get("content-security-policy", headers.get("content-security-policy-report-only", ""))
     has_xfo = bool(xfo and xfo.strip())
     has_frame_ancestors = "frame-ancestors" in csp.lower()
-    result.details = {"x_frame_options": xfo or "(not set)", "csp_frame_ancestors": has_frame_ancestors}
+    result.details = {"x_frame_options": xfo or "(not set)", "csp_frame_ancestors": has_frame_ancestors, "payload_tested": "X-Frame-Options or CSP frame-ancestors"}
     if has_xfo or has_frame_ancestors:
         result.status = "passed"
         result.description = "Clickjacking protection present"

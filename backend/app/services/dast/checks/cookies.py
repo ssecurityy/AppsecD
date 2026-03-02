@@ -39,7 +39,7 @@ def check_cookie_security(target_url: str) -> DastResult:
         if cookie_info["issues"]:
             issues.extend([f"{name}: {i}" for i in cookie_info["issues"]])
         cookie_details.append(cookie_info)
-    result.details = {"cookies": cookie_details, "total_cookies": len(cookies)}
+    result.details = {"cookies": cookie_details, "total_cookies": len(cookies), "payload_tested": "Set-Cookie headers for Secure, HttpOnly, SameSite"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:1500] if resp.text else "")
     if issues:
@@ -73,7 +73,7 @@ def check_cookie_prefix(target_url: str) -> DastResult:
         if "session" in name.lower() or "auth" in name.lower() or "token" in name.lower() or "sid" in name.lower():
             session_like.append(name)
     unprefixed = [n for n in session_like if not (n.startswith("__Host-") or n.startswith("__Secure-"))]
-    result.details = {"session_like": session_like, "unprefixed": unprefixed}
+    result.details = {"session_like": session_like, "unprefixed": unprefixed, "payload_tested": "Cookie names for __Host-/__Secure- prefix"}
     if unprefixed:
         result.status = "failed"
         result.severity = "low"

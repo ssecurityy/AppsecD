@@ -27,7 +27,7 @@ def check_cors(target_url: str) -> DastResult:
         issues.append(f"Reflects arbitrary origin: {evil_origin}")
     if acac.lower() == "true" and (acao == "*" or acao == evil_origin):
         issues.append("Credentials allowed with permissive origin — critical")
-    result.details = {"acao": acao, "acac": acac, "tested_origin": evil_origin}
+    result.details = {"acao": acao, "acac": acac, "tested_origin": evil_origin, "payload_tested": f"GET with Origin: {evil_origin}"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nOrigin: {evil_origin}\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:1500] if resp.text else "")
     if issues:
@@ -67,7 +67,7 @@ def check_open_redirect(target_url: str) -> DastResult:
                     found.append({"param": param, "url": test_url, "redirect_to": location})
         except Exception:
             pass
-    result.details = {"tested_params": redirect_params, "redirects_found": found}
+    result.details = {"tested_params": redirect_params, "redirects_found": found, "payload_tested": f"GET /login?param={evil_url} for params: {', '.join(redirect_params[:5])}"}
     if found:
         result.status = "failed"
         result.severity = "medium"
@@ -102,7 +102,7 @@ def check_host_header_injection(target_url: str) -> DastResult:
     else:
         result.status = "passed"
         result.description = "Host header not reflected"
-    result.details = {"tested_host": evil_host, "location": loc[:200]}
+    result.details = {"tested_host": evil_host, "location": loc[:200], "payload_tested": f"GET with Host: {evil_host}"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {evil_host}"
     result.response_raw = f"HTTP/1.1 {r.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in r.headers.items()) + "\n\n" + (r.text[:1500] if r.text else "")
     return result
@@ -124,7 +124,7 @@ def check_crlf_injection(target_url: str) -> DastResult:
         return result
     set_cookie = r.headers.get("set-cookie", "")
     vuln = "crlf=injected" in set_cookie.lower()
-    result.details = {"payload": payload, "set_cookie_header": set_cookie[:200]}
+    result.details = {"payload": payload, "set_cookie_header": set_cookie[:200], "payload_tested": f"CRLF injection: ?redirect={payload}"}
     if vuln:
         result.status = "failed"
         result.severity = "high"
@@ -156,7 +156,7 @@ def check_xss_basic(target_url: str) -> DastResult:
             reflected.append({"param": param, "url": test_url})
             if not resp:
                 resp = r
-    result.details = {"tested_params": params, "reflected_unencoded": reflected}
+    result.details = {"tested_params": params, "reflected_unencoded": reflected, "payload_tested": f"XSS payload '<script>alert(1)</script>' in params: {', '.join(params)}"}
     if resp:
         result.request_raw = f"GET {base}?q={payload} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
         result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
@@ -194,7 +194,7 @@ def check_sqli_error(target_url: str) -> DastResult:
                 if err in rb:
                     found.append({"payload": p, "error": err})
                     break
-    result.details = {"payloads_tested": payloads, "errors_found": found}
+    result.details = {"payloads_tested": payloads, "errors_found": found, "payload_tested": f"SQLi payloads in ?id=: {payloads}"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
     if found:

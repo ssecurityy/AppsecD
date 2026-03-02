@@ -208,7 +208,7 @@ def check_directory_discovery(target_url: str) -> DastResult:
             if len(discovered) >= 50:
                 break
 
-    result.details = {"paths_checked": len(wordlist), "discovered": discovered, "wordlist_source": wordlist_source}
+    result.details = {"paths_checked": len(wordlist), "discovered": discovered, "wordlist_source": wordlist_source, "payload_tested": f"ffuf/httpx dir fuzz with {len(wordlist)} paths from {wordlist_source}"}
     if base_resp:
         result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {base.netloc}"
         result.response_raw = f"HTTP/1.1 {base_resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in base_resp.headers.items()) + "\n\n" + (base_resp.text[:1500] if base_resp.text else "")

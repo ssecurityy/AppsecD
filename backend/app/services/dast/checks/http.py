@@ -27,7 +27,7 @@ def check_http_methods(target_url: str) -> DastResult:
         if "TRACE" not in allowed:
             allowed.append("TRACE")
     dangerous_found = [m for m in allowed if m in dangerous_methods]
-    result.details = {"allowed_methods": allowed, "dangerous": dangerous_found}
+    result.details = {"allowed_methods": allowed, "dangerous": dangerous_found, "payload_tested": "OPTIONS + TRACE requests"}
     if options_resp:
         result.request_raw = f"OPTIONS {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
         result.response_raw = f"HTTP/1.1 {options_resp.status_code}\nAllow: {options_resp.headers.get('allow', '')}"
@@ -59,7 +59,7 @@ def check_rate_limiting(target_url: str) -> DastResult:
     except Exception:
         pass
     rate_limited = 429 in statuses
-    result.details = {"requests_sent": len(statuses), "rate_limited": rate_limited, "status_codes": list(set(statuses))}
+    result.details = {"requests_sent": len(statuses), "rate_limited": rate_limited, "status_codes": list(set(statuses)), "payload_tested": "20 rapid GET requests for 429"}
     try:
         with __import__("httpx").Client(timeout=TIMEOUT, headers=HEADERS, verify=False) as client:
             r = client.get(target_url)
@@ -102,7 +102,7 @@ def check_sensitive_data(target_url: str) -> DastResult:
         m = re.search(pat, body, re.I)
         if m:
             found.append({"pattern": label, "sample": m.group(0)[:50]})
-    result.details = {"patterns_checked": [p[1] for p in patterns], "found": found}
+    result.details = {"patterns_checked": [p[1] for p in patterns], "found": found, "payload_tested": "PII patterns: credit card, SSN, email, password, API key"}
     if found:
         result.status = "failed"
         result.severity = "medium"
@@ -132,7 +132,7 @@ def check_form_autocomplete(target_url: str) -> DastResult:
     for inp in pwd_inputs:
         if "autocomplete" not in inp.lower() or "autocomplete=\"on\"" in inp.lower() or "autocomplete='on'" in inp.lower():
             bad.append(inp[:100])
-    result.details = {"password_inputs": len(pwd_inputs), "missing_off": len(bad)}
+    result.details = {"password_inputs": len(pwd_inputs), "missing_off": len(bad), "payload_tested": "Password inputs for autocomplete=off"}
     if bad and pwd_inputs:
         result.status = "failed"
         result.severity = "low"
@@ -169,7 +169,7 @@ def check_debug_response(target_url: str) -> DastResult:
     for pat, label in patterns:
         if re.search(pat, body):
             found.append(label)
-    result.details = {"patterns_checked": len(patterns), "found": found}
+    result.details = {"patterns_checked": len(patterns), "found": found, "payload_tested": "Stack trace patterns in response body"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text or "")[:2500]
     if found:

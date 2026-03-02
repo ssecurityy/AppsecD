@@ -35,7 +35,7 @@ def check_info_disclosure(target_url: str) -> DastResult:
             if re.search(pattern, body):
                 issues.append(f"Framework disclosed in error page: {pattern}")
                 break
-    result.details = {"server_header": headers.get("server", ""), "powered_by": headers.get("x-powered-by", ""), "issue_count": len(issues)}
+    result.details = {"server_header": headers.get("server", ""), "powered_by": headers.get("x-powered-by", ""), "issue_count": len(issues), "payload_tested": "GET target + error page for Server, X-Powered-By, stack traces"}
     result.request_raw = f"GET {target_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (resp.text[:2000] if resp.text else "")
     if issues:
@@ -72,7 +72,7 @@ def check_tech_fingerprint(target_url: str) -> DastResult:
             flat.append(items)
     flat = list(dict.fromkeys(flat))
     waf = detected.get("waf") or []
-    result.details = {"stack_profile": detected, "technologies": flat, "waf": waf}
+    result.details = {"stack_profile": detected, "technologies": flat, "waf": waf, "payload_tested": "Tech fingerprint (headers, HTML, JS)"}
     if stack.get("effective_url"):
         result.request_raw = f"GET {stack['effective_url']} — Tech scan"
     if flat or waf:
@@ -105,7 +105,7 @@ def check_sitemap_xml(target_url: str) -> DastResult:
     sensitive = ["admin", "login", "config", "backup", "api/", "internal", "debug", "test"]
     urls_found = re.findall(r"<loc>([^<]+)</loc>", content, re.I)
     sensitive_found = [u for u in urls_found if any(s in u.lower() for s in sensitive)]
-    result.details = {"urls_count": len(urls_found), "sensitive_paths": sensitive_found}
+    result.details = {"urls_count": len(urls_found), "sensitive_paths": sensitive_found, "payload_tested": "GET /sitemap.xml"}
     result.request_raw = f"GET {sitemap_url} HTTP/1.1\nHost: {parsed.netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n\n{content[:2000]}"
     if sensitive_found:
@@ -136,7 +136,7 @@ def check_robots_txt(target_url: str) -> DastResult:
     sensitive_patterns = ["admin", "login", "api", "config", "backup", "debug", "test", "internal", "dashboard", "secret", "private", "wp-admin", "phpmyadmin", ".env", ".git"]
     disallowed = [line.split(":", 1)[1].strip() for line in content.split("\n") if line.lower().startswith("disallow:") and ":" in line and line.split(":", 1)[1].strip()]
     sensitive_found = [d for d in disallowed if any(p in d.lower() for p in sensitive_patterns)]
-    result.details = {"disallowed_paths": disallowed, "sensitive_paths": sensitive_found, "raw_content": content[:2000]}
+    result.details = {"disallowed_paths": disallowed, "sensitive_paths": sensitive_found, "raw_content": content[:2000], "payload_tested": "GET /robots.txt"}
     result.request_raw = f"GET {robots_url} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (content[:1500] if content else "")
     if sensitive_found:
@@ -166,7 +166,7 @@ def check_directory_listing(target_url: str) -> DastResult:
             body = resp.text[:3000].lower()
             if "index of" in body or "directory listing" in body or ("<pre>" in body and "parent directory" in body):
                 listing_found.append(d)
-    result.details = {"checked_dirs": common_dirs, "listing_enabled": listing_found}
+    result.details = {"checked_dirs": common_dirs, "listing_enabled": listing_found, "payload_tested": f"GET dirs: {', '.join(common_dirs)}"}
     first_resp = safe_get(urljoin(target_url, common_dirs[0])) if common_dirs else None
     if first_resp:
         result.request_raw = f"GET {urljoin(target_url, common_dirs[0])} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
@@ -198,7 +198,11 @@ def check_backup_files(target_url: str) -> DastResult:
             txt = (r.text or "").lower()
             if "root" in txt or "password" in txt or "[core]" in txt or "database" in txt:
                 exposed.append(path)
-    result.details = {"paths_checked": paths, "exposed": exposed}
+    result.details = {"paths_checked": paths, "exposed": exposed, "payload_tested": f"GET backup paths: {paths[:4]}"}
+    sample = safe_get(urljoin(base, paths[0])) if paths else None
+    if sample:
+        result.request_raw = f"GET {base}{paths[0]} HTTP/1.1\nHost: {urlparse(target_url).netloc}"
+        result.response_raw = f"HTTP/1.1 {sample.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in sample.headers.items()) + "\n\n" + ((sample.text or "")[:1500])
     if exposed:
         result.status = "failed"
         result.severity = "high"
@@ -226,7 +230,11 @@ def check_api_docs_exposure(target_url: str) -> DastResult:
             body = (r.text or "").lower()
             if "swagger" in body or "openapi" in body or "graphql" in body or "graphiql" in body:
                 exposed.append(path)
-    result.details = {"paths_checked": paths, "exposed": exposed}
+    result.details = {"paths_checked": paths, "exposed": exposed, "payload_tested": f"GET paths: {', '.join(paths[:5])}..."}
+    sample = safe_get(urljoin(base, paths[0])) if paths else None
+    if sample:
+        result.request_raw = f"GET {base}{paths[0]} HTTP/1.1\nHost: {urlparse(target_url).netloc}\n(Checked: {', '.join(paths[:5])})"
+        result.response_raw = f"HTTP/1.1 {sample.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in sample.headers.items()) + "\n\n" + ((sample.text or "")[:1500])
     if exposed:
         result.status = "failed"
         result.severity = "medium"
@@ -256,7 +264,7 @@ def check_security_txt(target_url: str) -> DastResult:
     body = (resp.text or "").strip()
     result.request_raw = f"GET {url} HTTP/1.1\nHost: {parsed.netloc}"
     result.response_raw = f"HTTP/1.1 {resp.status_code}\n" + "\n".join(f"{k}: {v}" for k, v in resp.headers.items()) + "\n\n" + (body[:1500] if body else "")
-    result.details = {"url": url, "status_code": resp.status_code}
+    result.details = {"url": url, "status_code": resp.status_code, "payload_tested": "GET /.well-known/security.txt"}
     if resp.status_code == 404:
         result.status = "failed"
         result.severity = "info"
@@ -295,7 +303,7 @@ def check_dotenv_git(target_url: str) -> DastResult:
             txt = (r.text or "").lower()
             if any(ind in txt for ind in indicators) or (path == "/.git/HEAD" and len(txt) < 200):
                 exposed.append(path)
-    result.details = {"paths_checked": [p[0] for p in paths], "exposed": exposed}
+    result.details = {"paths_checked": [p[0] for p in paths], "exposed": exposed, "payload_tested": "GET /.env and /.git/HEAD"}
     if exposed:
         result.status = "failed"
         result.severity = "critical"

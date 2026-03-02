@@ -327,7 +327,7 @@ export default function DastScanPage() {
             setFfufResults(prev => ({ ...prev, "/": { discovered: disc, wordlist_used: (prog.wordlists_used || []).join(", ") } }));
             const msg = disc.length > 0
               ? (prog.test_case_updated ? `Found ${disc.length} path(s). Directory Discovery test case auto-marked.` : `Found ${disc.length} path(s)`)
-              : (prog.test_case_updated ? `Directory bruteforce completed. No paths discovered. Test case auto-marked.` : `Directory bruteforce completed. No paths discovered.`);
+              : (prog.test_case_updated ? `Directory bruteforce completed. No paths discovered. Test case auto-marked. (Tip: Ensure ffuf is installed and target is reachable.)` : `Directory bruteforce completed. No paths discovered. (Tip: Install ffuf for better results.)`);
             toast.success(msg);
           } else if (prog.status === "error") {
             setFfufExhaustiveScanning(false);
@@ -359,7 +359,8 @@ export default function DastScanPage() {
       }) as { success: boolean; discovered: { path: string; status: number }[]; wordlist_used: string; error?: string };
       if (res.success) {
         setFfufResults(prev => ({ ...prev, [basePath]: { discovered: res.discovered, wordlist_used: res.wordlist_used } }));
-        toast.success(`Found ${res.discovered.length} path(s) under ${basePath}`);
+        const count = res.discovered.length;
+        toast.success(count > 0 ? `Found ${count} path(s) under ${basePath}` : `No paths discovered under ${basePath}. (Ensure ffuf is installed and target is reachable.)`);
       } else {
         toast.error(res.error || "ffuf scan failed");
       }
@@ -370,12 +371,12 @@ export default function DastScanPage() {
     }
   };
 
-  // Auto-expand failed checks when results first load; default filter to failed
+  // Auto-expand all checks when results first load so request/response/payload visible for each; default filter to failed
   useEffect(() => {
     if (scanResult?.results && !initialExpandDone) {
       const results = scanResult.results as any[];
-      const failedIds = new Set(results.filter((r: any) => r.status === "failed").map((r: any) => r.check_id));
-      setExpandedResults(prev => new Set([...Array.from(prev), ...Array.from(failedIds)]));
+      const allIds = new Set(results.map((r: any) => r.check_id));
+      setExpandedResults(prev => new Set([...Array.from(prev), ...Array.from(allIds)]));
       setInitialExpandDone(true);
       if (results.some((r: any) => r.status === "failed")) setResultFilter("failed");
     }
@@ -915,6 +916,13 @@ export default function DastScanPage() {
                             <div className="p-2.5 rounded-lg" style={{ background: "rgba(202, 138, 4, 0.08)", borderLeft: "4px solid #ca8a04" }}>
                               <p className="text-xs font-semibold mb-0.5" style={{ color: "#ca8a04" }}>Error</p>
                               <p className="text-xs" style={{ color: "var(--text-primary)" }}>{check.description}</p>
+                            </div>
+                          )}
+                          {/* Payload / What was tested - shown for all (passed/failed/error) */}
+                          {(check.details?.payload_tested || check.evidence) && (
+                            <div className="p-2.5 rounded-lg" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+                              <p className="text-xs font-semibold mb-1" style={{ color: "var(--accent-indigo)" }}>Payload / What was tested</p>
+                              <p className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>{check.details?.payload_tested || check.evidence}</p>
                             </div>
                           )}
                           {/* Request / Response - Collapsible */}
