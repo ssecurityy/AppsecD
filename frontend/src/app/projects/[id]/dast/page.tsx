@@ -89,7 +89,7 @@ export default function DastScanPage() {
   const [runParamDiscovery, setRunParamDiscovery] = useState(true);
   const [usePlaywright, setUsePlaywright] = useState(false);
   const [crawlUrlFilter, setCrawlUrlFilter] = useState("");
-  const [crawlActiveSubTab, setCrawlActiveSubTab] = useState<"urls" | "api" | "params" | "forms" | "js" | "deeplinks" | "sca">("urls");
+  const [crawlActiveSubTab, setCrawlActiveSubTab] = useState<"urls" | "api" | "params" | "forms" | "js" | "deeplinks" | "sca" | "ai">("urls");
   // Recursive directory scan state
   const [recursiveDirScanning, setRecursiveDirScanning] = useState(false);
   const [recursiveDirJobId, setRecursiveDirJobId] = useState<string | null>(null);
@@ -99,6 +99,13 @@ export default function DastScanPage() {
   // URL content viewer
   const [fetchingUrl, setFetchingUrl] = useState<string | null>(null);
   const [urlContent, setUrlContent] = useState<Record<string, any>>({});
+  // AI Analysis state
+  const [aiScanSummary, setAiScanSummary] = useState<any>(null);
+  const [aiScanSummaryLoading, setAiScanSummaryLoading] = useState(false);
+  const [aiCrawlAnalysis, setAiCrawlAnalysis] = useState<any>(null);
+  const [aiCrawlAnalysisLoading, setAiCrawlAnalysisLoading] = useState(false);
+  const [aiSuggestedChecks, setAiSuggestedChecks] = useState<any>(null);
+  const [aiSuggestLoading, setAiSuggestLoading] = useState(false);
 
   type PathItem = { path: string; status: number };
   const buildPathTree = (items: PathItem[]): { name: string; fullPath: string; status?: number; children: any[]; isFile: boolean } => {
@@ -675,16 +682,47 @@ export default function DastScanPage() {
               </p>
             </div>
           </div>
-          <button
-            onClick={handleScan}
-            disabled={scanning || selectedChecks.length === 0}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white disabled:opacity-50 transition-all"
-            style={{ background: scanning ? "#4B5563" : "#2563eb" }}
-          >
-            {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            {scanning ? "Scanning..." : "Run Scan"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                setAiSuggestLoading(true);
+                try {
+                  const res = await api.dastAiSuggestChecks({ project_id: id as string, target_url: project?.application_url });
+                  setAiSuggestedChecks(res);
+                  if (res.priority_checks?.length) {
+                    const matching = res.priority_checks.filter((c: string) => availableChecks.some((ac: any) => ac.id === c));
+                    if (matching.length) { setSelectedChecks(matching); toast.success(`AI selected ${matching.length} priority checks`); }
+                  }
+                } catch (e: any) { toast.error("AI suggest failed"); }
+                setAiSuggestLoading(false);
+              }}
+              disabled={aiSuggestLoading || scanning}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium disabled:opacity-50 transition-all hover:scale-105"
+              style={{ background: "rgba(124,58,237,0.15)", color: "#c4b5fd", border: "1px solid rgba(124,58,237,0.3)" }}
+            >
+              {aiSuggestLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              AI Suggest
+            </button>
+            <button
+              onClick={handleScan}
+              disabled={scanning || selectedChecks.length === 0}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium text-white disabled:opacity-50 transition-all"
+              style={{ background: scanning ? "#4B5563" : "#2563eb" }}
+            >
+              {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+              {scanning ? "Scanning..." : "Run Scan"}
+            </button>
+          </div>
         </div>
+        {/* AI Suggested Checks Reasoning */}
+        {aiSuggestedChecks?.reasoning && (
+          <div className="rounded-xl p-3" style={{ background: "rgba(124,58,237,0.06)", border: "1px solid rgba(124,58,237,0.15)" }}>
+            <div className="flex items-start gap-2">
+              <Zap className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: "#7c3aed" }} />
+              <p className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{aiSuggestedChecks.reasoning}</p>
+            </div>
+          </div>
+        )}
 
         {/* Last Scan Summary - Compact */}
         {scanResult && (
@@ -1114,6 +1152,7 @@ export default function DastScanPage() {
                         { key: "js", label: "JS Files", count: crawlResult.js_files?.length || 0 },
                         { key: "deeplinks", label: "Deeplinks", count: crawlResult.deeplinks?.length || 0 },
                         { key: "sca", label: "JS SCA", count: (crawlResult.js_sca?.vulnerabilities?.length || 0) + (crawlResult.retire_results?.total_vulns || 0) || crawlResult.js_sca?.libraries?.length || 0 },
+                        { key: "ai", label: "🤖 AI Analysis", count: aiCrawlAnalysis ? 1 : 0 },
                       ] as const).map(tab => (
                         <button key={tab.key} onClick={() => setCrawlActiveSubTab(tab.key)}
                           className="px-3 py-1.5 rounded text-xs font-medium transition-all"
@@ -1324,6 +1363,99 @@ export default function DastScanPage() {
                             ))}
                             {(!crawlResult.js_sca?.libraries?.length && !crawlResult.js_sca?.vulnerabilities?.length && !crawlResult.retire_results?.total_vulns) && (
                               <div className="p-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>No JS libraries or vulnerabilities found.</div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* AI Analysis Tab */}
+                        {crawlActiveSubTab === "ai" && (
+                          <div className="p-4 space-y-4">
+                            {!aiCrawlAnalysis && !aiCrawlAnalysisLoading && (
+                              <div className="text-center py-8">
+                                <Zap className="w-8 h-8 mx-auto mb-3" style={{ color: "#7c3aed" }} />
+                                <p className="text-sm font-medium mb-2" style={{ color: "var(--text-primary)" }}>AI-Powered Attack Surface Analysis</p>
+                                <p className="text-xs mb-4 max-w-md mx-auto" style={{ color: "var(--text-muted)" }}>
+                                  Analyze crawl output with Gemini AI to identify high-value targets, parameter risks, and recommended security checks.
+                                </p>
+                                <button
+                                  onClick={async () => {
+                                    setAiCrawlAnalysisLoading(true);
+                                    try {
+                                      const res = await api.dastAiAnalyzeCrawl({ project_id: id as string });
+                                      setAiCrawlAnalysis(res);
+                                    } catch (e: any) { toast.error("AI analysis failed"); }
+                                    setAiCrawlAnalysisLoading(false);
+                                  }}
+                                  className="px-5 py-2.5 rounded-lg text-sm font-medium transition-all hover:scale-105"
+                                  style={{ background: "rgba(124,58,237,0.2)", color: "#c4b5fd", border: "1px solid rgba(124,58,237,0.3)" }}>
+                                  Analyze with AI
+                                </button>
+                              </div>
+                            )}
+                            {aiCrawlAnalysisLoading && (
+                              <div className="text-center py-8">
+                                <Loader2 className="w-6 h-6 mx-auto animate-spin" style={{ color: "#7c3aed" }} />
+                                <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>Analyzing attack surface with Gemini...</p>
+                              </div>
+                            )}
+                            {aiCrawlAnalysis && (
+                              <div className="space-y-4">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-[10px] px-2 py-1 rounded-full font-bold uppercase" style={{
+                                    background: aiCrawlAnalysis.attack_surface_score === "critical" ? "rgba(220,38,38,0.2)" : aiCrawlAnalysis.attack_surface_score === "high" ? "rgba(234,88,12,0.2)" : "rgba(202,138,4,0.2)",
+                                    color: aiCrawlAnalysis.attack_surface_score === "critical" ? "#fca5a5" : aiCrawlAnalysis.attack_surface_score === "high" ? "#fdba74" : "#fde047",
+                                  }}>{aiCrawlAnalysis.attack_surface_score} attack surface</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "rgba(124,58,237,0.2)", color: "#c4b5fd" }}>Gemini</span>
+                                </div>
+                                <p className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{aiCrawlAnalysis.summary}</p>
+
+                                {aiCrawlAnalysis.high_value_targets?.length > 0 && (
+                                  <div>
+                                    <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-muted)" }}>High-Value Targets</span>
+                                    <div className="mt-1 space-y-2">
+                                      {aiCrawlAnalysis.high_value_targets.map((t: any, i: number) => (
+                                        <div key={i} className="rounded-lg p-2.5" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)" }}>
+                                          <div className="text-xs font-mono font-medium" style={{ color: "#f87171" }}>{t.url}</div>
+                                          <div className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>{t.reason}</div>
+                                          {t.suggested_tests?.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                              {t.suggested_tests.map((test: string, j: number) => (
+                                                <span key={j} className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: "rgba(124,58,237,0.1)", color: "#a78bfa" }}>{test}</span>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {aiCrawlAnalysis.parameter_risks?.length > 0 && (
+                                  <div>
+                                    <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-muted)" }}>Parameter Risks</span>
+                                    <div className="mt-1 space-y-1">
+                                      {aiCrawlAnalysis.parameter_risks.map((p: any, i: number) => (
+                                        <div key={i} className="flex items-center gap-2 text-xs">
+                                          <code className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "var(--bg-elevated)", color: "#f87171" }}>{p.name}</code>
+                                          <span style={{ color: "var(--text-muted)" }}>{p.risk}</span>
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(124,58,237,0.1)", color: "#a78bfa" }}>{p.test_type}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {aiCrawlAnalysis.recommended_checks?.length > 0 && (
+                                  <div>
+                                    <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-muted)" }}>Recommended DAST Checks</span>
+                                    <div className="flex flex-wrap gap-1.5 mt-1">
+                                      {aiCrawlAnalysis.recommended_checks.map((c: string, i: number) => (
+                                        <span key={i} className="text-[10px] px-2 py-1 rounded-lg font-medium" style={{ background: "rgba(37,99,235,0.1)", color: "#93c5fd" }}>{c}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </div>
                         )}
@@ -1600,6 +1732,72 @@ export default function DastScanPage() {
               </div>
             ) : dastActiveTab === "results" ? (
             <>
+            {/* AI Scan Summary */}
+            {scanResult && scanResult.results?.length > 0 && (
+              <div className="rounded-xl p-4 space-y-3" style={{ background: "linear-gradient(135deg, rgba(124,58,237,0.08), rgba(59,130,246,0.08))", border: "1px solid rgba(124,58,237,0.2)" }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-4 h-4" style={{ color: "#7c3aed" }} />
+                    <span className="text-sm font-semibold" style={{ color: "#a78bfa" }}>AI Scan Summary</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: "rgba(124,58,237,0.2)", color: "#c4b5fd" }}>Gemini</span>
+                  </div>
+                  {!aiScanSummary && !aiScanSummaryLoading && (
+                    <button
+                      onClick={async () => {
+                        setAiScanSummaryLoading(true);
+                        try {
+                          const res = await api.dastAiSummarizeScan({ project_id: id as string, scan_id: scanResult.scan_id || scanId || undefined });
+                          setAiScanSummary(res);
+                        } catch (e: any) { toast.error("AI summary failed"); }
+                        setAiScanSummaryLoading(false);
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-105"
+                      style={{ background: "rgba(124,58,237,0.2)", color: "#c4b5fd", border: "1px solid rgba(124,58,237,0.3)" }}>
+                      Generate AI Summary
+                    </button>
+                  )}
+                  {aiScanSummaryLoading && <Loader2 className="w-4 h-4 animate-spin" style={{ color: "#7c3aed" }} />}
+                </div>
+                {aiScanSummary && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase" style={{
+                        background: aiScanSummary.risk_level === "critical" ? "rgba(220,38,38,0.2)" : aiScanSummary.risk_level === "high" ? "rgba(234,88,12,0.2)" : aiScanSummary.risk_level === "medium" ? "rgba(202,138,4,0.2)" : "rgba(22,163,74,0.2)",
+                        color: aiScanSummary.risk_level === "critical" ? "#fca5a5" : aiScanSummary.risk_level === "high" ? "#fdba74" : aiScanSummary.risk_level === "medium" ? "#fde047" : "#86efac",
+                      }}>{aiScanSummary.risk_level} risk</span>
+                    </div>
+                    <p className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{aiScanSummary.summary}</p>
+                    {aiScanSummary.top_issues?.length > 0 && (
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-muted)" }}>Top Issues</span>
+                        <ul className="mt-1 space-y-1">
+                          {aiScanSummary.top_issues.map((issue: string, i: number) => (
+                            <li key={i} className="flex items-start gap-1.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                              <XCircle className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color: "#ef4444" }} />
+                              {issue}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiScanSummary.recommendations?.length > 0 && (
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase" style={{ color: "var(--text-muted)" }}>Recommendations</span>
+                        <ul className="mt-1 space-y-1">
+                          {aiScanSummary.recommendations.map((rec: string, i: number) => (
+                            <li key={i} className="flex items-start gap-1.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+                              <CheckCircle className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color: "#22c55e" }} />
+                              {rec}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Filter & Summary Bar */}
             <div className="rounded-xl p-3 space-y-2" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
               <div className="flex flex-wrap items-center gap-2">

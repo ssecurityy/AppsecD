@@ -1051,3 +1051,199 @@ async def fetch_url_content_endpoint(
     from app.services.dast.crawler import fetch_url_content
     result = await asyncio.to_thread(fetch_url_content, payload.url, payload.auth_config)
     return result
+
+
+# ──────────────────────────────────────────────────────────
+#  AI-Powered DAST Analysis Endpoints
+# ──────────────────────────────────────────────────────────
+
+class AIScanSummaryRequest(BaseModel):
+    project_id: str
+    scan_id: str | None = None
+
+
+class AICrawlAnalysisRequest(BaseModel):
+    project_id: str
+    crawl_id: str | None = None
+
+
+class AISuggestChecksRequest(BaseModel):
+    project_id: str
+    target_url: str | None = None
+
+
+class AICategorizePaths(BaseModel):
+    project_id: str
+    paths: list[dict] = []
+    target_url: str = ""
+
+
+class AIInterpretResultRequest(BaseModel):
+    check_result: dict
+    target_url: str
+
+
+async def _get_llm_config(db: AsyncSession) -> tuple[str, str, str]:
+    """Get LLM config, defaulting to Gemini if available."""
+    from app.services.admin_settings_service import get_llm_config
+    provider, model, api_key = await get_llm_config(db)
+    if not api_key:
+        from app.core.config import get_settings
+        s = get_settings()
+        if s.google_api_key:
+            return "google", "gemini-2.5-flash", s.google_api_key
+    return provider, model, api_key or ""
+
+
+@router.post("/ai/summarize-scan")
+async def ai_summarize_scan(
+    payload: AIScanSummaryRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate AI summary of DAST scan results."""
+    if not await user_can_read_project(db, current_user, payload.project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.dast.ai_analysis import summarize_scan
+
+    if payload.scan_id:
+        r = await db.execute(
+            select(DastScanResult).where(
+                DastScanResult.project_id == uuid.UUID(payload.project_id),
+                DastScanResult.scan_id == payload.scan_id,
+            )
+        )
+    else:
+        r = await db.execute(
+            select(DastScanResult)
+            .where(DastScanResult.project_id == uuid.UUID(payload.project_id), DastScanResult.status == "completed")
+            .order_by(desc(DastScanResult.created_at))
+            .limit(1)
+        )
+    row = r.scalar_one_or_none()
+    if not row or not row.results:
+        raise HTTPException(404, "No scan results found")
+
+    provider, model, api_key = await _get_llm_config(db)
+    result = await asyncio.to_thread(
+        summarize_scan, row.results, row.target_url,
+        provider=provider, model=model, api_key=api_key,
+    )
+    return result
+
+
+@router.post("/ai/analyze-crawl")
+async def ai_analyze_crawl(
+    payload: AICrawlAnalysisRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI analysis of crawl output — attack surface, high-value targets, parameter risks."""
+    if not await user_can_read_project(db, current_user, payload.project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.dast.ai_analysis import analyze_crawl_output
+
+    if payload.crawl_id:
+        r = await db.execute(
+            select(CrawlSession).where(
+                CrawlSession.project_id == uuid.UUID(payload.project_id),
+                CrawlSession.crawl_id == payload.crawl_id,
+            )
+        )
+    else:
+        r = await db.execute(
+            select(CrawlSession)
+            .where(CrawlSession.project_id == uuid.UUID(payload.project_id), CrawlSession.status == "completed")
+            .order_by(desc(CrawlSession.created_at))
+            .limit(1)
+        )
+    row = r.scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, "No crawl session found")
+
+    provider, model, api_key = await _get_llm_config(db)
+    result = await asyncio.to_thread(
+        analyze_crawl_output,
+        row.urls or [], row.api_endpoints or [], row.parameters or [],
+        row.forms or [], row.js_files or [], row.target_url,
+        provider=provider, model=model, api_key=api_key,
+    )
+    return result
+
+
+@router.post("/ai/suggest-checks")
+async def ai_suggest_checks(
+    payload: AISuggestChecksRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI-powered check suggestion based on project context."""
+    if not await user_can_read_project(db, current_user, payload.project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.dast.ai_analysis import suggest_checks
+
+    project = (await db.execute(select(Project).where(Project.id == uuid.UUID(payload.project_id)))).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    target_url = payload.target_url or project.application_url
+    stack_profile = project.stack_profile if hasattr(project, "stack_profile") else {}
+
+    crawl_stats = None
+    latest_crawl = await db.execute(
+        select(CrawlSession)
+        .where(CrawlSession.project_id == uuid.UUID(payload.project_id), CrawlSession.status == "completed")
+        .order_by(desc(CrawlSession.created_at))
+        .limit(1)
+    )
+    crawl_row = latest_crawl.scalar_one_or_none()
+    if crawl_row:
+        crawl_stats = {
+            "total_urls": crawl_row.total_urls,
+            "total_endpoints": crawl_row.total_endpoints,
+            "total_parameters": crawl_row.total_parameters,
+            "total_forms": crawl_row.total_forms,
+        }
+
+    provider, model, api_key = await _get_llm_config(db)
+    result = await asyncio.to_thread(
+        suggest_checks, target_url, stack_profile, crawl_stats,
+        provider=provider, model=model, api_key=api_key,
+    )
+    return result
+
+
+@router.post("/ai/categorize-paths")
+async def ai_categorize_paths(
+    payload: AICategorizePaths,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI categorization of discovered directory paths."""
+    if not await user_can_read_project(db, current_user, payload.project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.dast.ai_analysis import categorize_paths
+
+    provider, model, api_key = await _get_llm_config(db)
+    result = await asyncio.to_thread(
+        categorize_paths, payload.paths, payload.target_url,
+        provider=provider, model=model, api_key=api_key,
+    )
+    return result
+
+
+@router.post("/ai/interpret-result")
+async def ai_interpret_result(
+    payload: AIInterpretResultRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI interpretation of a single DAST check result."""
+    from app.services.dast.ai_analysis import interpret_scan_result
+
+    provider, model, api_key = await _get_llm_config(db)
+    result = await asyncio.to_thread(
+        interpret_scan_result, payload.check_result, payload.target_url,
+        provider=provider, model=model, api_key=api_key,
+    )
+    return result

@@ -436,4 +436,16 @@ export const api = {
   // Fetch URL content
   dastFetchUrl: (data: { url: string; auth_config?: any }) =>
     request("/dast/fetch-url", { method: "POST", body: JSON.stringify(data) }),
+
+  // DAST AI Analysis
+  dastAiSummarizeScan: (data: { project_id: string; scan_id?: string }) =>
+    request("/dast/ai/summarize-scan", { method: "POST", body: JSON.stringify(data) }),
+  dastAiAnalyzeCrawl: (data: { project_id: string; crawl_id?: string }) =>
+    request("/dast/ai/analyze-crawl", { method: "POST", body: JSON.stringify(data) }),
+  dastAiSuggestChecks: (data: { project_id: string; target_url?: string }) =>
+    request("/dast/ai/suggest-checks", { method: "POST", body: JSON.stringify(data) }),
+  dastAiCategorizePaths: (data: { project_id: string; paths: any[]; target_url: string }) =>
+    request("/dast/ai/categorize-paths", { method: "POST", body: JSON.stringify(data) }),
+  dastAiInterpretResult: (data: { check_result: any; target_url: string }) =>
+    request("/dast/ai/interpret-result", { method: "POST", body: JSON.stringify(data) }),
 };
