@@ -1,12 +1,16 @@
 """Authentication API."""
 import uuid
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Cookie
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from app.core.database import get_db
 from app.services.audit_service import log_audit
-from app.core.security import hash_password, verify_password, create_access_token, create_mfa_pending_token, decode_token
+from app.core.security import (
+    hash_password, verify_password, create_access_token, create_mfa_pending_token,
+    decode_token, is_token_revoked, revoke_token,
+)
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate, UserPasswordUpdate, UserLogin, UserOut, UserAdminOut, TokenOut
 
@@ -15,22 +19,67 @@ from app.core.limiter import limiter
 router = APIRouter(prefix="/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 
+TOKEN_COOKIE_NAME = "appsecdtoken"
+TOKEN_COOKIE_MAX_AGE = 60 * 60 * 8  # 8 hours
+
+
+def get_client_ip(request: Request) -> str | None:
+    """Real client IP from CF-Connecting-IP or X-Forwarded-For (first hop), else direct client."""
+    raw = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for")
+    if raw and "," in raw:
+        raw = raw.split(",")[0].strip()
+    if raw:
+        return raw
+    if request.client:
+        return request.client.host
+    return None
+
+
+def _get_token_from_request(credentials: HTTPAuthorizationCredentials | None, cookie_token: str | None) -> str | None:
+    if credentials and credentials.credentials:
+        return credentials.credentials
+    if cookie_token:
+        return cookie_token
+    return None
+
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
+    appsecdtoken: str | None = Cookie(None, alias=TOKEN_COOKIE_NAME),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    if not credentials:
+    token = _get_token_from_request(credentials, appsecdtoken)
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    payload = decode_token(credentials.credentials)
+    payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    jti = payload.get("jti")
+    if jti and await is_token_revoked(jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
     user_id = payload.get("sub")
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
     return user
+
+
+def _set_auth_cookie(response: Response, token: str, secure: bool = True) -> None:
+    response.set_cookie(
+        key=TOKEN_COOKIE_NAME,
+        value=token,
+        max_age=TOKEN_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=secure,
+        samesite="strict",
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(key=TOKEN_COOKIE_NAME, path="/", httponly=True, samesite="strict")
 
 
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -55,7 +104,7 @@ async def register():
 
 @router.post("/login", response_model=TokenOut)
 @limiter.limit("5/minute")
-async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends(get_db)):
+async def login(request: Request, response: Response, payload: UserLogin, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.username == payload.username))
     user = result.scalar_one_or_none()
     if not user or not verify_password(payload.password, user.hashed_password):
@@ -63,8 +112,7 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
     from datetime import datetime, date
     today = date.today()
     user.last_login = datetime.utcnow()
-    client_ip = request.headers.get("x-forwarded-for") or request.headers.get("cf-connecting-ip") or (request.client.host if request.client else None)
-    await log_audit(db, "login", user_id=str(user.id), ip_address=client_ip, user_agent=request.headers.get("user-agent"))
+    await log_audit(db, "login", user_id=str(user.id), ip_address=get_client_ip(request), user_agent=request.headers.get("user-agent"))
     # Update streak
     last = user.last_streak_date
     if last is None:
@@ -85,10 +133,19 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
     await db.commit()
     await db.refresh(user)
 
+    # MFA enforced for admin/super_admin: must complete MFA setup before full token
+    if user.role in ("admin", "super_admin") and not getattr(user, "mfa_enabled", False):
+        mfa_token = create_mfa_pending_token(str(user.id))
+        return TokenOut(
+            access_token="",
+            user=UserOut.model_validate(user),
+            needs_mfa_setup=True,
+            mfa_token=mfa_token,
+        )
+
     # MFA enforcement for all users who have MFA enabled
     if getattr(user, "mfa_enabled", False):
         mfa_token = create_mfa_pending_token(str(user.id))
-        # If user has no secret yet, they need to set up MFA first (scan QR code)
         if not user.mfa_secret:
             return TokenOut(
                 access_token="",
@@ -96,7 +153,6 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
                 needs_mfa_setup=True,
                 mfa_token=mfa_token,
             )
-        # User already has MFA set up, just ask for the code
         return TokenOut(
             access_token="",
             user=UserOut.model_validate(user),
@@ -105,7 +161,25 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
         )
 
     token = create_access_token({"sub": str(user.id), "role": user.role})
+    secure = request.url.scheme == "https" if request.url else True
+    _set_auth_cookie(response, token, secure=secure)
     return TokenOut(access_token=token, user=UserOut.model_validate(user))
+
+
+@router.post("/logout")
+async def logout(
+    request: Request,
+    response: Response,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer),
+    appsecdtoken: str | None = Cookie(None),
+):
+    token = _get_token_from_request(credentials, appsecdtoken)
+    if token:
+        payload = decode_token(token)
+        if payload and payload.get("jti") and payload.get("exp"):
+            await revoke_token(payload["jti"], exp_ts=payload["exp"])
+    _clear_auth_cookie(response)
+    return {"detail": "Logged out"}
 
 
 @router.get("/me", response_model=UserOut)
@@ -179,6 +253,7 @@ async def list_assignable_users(
 
 @router.post("/users", response_model=UserAdminOut)
 async def create_user(
+    request: Request,
     payload: UserCreate,
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -220,7 +295,7 @@ async def create_user(
     )
     db.add(user)
     await db.flush()
-    await log_audit(db, "create_user", user_id=str(current_user.id), resource_type="user", resource_id=str(user.id), details={"username": user.username, "role": role})
+    await log_audit(db, "create_user", user_id=str(current_user.id), resource_type="user", resource_id=str(user.id), details={"username": user.username, "role": role}, ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(user)
     from app.models.organization import Organization
@@ -284,6 +359,7 @@ async def get_user(
 
 @router.patch("/users/{user_id}", response_model=UserAdminOut)
 async def update_user(
+    request: Request,
     user_id: str,
     payload: UserUpdate,
     current_user: User = Depends(require_admin),
@@ -325,7 +401,7 @@ async def update_user(
         user.level = payload.level
     await db.commit()
     await db.refresh(user)
-    await log_audit(db, "user_update", user_id=str(current_user.id), details={"target_user_id": str(user_id)})
+    await log_audit(db, "user_update", user_id=str(current_user.id), details={"target_user_id": str(user_id)}, ip_address=get_client_ip(request))
     from app.models.organization import Organization
     org_name = None
     if user.organization_id:
@@ -351,6 +427,7 @@ async def update_user(
 
 @router.put("/users/{user_id}/password", response_model=UserAdminOut)
 async def update_user_password(
+    request: Request,
     user_id: str,
     payload: UserPasswordUpdate,
     current_user: User = Depends(require_admin),
@@ -366,7 +443,7 @@ async def update_user_password(
     user.hashed_password = hash_password(payload.password)
     await db.commit()
     await db.refresh(user)
-    await log_audit(db, "user_password_change", user_id=str(current_user.id), details={"target_user_id": str(user_id)})
+    await log_audit(db, "user_password_change", user_id=str(current_user.id), details={"target_user_id": str(user_id)}, ip_address=get_client_ip(request))
     from app.models.organization import Organization
     org_name = None
     if user.organization_id:
@@ -392,6 +469,7 @@ async def update_user_password(
 
 @router.delete("/users/{user_id}")
 async def delete_user(
+    request: Request,
     user_id: str,
     current_user: User = Depends(require_super_admin),
     db: AsyncSession = Depends(get_db),
@@ -407,6 +485,6 @@ async def delete_user(
         raise HTTPException(403, "Cannot delete super_admin user")
     username = user.username
     await db.delete(user)
-    await log_audit(db, "delete_user", user_id=str(current_user.id), resource_type="user", resource_id=str(user_id), details={"username": username})
+    await log_audit(db, "delete_user", user_id=str(current_user.id), resource_type="user", resource_id=str(user_id), details={"username": username}, ip_address=get_client_ip(request))
     await db.commit()
     return {"ok": True, "message": f"User {username} deleted successfully"}

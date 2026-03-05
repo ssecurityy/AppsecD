@@ -1,11 +1,19 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 import uuid
 
+# Reject null bytes and RTL override (U+202E) in string fields
+def _reject_control_and_rtl(v: str) -> str:
+    if v is None:
+        return v
+    if "\x00" in v or "\u202e" in v or "\u202d" in v:
+        raise ValueError("Invalid characters in field")
+    return v
+
 
 class ProjectCreate(BaseModel):
-    name: str
-    application_name: str
+    name: str = Field(..., min_length=1, max_length=255)
+    application_name: str = Field(..., min_length=1, max_length=255)
     application_version: Optional[str] = None
     application_url: str
     app_owner_name: Optional[str] = None
@@ -19,6 +27,11 @@ class ProjectCreate(BaseModel):
     lead_id: Optional[uuid.UUID] = None
     assigned_tester_ids: Optional[list[uuid.UUID]] = None
     stack_profile: dict = {}
+
+    @field_validator("name", "application_name")
+    @classmethod
+    def no_control_chars(cls, v: str) -> str:
+        return _reject_control_and_rtl(v)
 
 
 class ProjectOut(BaseModel):

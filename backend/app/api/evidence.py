@@ -2,7 +2,7 @@
 import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -11,6 +11,7 @@ from app.api.auth import get_current_user
 from app.services.project_permissions import user_can_read_project, user_can_write_project
 from app.models.user import User
 import aiofiles
+import bleach
 
 router = APIRouter(prefix="/projects", tags=["evidence"])
 settings = get_settings()
@@ -123,9 +124,26 @@ async def get_evidence(
         ".har": "application/json",
     }
     media_type = media_types.get(ext, "application/octet-stream")
+    headers = {"X-Content-Type-Options": "nosniff"}
+
+    # M-6: Sanitize text evidence to prevent stored XSS when served
+    if ext in (".txt", ".json") and file_path.stat().st_size <= 1024 * 1024:
+        async with aiofiles.open(file_path, "rb") as f:
+            raw = await f.read()
+        try:
+            text = raw.decode("utf-8", errors="replace")
+            if "<script" in text.lower() or "<iframe" in text.lower() or "javascript:" in text.lower():
+                text = bleach.clean(text, tags=[], strip=True)
+            return Response(
+                content=text.encode("utf-8"),
+                media_type=media_type + "; charset=utf-8",
+                headers={**headers, "Content-Disposition": f'inline; filename="{filename}"'},
+            )
+        except Exception:
+            pass
     return FileResponse(
         file_path,
         media_type=media_type,
         filename=filename,
-        headers={"X-Content-Type-Options": "nosniff"},
+        headers=headers,
     )

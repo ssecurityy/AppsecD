@@ -1,9 +1,9 @@
 """Findings API with Vulnerability Management."""
-from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Query, Request, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
-from app.api.auth import get_current_user
+from app.api.auth import get_current_user, get_client_ip
 from app.core.rbac import require_roles
 from app.services.project_permissions import user_can_read_project, user_can_write_project
 from app.services.badge_service import check_and_award_badges
@@ -66,6 +66,7 @@ def f_to_dict(f: Finding) -> dict:
 
 @router.post("", response_model=dict)
 async def create_finding(
+    request: Request,
     payload: FindingCreate,
     current_user: User = Depends(require_tester_plus),
     db: AsyncSession = Depends(get_db),
@@ -136,7 +137,7 @@ async def create_finding(
     if new_badges:
         current_user.badges = list(current_user.badges or []) + new_badges
 
-    await log_audit(db, "create_finding", user_id=str(current_user.id), resource_type="finding", resource_id=str(finding.id), details={"project_id": str(payload.project_id), "severity": payload.severity})
+    await log_audit(db, "create_finding", user_id=str(current_user.id), resource_type="finding", resource_id=str(finding.id), details={"project_id": str(payload.project_id), "severity": payload.severity}, ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(finding)
 
@@ -282,6 +283,7 @@ async def update_finding(
 
 @router.patch("/{finding_id}/recheck", response_model=dict)
 async def update_recheck_status(
+    request: Request,
     finding_id: str,
     payload: dict,
     current_user: User = Depends(get_current_user),
@@ -349,6 +351,7 @@ async def update_recheck_status(
         resource_type="finding",
         resource_id=str(finding.id),
         details={"recheck_status": new_status, "project_id": str(finding.project_id)},
+        ip_address=get_client_ip(request),
     )
     await db.commit()
     await db.refresh(finding)

@@ -1,11 +1,11 @@
 """Admin settings API — org-scoped JIRA, LLM. Enterprise multi-tenant."""
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.api.auth import require_admin
+from app.api.auth import require_admin, get_client_ip
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.models.user import User
@@ -122,6 +122,7 @@ class LlmSettingsUpdate(BaseModel):
 
 @router.put("/llm")
 async def update_llm_settings(
+    request: Request,
     payload: LlmSettingsUpdate,
     org_id: str | None = Query(None),
     current_user: User = Depends(require_admin),
@@ -134,7 +135,7 @@ async def update_llm_settings(
     if not is_valid_provider_model(payload.provider, payload.model):
         raise HTTPException(400, "Invalid provider or model.")
     await update_llm_config(db, payload.provider, payload.model, payload.api_key, org_uuid)
-    await log_audit(db, "update_llm_settings", user_id=str(current_user.id), resource_type="settings", details={"provider": payload.provider, "model": payload.model, "org_id": str(org_uuid) if org_uuid else None})
+    await log_audit(db, "update_llm_settings", user_id=str(current_user.id), resource_type="settings", details={"provider": payload.provider, "model": payload.model, "org_id": str(org_uuid) if org_uuid else None}, ip_address=get_client_ip(request))
     return {"ok": True}
 
 
@@ -147,6 +148,7 @@ class JiraSettingsUpdate(BaseModel):
 
 @router.put("/jira")
 async def update_jira_settings(
+    request: Request,
     payload: JiraSettingsUpdate,
     org_id: str | None = Query(None),
     current_user: User = Depends(require_admin),
@@ -164,7 +166,7 @@ async def update_jira_settings(
         payload.project_key,
         org_uuid,
     )
-    await log_audit(db, "update_jira_settings", user_id=str(current_user.id), resource_type="settings", details={"org_id": str(org_uuid) if org_uuid else None})
+    await log_audit(db, "update_jira_settings", user_id=str(current_user.id), resource_type="settings", details={"org_id": str(org_uuid) if org_uuid else None}, ip_address=get_client_ip(request))
     return {"ok": True}
 
 
@@ -264,6 +266,7 @@ async def get_notification_settings(
 
 @router.put("/notifications")
 async def update_notification_settings(
+    request: Request,
     payload: NotificationSettingsUpdate,
     org_id: str | None = Query(None),
     current_user: User = Depends(require_admin),
@@ -316,7 +319,7 @@ async def update_notification_settings(
         db.add(setting)
 
     await db.commit()
-    await log_audit(db, "update_notification_settings", user_id=str(current_user.id), resource_type="settings", details={"org_id": str(org_uuid)})
+    await log_audit(db, "update_notification_settings", user_id=str(current_user.id), resource_type="settings", details={"org_id": str(org_uuid)}, ip_address=get_client_ip(request))
     return {"ok": True, "message": "Notification settings saved"}
 
 

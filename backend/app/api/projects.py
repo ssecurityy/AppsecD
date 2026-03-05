@@ -1,5 +1,5 @@
 """Projects API — with Redis caching and pagination for enterprise load."""
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from app.core.database import get_db
@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember, PROJECT_ROLES, apply_role_defaults
 from app.services.applicability_service import compute_applicability_score
 from app.services.audit_service import log_audit
+from app.api.auth import get_client_ip
 from app.core.sanitize import sanitize_text
 from app.models.test_case import TestCase
 from app.models.result import ProjectTestResult
@@ -157,10 +158,13 @@ async def detect_technology(
     current_user: User = Depends(get_current_user),
 ):
     """Detect technology stack from URL. Returns stack_profile for project onboarding."""
+    from app.core.ssrf import is_ssrf_blocked_url
     from app.services.tech_detection_service import detect_technology as _detect
     url = payload.get("url") or payload.get("application_url") or ""
     if not url:
         return {"stack_profile": {}, "_error": "URL required", "_detected": False}
+    if is_ssrf_blocked_url(url):
+        return {"stack_profile": {}, "_error": "Target URL is not allowed (internal/private addresses are blocked)", "_detected": False}
     result = _detect(url)
     stack_profile = {k: v for k, v in result.items() if k != "prefilled" and not k.startswith("_")}
     prefilled = result.get("prefilled") or {}
@@ -172,12 +176,31 @@ async def detect_technology(
     }
 
 
+IDEMPOTENCY_TTL = 300  # 5 minutes
+
+
 @router.post("", response_model=dict)
 async def create_project(
+    request: Request,
     payload: ProjectCreate,
     current_user: User = Depends(require_tester_plus),
     db: AsyncSession = Depends(get_db),
 ):
+    idem_key = request.headers.get("X-Idempotency-Key", "").strip()
+    if idem_key:
+        try:
+            from app.core.redis_client import get_redis
+            import json
+            r = await get_redis()
+            stored = await r.get(f"idempotency:project:{idem_key}")
+            if stored:
+                try:
+                    return json.loads(stored)
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass
+
     target_date = None
     if payload.target_completion_date:
         try:
@@ -243,12 +266,21 @@ async def create_project(
     # Auto-apply test cases based on stack profile
     applicable = await _apply_test_cases(project, db)
     project.total_test_cases = applicable
-    await log_audit(db, "create_project", user_id=str(current_user.id), resource_type="project", resource_id=str(project.id), details={"name": project.name})
+    await log_audit(db, "create_project", user_id=str(current_user.id), resource_type="project", resource_id=str(project.id), details={"name": project.name}, ip_address=get_client_ip(request))
     from app.services.cache_service import invalidate_project_list
     await invalidate_project_list(str(current_user.id))
     await db.commit()
     await db.refresh(project)
-    return project_to_dict(project, finding_count=0)
+    result = project_to_dict(project, finding_count=0)
+    if idem_key:
+        try:
+            import json
+            from app.core.redis_client import get_redis
+            r = await get_redis()
+            await r.setex(f"idempotency:project:{idem_key}", IDEMPOTENCY_TTL, json.dumps(result))
+        except Exception:
+            pass
+    return result
 
 
 async def _apply_test_cases(project: Project, db: AsyncSession) -> int:

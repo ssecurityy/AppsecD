@@ -1,13 +1,13 @@
 """Organizations API — multi-tenant org management with branding support."""
 import uuid as _uuid
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
 from app.core.config import get_settings
-from app.api.auth import get_current_user, require_admin, require_super_admin
+from app.api.auth import get_current_user, require_admin, require_super_admin, get_client_ip
 from app.models.user import User
 from app.models.organization import Organization
 from app.models.project import Project
@@ -65,6 +65,7 @@ class OrgOut(BaseModel):
 
 @router.post("", response_model=dict)
 async def create_organization(
+    request: Request,
     payload: OrgCreate,
     current_user: User = Depends(require_super_admin),
     db: AsyncSession = Depends(get_db),
@@ -79,7 +80,7 @@ async def create_organization(
     org = Organization(name=payload.name, slug=slug)
     db.add(org)
     await db.flush()
-    await log_audit(db, "create_organization", user_id=str(current_user.id), resource_type="organization", resource_id=str(org.id), details={"name": org.name, "slug": slug})
+    await log_audit(db, "create_organization", user_id=str(current_user.id), resource_type="organization", resource_id=str(org.id), details={"name": org.name, "slug": slug}, ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(org)
     return _org_to_dict(org)
@@ -156,6 +157,7 @@ async def get_organization(
 
 @router.patch("/{org_id}", response_model=dict)
 async def update_organization(
+    request: Request,
     org_id: str,
     payload: OrgUpdate,
     current_user: User = Depends(require_super_admin),
@@ -176,7 +178,7 @@ async def update_organization(
         if color and not re.match(r'^#[0-9a-fA-F]{3,8}$', color):
             raise HTTPException(400, "Invalid brand_color format. Use hex color (e.g., #FF5733)")
         org.brand_color = color or None
-    await log_audit(db, "update_organization", user_id=str(current_user.id), resource_type="organization", resource_id=str(org.id), details={"fields_updated": [k for k, v in payload.model_dump().items() if v is not None]})
+    await log_audit(db, "update_organization", user_id=str(current_user.id), resource_type="organization", resource_id=str(org.id), details={"fields_updated": [k for k, v in payload.model_dump().items() if v is not None]}, ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(org)
     return _org_to_dict(org)

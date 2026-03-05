@@ -49,3 +49,32 @@ def decode_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+async def is_token_revoked(jti: str) -> bool:
+    """Check if token JTI is in Redis blocklist."""
+    if not jti:
+        return False
+    try:
+        from app.core.redis_client import get_redis
+        r = await get_redis()
+        return await r.exists(f"jti_revoked:{jti}") > 0
+    except Exception:
+        return False
+
+
+async def revoke_token(jti: str, exp_ts: Optional[int] = None) -> None:
+    """Add JTI to Redis blocklist. TTL = min(exp - now, 86400)."""
+    if not jti:
+        return
+    try:
+        from app.core.redis_client import get_redis
+        import time
+        r = await get_redis()
+        key = f"jti_revoked:{jti}"
+        ttl = 86400  # 24h default
+        if exp_ts and exp_ts > int(time.time()):
+            ttl = min(exp_ts - int(time.time()), 86400)
+        await r.set(key, "1", ex=max(ttl, 60))
+    except Exception:
+        pass

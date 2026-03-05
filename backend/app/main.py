@@ -32,9 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_router)
-app.include_router(api_router, prefix="/api/v1")
-app.include_router(api_router, prefix="/api")  # /api/auth, /api/projects — Nginx proxy, no path conflict with frontend
+app.include_router(api_router, prefix="/api")  # Single API surface: /api/auth, /api/projects, etc.
 
 
 @app.exception_handler(Exception)
