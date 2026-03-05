@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.sanitize import sanitize_filename
 from app.api.auth import get_current_user
 from app.services.project_permissions import user_can_read_project, user_can_write_project
 from app.models.user import User
@@ -61,7 +62,11 @@ async def upload_evidence(
     if not await user_can_write_project(db, current_user, project_id):
         raise HTTPException(403, "Write access denied to this project")
 
-    ext = Path(file.filename or "file").suffix.lower()
+    try:
+        safe_basename = sanitize_filename(file.filename or "file")
+    except ValueError:
+        raise HTTPException(400, "Invalid filename")
+    ext = Path(safe_basename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
@@ -82,7 +87,7 @@ async def upload_evidence(
         await f.write(content)
 
     url = f"/projects/{project_id}/evidence/{safe_name}"
-    return {"url": url, "filename": file.filename or "evidence" + ext}
+    return {"url": url, "filename": safe_name}
 
 
 @router.get("/{project_id}/evidence/{filename}")
@@ -96,7 +101,11 @@ async def get_evidence(
     if not await user_can_read_project(db, current_user, project_id):
         raise HTTPException(403, "Access denied to this project")
 
-    # Security: ensure filename is a simple uuid + ext (no path traversal)
+    # Security: ensure filename is a simple basename (no path traversal)
+    try:
+        filename = sanitize_filename(filename)
+    except ValueError:
+        raise HTTPException(400, "Invalid filename")
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(400, "Invalid filename")
     ext = Path(filename).suffix.lower()
@@ -114,4 +123,9 @@ async def get_evidence(
         ".har": "application/json",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    return FileResponse(file_path, media_type=media_type, filename=filename)
+    return FileResponse(
+        file_path,
+        media_type=media_type,
+        filename=filename,
+        headers={"X-Content-Type-Options": "nosniff"},
+    )

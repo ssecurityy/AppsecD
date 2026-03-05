@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from app.core.database import get_db
 from app.api.auth import get_current_user
+from app.api.deps import validate_project_id
 from app.core.rbac import require_roles
 from app.services.project_permissions import (
     get_visible_project_ids,
@@ -16,6 +17,7 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember, PROJECT_ROLES, apply_role_defaults
 from app.services.applicability_service import compute_applicability_score
 from app.services.audit_service import log_audit
+from app.core.sanitize import sanitize_text
 from app.models.test_case import TestCase
 from app.models.result import ProjectTestResult
 from app.models.category import Category
@@ -185,8 +187,8 @@ async def create_project(
 
     org_id = getattr(current_user, "organization_id", None)
     project = Project(
-        name=payload.name,
-        application_name=payload.application_name,
+        name=sanitize_text(payload.name, max_length=255),
+        application_name=sanitize_text(payload.application_name, max_length=255),
         application_version=payload.application_version,
         application_url=payload.application_url,
         app_owner_name=payload.app_owner_name,
@@ -377,15 +379,16 @@ async def get_all_projects_findings_trend(
 
 @router.get("/{project_id}", response_model=dict)
 async def get_project(
-    project_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    project_id: uuid.UUID = Depends(validate_project_id),
 ):
+    pid_str = str(project_id)
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, current_user, project_id):
+    if not await user_can_read_project(db, current_user, pid_str):
         raise HTTPException(403, "Access denied to this project")
     fc_result = await db.execute(
         select(func.count()).where(Finding.project_id == project_id)
@@ -396,16 +399,16 @@ async def get_project(
 
 @router.patch("/{project_id}", response_model=dict)
 async def update_project(
-    project_id: str,
     payload: ProjectUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    project_id: uuid.UUID = Depends(validate_project_id),
 ):
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_write_project(db, current_user, project_id):
+    if not await user_can_write_project(db, current_user, str(project_id)):
         raise HTTPException(403, "Write access denied to this project")
     if payload.status:
         project.status = payload.status

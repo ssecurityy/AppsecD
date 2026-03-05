@@ -27,7 +27,12 @@ if ! command -v go &>/dev/null; then
     fi
     if ! command -v go &>/dev/null; then
         GOVERSION="1.22.4"
-        wget -q "https://go.dev/dl/go${GOVERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz 2>/dev/null || true
+        # Graviton/ARM64: use arm64 tarball; otherwise amd64
+        case "$(uname -m)" in
+            aarch64|arm64) GOARCH="linux-arm64" ;;
+            *)             GOARCH="linux-amd64" ;;
+        esac
+        wget -q "https://go.dev/dl/go${GOVERSION}.${GOARCH}.tar.gz" -O /tmp/go.tar.gz 2>/dev/null || true
         if [ -f /tmp/go.tar.gz ]; then
             rm -rf /usr/local/go
             tar -C /usr/local -xzf /tmp/go.tar.gz

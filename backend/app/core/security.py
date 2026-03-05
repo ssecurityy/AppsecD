@@ -1,4 +1,5 @@
 """JWT and password security utilities."""
+import uuid as uuid_mod
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -23,8 +24,14 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    now = datetime.utcnow()
+    expire = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "jti": str(uuid_mod.uuid4()),
+        "iss": getattr(settings, "app_name", None) or "AppSecD",
+    })
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 

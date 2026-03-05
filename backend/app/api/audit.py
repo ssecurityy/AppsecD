@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_
 from datetime import datetime, date
 from app.core.database import get_db
-from app.api.auth import require_admin, get_current_user
+from app.api.auth import require_super_admin, get_current_user
 from app.models.audit_log import AuditLog
 from app.models.user import User
 
@@ -22,20 +22,14 @@ async def list_audit_logs(
     search: str | None = Query(None, description="Search in action/resource"),
     date_from: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: str | None = Query(None, description="End date (YYYY-MM-DD)"),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List audit logs. Super_admin sees all; admin sees only their org's logs."""
+    """List audit logs. Super_admin only (sensitive PII and IPs)."""
     conditions = []
 
-    # Org-scoped filtering for admin role
-    if current_user.role == "admin":
-        if not current_user.organization_id:
-            return {"logs": [], "total": 0, "actions": [], "resource_types": []}
-        # Admin can only see logs from users in their org
-        org_user_ids = select(User.id).where(User.organization_id == current_user.organization_id)
-        conditions.append(AuditLog.user_id.in_(org_user_ids))
-    elif current_user.role == "super_admin" and org_id:
+    # Super_admin only; optional org filter
+    if org_id:
         from uuid import UUID
         try:
             oid = UUID(org_id)
@@ -105,11 +99,8 @@ async def list_audit_logs(
             "created_at": log_entry.created_at.isoformat() if log_entry.created_at else None,
         })
 
-    # Get distinct actions and resource types for filter dropdowns
+    # Get distinct actions and resource types for filter dropdowns (super_admin sees all)
     base_conditions = []
-    if current_user.role == "admin" and current_user.organization_id:
-        org_user_ids = select(User.id).where(User.organization_id == current_user.organization_id)
-        base_conditions.append(AuditLog.user_id.in_(org_user_ids))
 
     actions_q = select(AuditLog.action).distinct()
     if base_conditions:
@@ -134,17 +125,14 @@ async def list_audit_logs(
 @router.get("/stats")
 async def audit_stats(
     days: int = Query(30, le=365),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_super_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get audit statistics for dashboard. Admin: org-scoped. Super_admin: platform-wide."""
+    """Get audit statistics for dashboard. Super_admin only."""
     from datetime import timedelta
     cutoff = datetime.utcnow() - timedelta(days=days)
 
     conditions = [AuditLog.created_at >= cutoff]
-    if current_user.role == "admin" and current_user.organization_id:
-        org_user_ids = select(User.id).where(User.organization_id == current_user.organization_id)
-        conditions.append(AuditLog.user_id.in_(org_user_ids))
 
     # Total events
     total_q = select(func.count(AuditLog.id)).where(and_(*conditions))

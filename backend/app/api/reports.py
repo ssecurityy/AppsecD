@@ -298,7 +298,9 @@ async def start_async_report(
         task = generate_report_async.delay(project_id, format.lower(), report_data_json)
         return {"task_id": task.id, "format": format, "status": "queued"}
     except Exception as e:
-        raise HTTPException(503, f"Async report queue unavailable: {e}")
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Async report unavailable: %s", e)
+        raise HTTPException(503, "Feature temporarily unavailable")
 
 
 @router.get("/{project_id}/report/async/{task_id}")
@@ -337,7 +339,8 @@ async def get_async_report_status(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        __import__("logging").getLogger(__name__).warning("Async report status check failed: %s", e)
+        raise HTTPException(500, "Internal server error")
 
 
 @router.post("/{project_id}/report/summarize")

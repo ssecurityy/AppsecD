@@ -343,6 +343,9 @@ async def run_scan(
     target_url = payload.target_url or project.application_url
     if not target_url:
         raise HTTPException(400, "No target URL configured for this project")
+    from app.core.ssrf import is_ssrf_blocked_url
+    if is_ssrf_blocked_url(target_url):
+        raise HTTPException(400, "Target URL is not allowed (internal/private addresses are blocked for security)")
 
     scan_id = str(uuid.uuid4())
     # Seed progress in Redis immediately so first poll finds it (multi-worker safe)
@@ -803,6 +806,9 @@ async def start_crawl(
     target_url = payload.target_url or project.application_url
     if not target_url:
         raise HTTPException(400, "No target URL configured")
+    from app.core.ssrf import is_ssrf_blocked_url
+    if is_ssrf_blocked_url(target_url):
+        raise HTTPException(400, "Target URL is not allowed (internal/private addresses are blocked for security)")
 
     crawl_id = str(uuid.uuid4())
     background_tasks.add_task(
@@ -1054,6 +1060,9 @@ async def start_recursive_dir_scan(
     """Start recursive directory scan with depth control. Returns job_id for polling."""
     if not await user_can_read_project(db, current_user, payload.project_id):
         raise HTTPException(403, "Access denied")
+    from app.core.ssrf import is_ssrf_blocked_url
+    if is_ssrf_blocked_url(payload.target_url or ""):
+        raise HTTPException(400, "Target URL is not allowed (internal/private addresses are blocked for security)")
     job_id = str(uuid.uuid4())
     background_tasks.add_task(
         _run_recursive_dir_background, job_id, payload.project_id,

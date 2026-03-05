@@ -63,7 +63,8 @@ async def login(request: Request, payload: UserLogin, db: AsyncSession = Depends
     from datetime import datetime, date
     today = date.today()
     user.last_login = datetime.utcnow()
-    await log_audit(db, "login", user_id=str(user.id), ip_address=request.client.host if request.client else None, user_agent=request.headers.get("user-agent"))
+    client_ip = request.headers.get("x-forwarded-for") or request.headers.get("cf-connecting-ip") or (request.client.host if request.client else None)
+    await log_audit(db, "login", user_id=str(user.id), ip_address=client_ip, user_agent=request.headers.get("user-agent"))
     # Update streak
     last = user.last_streak_date
     if last is None:
