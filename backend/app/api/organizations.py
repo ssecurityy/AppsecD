@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.api.auth import get_current_user, require_admin, require_super_admin, get_client_ip
@@ -252,6 +252,31 @@ async def get_org_logo(
     ext = logo_file.suffix.lower()
     media_type = media_types.get(ext, "image/png")
     return FileResponse(logo_file, media_type=media_type, filename=f"logo{ext}")
+
+
+@router.delete("/{org_id}")
+async def delete_organization(
+    request: Request,
+    org_id: str,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete an organization. Unlinks all users and projects from it first. Super_admin only."""
+    try:
+        oid = _uuid.UUID(org_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid organization ID")
+    result = await db.execute(select(Organization).where(Organization.id == oid))
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(404, "Organization not found")
+    name = org.name
+    await db.execute(update(User).where(User.organization_id == oid).values(organization_id=None))
+    await db.execute(update(Project).where(Project.organization_id == oid).values(organization_id=None))
+    await db.delete(org)
+    await log_audit(db, "delete_organization", user_id=str(current_user.id), resource_type="organization", resource_id=org_id, details={"name": name}, ip_address=get_client_ip(request))
+    await db.commit()
+    return {"ok": True}
 
 
 @router.patch("/{org_id}/assign-user")

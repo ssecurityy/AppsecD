@@ -450,4 +450,38 @@ export const api = {
     request("/dast/ai/interpret-result", { method: "POST", body: JSON.stringify(data) }),
   dastAiCoverageGaps: (data: { project_id: string; target_url?: string }) =>
     request("/dast/ai/coverage-gaps", { method: "POST", body: JSON.stringify(data) }),
+
+  // Claude AI DAST
+  claudeDastScan: (data: { project_id: string; target_url?: string; scan_mode?: string; include_subdomains?: boolean; max_cost_usd?: number }) =>
+    request("/dast/claude/scan", { method: "POST", body: JSON.stringify(data) }),
+  claudeDastScanProgress: (scanId: string) =>
+    request(`/dast/claude/scan/${scanId}`, { method: "GET" }),
+  claudeDastScanStop: (scanId: string) =>
+    request(`/dast/claude/scan/${scanId}/stop`, { method: "POST" }),
+  claudeDastPentestOption: (scanId: string, data: { option_id: string; selected_action: string }) =>
+    request(`/dast/claude/scan/${scanId}/pentest-option`, { method: "POST", body: JSON.stringify(data) }),
+  claudeDastRetest: (data: { project_id: string; finding_ids: string[]; target_url?: string }) =>
+    request("/dast/claude/retest", { method: "POST", body: JSON.stringify(data) }),
+  claudeDastCrawl: (data: { project_id: string; target_url?: string; include_subdomains?: boolean }) =>
+    request("/dast/claude/crawl", { method: "POST", body: JSON.stringify(data) }),
+  claudeDastCrawlResults: (projectId: string) =>
+    request(`/dast/claude/crawl/${projectId}/results`, { method: "GET" }),
+  claudeDastGenerateChecks: (data: { project_id: string; target_url?: string }) =>
+    request("/dast/claude/generate-checks", { method: "POST", body: JSON.stringify(data) }),
+  claudeDastSession: (projectId: string) =>
+    request(`/dast/claude/session/${projectId}`, { method: "GET" }),
+  claudeDastSessionClear: (projectId: string) =>
+    request(`/dast/claude/session/${projectId}`, { method: "DELETE" }),
+  claudeDastCostEstimate: (data: { scan_mode?: string; target_url?: string; include_subdomains?: boolean }) =>
+    request("/dast/claude/cost-estimate", { method: "POST", body: JSON.stringify(data) }),
+  claudeDastHistory: (projectId: string) =>
+    request(`/dast/claude/history/${projectId}`, { method: "GET" }),
+  claudeDastAdminUsage: () =>
+    request("/dast/claude/admin/usage", { method: "GET" }),
+  claudeDastAdminSettings: () =>
+    request("/dast/claude/admin/settings", { method: "GET" }),
+  claudeDastAdminSettingsOrg: (orgId: string) =>
+    request(`/dast/claude/admin/settings/${orgId}`, { method: "GET" }),
+  claudeDastAdminSettingsOrgUpdate: (orgId: string, data: Record<string, unknown>) =>
+    request(`/dast/claude/admin/settings/${orgId}`, { method: "PATCH", body: JSON.stringify(data) }),
 };

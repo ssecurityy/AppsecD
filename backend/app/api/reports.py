@@ -140,6 +140,7 @@ async def get_report(
         select(Finding).where(Finding.project_id == project_id).order_by(Finding.created_at.desc())
     )
     findings_raw = findings_result.scalars().all()
+    findings_raw = [f for f in findings_raw if getattr(f, "include_in_report", True)]
     result_ids = [f.test_result_id for f in findings_raw if f.test_result_id]
     evidence_by_result = {}
     if result_ids:
@@ -220,6 +221,7 @@ async def get_report_data(
         select(Finding).where(Finding.project_id == project_id).order_by(Finding.created_at.desc())
     )
     findings_raw = findings_result.scalars().all()
+    findings_raw = [f for f in findings_raw if getattr(f, "include_in_report", True)]
     result_ids = [f.test_result_id for f in findings_raw if f.test_result_id]
     evidence_by_result = {}
     if result_ids:
@@ -269,6 +271,7 @@ async def start_async_report(
         select(Finding).where(Finding.project_id == project_id).order_by(Finding.created_at.desc())
     )
     findings_raw = findings_result.scalars().all()
+    findings_raw = [f for f in findings_raw if getattr(f, "include_in_report", True)]
     result_ids = [f.test_result_id for f in findings_raw if f.test_result_id]
     evidence_by_result = {}
     if result_ids:
@@ -359,7 +362,7 @@ async def summarize_report(
         raise HTTPException(404, "Project not found")
 
     findings_result = await db.execute(select(Finding).where(Finding.project_id == uuid.UUID(project_id)))
-    findings = findings_result.scalars().all()
+    findings = [f for f in findings_result.scalars().all() if getattr(f, "include_in_report", True)]
 
     _provider, model, api_key = await get_llm_config(db)
 

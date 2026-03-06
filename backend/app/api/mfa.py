@@ -86,8 +86,8 @@ async def mfa_setup_with_token(
     user = await get_current_user_from_mfa_token(payload.mfa_token, db)
     if not user or not user.is_active:
         raise HTTPException(401, "Invalid or expired MFA token")
-    if not getattr(user, "mfa_enabled", False):
-        raise HTTPException(400, "MFA is not enabled for this user")
+    # Allow both: (1) first-time setup when admin/super_admin is required to set up (mfa_enabled=False),
+    # and (2) re-setup when admin enabled MFA for user (mfa_enabled=True, they get mfa_token on login).
 
     # Generate new secret
     secret = pyotp.random_base32()

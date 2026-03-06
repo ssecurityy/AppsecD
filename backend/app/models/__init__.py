@@ -15,6 +15,9 @@ from .stored_cve import StoredCVE
 from .org_feature_flag import OrgFeatureFlag
 from .dast_scan_result import DastScanResult
 from .crawl_session import CrawlSession
+from .claude_scan_session import ClaudeScanSession
+from .claude_crawl_result import ClaudeCrawlResult
+from .claude_usage import ClaudeUsageTracking
 
 __all__ = [
     "User", "Project", "Organization", "Category", "TestCase", "ProjectTestResult",
@@ -27,4 +30,7 @@ __all__ = [
     "OrgFeatureFlag",
     "DastScanResult",
     "CrawlSession",
+    "ClaudeScanSession",
+    "ClaudeCrawlResult",
+    "ClaudeUsageTracking",
 ]

@@ -61,6 +61,7 @@ def f_to_dict(f: Finding) -> dict:
         "remediation_deadline": f.remediation_deadline.isoformat() if getattr(f, "remediation_deadline", None) else None,
         "remediation_owner": getattr(f, "remediation_owner", None),
         "recheck_history": getattr(f, "recheck_history", None) or [],
+        "include_in_report": getattr(f, "include_in_report", True),
     }
 
 
@@ -266,6 +267,7 @@ async def update_finding(
         "status", "assigned_to", "due_date", "title", "description", "severity",
         "impact", "recommendation", "reproduction_steps", "owasp_category",
         "cwe_id", "cvss_score", "remediation_deadline", "remediation_owner",
+        "include_in_report",
     }
     for key, val in payload.items():
         if key in allowed and hasattr(finding, key):
@@ -274,6 +276,8 @@ async def update_finding(
                     val = datetime.fromisoformat(val.replace("Z", "")).date()
                 except (ValueError, TypeError):
                     pass
+            if key == "include_in_report":
+                val = bool(val)
             setattr(finding, key, val)
     finding.updated_at = datetime.utcnow()
     await db.commit()

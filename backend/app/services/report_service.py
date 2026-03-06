@@ -79,6 +79,108 @@ def _evidence_to_base64(project_id: str, evidence_item: dict) -> str | None:
         return None
 
 
+def _build_claude_ai_assessment(findings: list, project_id: str) -> dict:
+    """Build Claude AI Assessment section data from Claude DAST findings."""
+    claude_findings = [f for f in findings if "[Claude DAST]" in (f.get("title") or "")]
+    if not claude_findings:
+        return {}
+
+    sev_counts = {}
+    for f in claude_findings:
+        s = f.get("severity", "info").lower()
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+
+    # Determine overall risk
+    if sev_counts.get("critical", 0) > 0:
+        risk = "Critical"
+    elif sev_counts.get("high", 0) > 0:
+        risk = "High"
+    elif sev_counts.get("medium", 0) > 0:
+        risk = "Medium"
+    else:
+        risk = "Low"
+
+    # Categorize findings
+    business_logic = [f for f in claude_findings if any(k in (f.get("title") or "").lower() for k in ["business logic", "race condition", "payment", "idor", "privilege"])]
+    injection = [f for f in claude_findings if any(k in (f.get("title") or "").lower() for k in ["xss", "sqli", "injection", "ssti", "xxe"])]
+    auth = [f for f in claude_findings if any(k in (f.get("title") or "").lower() for k in ["auth", "jwt", "session", "csrf", "mfa"])]
+    config = [f for f in claude_findings if any(k in (f.get("title") or "").lower() for k in ["header", "cors", "ssl", "tls", "config", "misconfiguration"])]
+
+    return {
+        "total_findings": len(claude_findings),
+        "severity_distribution": sev_counts,
+        "overall_risk": risk,
+        "categories": {
+            "business_logic": len(business_logic),
+            "injection": len(injection),
+            "authentication": len(auth),
+            "configuration": len(config),
+        },
+        "summary": f"Claude AI DAST identified {len(claude_findings)} security issues "
+                   f"({sev_counts.get('critical', 0)} critical, {sev_counts.get('high', 0)} high, "
+                   f"{sev_counts.get('medium', 0)} medium, {sev_counts.get('low', 0)} low). "
+                   f"Overall risk assessment: {risk}.",
+        "top_findings": [
+            {"title": f.get("title", "").replace("[Claude DAST] ", ""), "severity": f.get("severity", "")}
+            for f in claude_findings[:5]
+        ],
+    }
+
+
+def _build_business_logic_section(findings: list) -> list:
+    """Extract business logic findings for a dedicated report section."""
+    keywords = ["business logic", "race condition", "payment", "idor", "privilege",
+                 "coupon", "discount", "workflow", "bypass", "account takeover", "mfa bypass"]
+    return [
+        {"title": f.get("title", ""), "severity": f.get("severity", ""),
+         "description": f.get("description", ""), "affected_url": f.get("affected_url", "")}
+        for f in findings
+        if any(k in (f.get("title") or "").lower() or k in (f.get("description") or "").lower() for k in keywords)
+    ]
+
+
+def _build_waf_effectiveness(findings: list) -> dict:
+    """Analyze WAF bypass evidence from findings."""
+    waf_bypassed = []
+    waf_blocked = []
+    for f in findings:
+        title = (f.get("title") or "").lower()
+        desc = (f.get("description") or "").lower()
+        repro = (f.get("reproduction_steps") or "").lower()
+        combined = title + desc + repro
+        if "waf bypass" in combined or "waf" in combined and ("bypass" in combined or "evad" in combined):
+            waf_bypassed.append(f.get("title", ""))
+        elif "blocked by waf" in combined or "waf blocked" in combined:
+            waf_blocked.append(f.get("title", ""))
+    if not waf_bypassed and not waf_blocked:
+        return {}
+    return {
+        "bypassed_count": len(waf_bypassed),
+        "blocked_count": len(waf_blocked),
+        "bypassed_findings": waf_bypassed[:10],
+        "effectiveness": f"{len(waf_blocked)}/{len(waf_blocked) + len(waf_bypassed)} attacks blocked" if (waf_blocked or waf_bypassed) else "N/A",
+    }
+
+
+def _build_remediation_priority(findings: list) -> list:
+    """AI-ranked remediation order based on severity and exploitability."""
+    weight = {"critical": 100, "high": 70, "medium": 40, "low": 15, "info": 5}
+    scored = []
+    for f in findings:
+        sev = (f.get("severity") or "info").lower()
+        base = weight.get(sev, 5)
+        # Boost for confirmed exploitability
+        desc_lower = (f.get("description") or "").lower()
+        if "confirmed" in desc_lower or "verified" in desc_lower or "poc" in desc_lower:
+            base += 20
+        if "authentication" in desc_lower or "injection" in desc_lower:
+            base += 10
+        scored.append({"title": f.get("title", ""), "severity": f.get("severity", ""),
+                        "score": base, "affected_url": f.get("affected_url", "")})
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:20]
+
+
 def build_report_data(project: dict, findings: list, phases: list, project_id: str = "", organization: dict | None = None) -> dict:
     """Build structured report data with evidence."""
     risk = _risk_score(project, findings)
@@ -99,10 +201,22 @@ def build_report_data(project: dict, findings: list, phases: list, project_id: s
         f["compliance"] = get_compliance_mapping(cwe_id=f.get("cwe_id"), owasp_category=f.get("owasp_category"))
     org = organization or {"name": "AppSecD", "logo_base64": None, "brand_color": "#2563eb"}
     ai = project.get("ai_report_content") or {}
+
+    # Claude DAST AI sections
+    has_claude = any("[Claude DAST]" in (f.get("title") or "") for f in sorted_findings)
+    claude_ai_assessment = _build_claude_ai_assessment(sorted_findings, project_id) if has_claude else {}
+    business_logic_findings = _build_business_logic_section(sorted_findings) if has_claude else []
+    waf_effectiveness = _build_waf_effectiveness(sorted_findings) if has_claude else {}
+    remediation_priority = _build_remediation_priority(sorted_findings) if has_claude else []
+
     return {
         "project": project,
         "organization": org,
         "ai_report_content": ai,
+        "claude_ai_assessment": claude_ai_assessment,
+        "business_logic_findings": business_logic_findings,
+        "waf_effectiveness": waf_effectiveness,
+        "remediation_priority": remediation_priority,
         "findings": sorted_findings,
         "phases": phases,
         "project_id": project_id,
@@ -165,6 +279,138 @@ def generate_html(data: dict) -> str:
         if not out:
             return ""
         return '<div class="ai-exec-summary">' + "".join(out) + "</div>"
+
+    def _claude_ai_section(d: dict) -> str:
+        """Render Claude AI DAST Assessment section in HTML report."""
+        ai = d.get("claude_ai_assessment") or {}
+        if not ai:
+            return ""
+        total = ai.get("total_findings", 0)
+        risk = ai.get("overall_risk", "Unknown")
+        summary = ai.get("summary", "")
+        cats = ai.get("categories", {})
+        top = ai.get("top_findings", [])
+
+        risk_color = {"Critical": "#dc2626", "High": "#ea580c", "Medium": "#ca8a04", "Low": "#16a34a"}.get(risk, "#6b7280")
+
+        html = f'''
+        <h2 class="section-heading"><span class="section-number"></span> AI Security Assessment (Claude DAST)</h2>
+        <div class="card" style="border-left: 4px solid {risk_color};">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+            <span style="font-size:14px;font-weight:700;color:{risk_color};">Overall Risk: {risk}</span>
+            <span style="font-size:12px;color:#6b7280;">{total} findings by AI pentester</span>
+          </div>
+          <p style="font-size:12px;color:#374151;margin-bottom:12px;">{_html_escape(summary)}</p>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;">
+            <div style="text-align:center;padding:8px 16px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:18px;font-weight:700;">{cats.get("injection", 0)}</div>
+              <div style="font-size:10px;color:#6b7280;">Injection</div>
+            </div>
+            <div style="text-align:center;padding:8px 16px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:18px;font-weight:700;">{cats.get("business_logic", 0)}</div>
+              <div style="font-size:10px;color:#6b7280;">Business Logic</div>
+            </div>
+            <div style="text-align:center;padding:8px 16px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:18px;font-weight:700;">{cats.get("authentication", 0)}</div>
+              <div style="font-size:10px;color:#6b7280;">Authentication</div>
+            </div>
+            <div style="text-align:center;padding:8px 16px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:18px;font-weight:700;">{cats.get("configuration", 0)}</div>
+              <div style="font-size:10px;color:#6b7280;">Configuration</div>
+            </div>
+          </div>'''
+
+        if top:
+            html += '<div style="margin-top:8px;"><div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:4px;">Top Findings:</div>'
+            for f in top:
+                sev = f.get("severity", "info")
+                sev_c = {"critical": "#dc2626", "high": "#ea580c", "medium": "#ca8a04", "low": "#16a34a"}.get(sev, "#6b7280")
+                html += f'<div style="font-size:11px;padding:2px 0;"><span style="color:{sev_c};font-weight:600;">[{sev.upper()}]</span> {_html_escape(f.get("title", ""))}</div>'
+            html += '</div>'
+
+        html += '</div>'
+        return html
+
+    def _business_logic_section(d: dict) -> str:
+        """Render Business Logic Findings section."""
+        items = d.get("business_logic_findings") or []
+        if not items:
+            return ""
+        sev_colors = {"critical": "#dc2626", "high": "#ea580c", "medium": "#ca8a04", "low": "#16a34a", "info": "#6b7280"}
+        rows = ""
+        for item in items:
+            sc = sev_colors.get((item.get("severity") or "info").lower(), "#6b7280")
+            rows += f'<tr><td style="color:{sc};font-weight:600;">{_html_escape((item.get("severity") or "").upper())}</td>'
+            rows += f'<td>{_html_escape(item.get("title", ""))}</td>'
+            rows += f'<td style="font-size:10px;">{_html_escape(item.get("affected_url", ""))}</td></tr>'
+        return f'''
+        <h2 class="section-heading"><span class="section-number"></span> Business Logic Findings</h2>
+        <div class="card">
+          <p style="font-size:12px;color:#374151;margin-bottom:12px;">
+            The following {len(items)} findings relate to business logic vulnerabilities that go beyond traditional technical flaws.
+            These often represent the highest-impact issues as they exploit application-specific workflow assumptions.
+          </p>
+          <table><tr><th>Severity</th><th>Finding</th><th>URL</th></tr>{rows}</table>
+        </div>'''
+
+    def _waf_effectiveness_section(d: dict) -> str:
+        """Render WAF Effectiveness section."""
+        waf = d.get("waf_effectiveness") or {}
+        if not waf:
+            return ""
+        bypassed = waf.get("bypassed_count", 0)
+        blocked = waf.get("blocked_count", 0)
+        total = bypassed + blocked
+        eff_pct = (blocked / total * 100) if total > 0 else 0
+        bar_color = "#16a34a" if eff_pct >= 80 else "#ca8a04" if eff_pct >= 50 else "#dc2626"
+        bypassed_list = ""
+        for t in waf.get("bypassed_findings", []):
+            bypassed_list += f'<div style="font-size:11px;padding:3px 0;color:#dc2626;">&#x2717; {_html_escape(t)}</div>'
+        return f'''
+        <h2 class="section-heading"><span class="section-number"></span> WAF Effectiveness Analysis</h2>
+        <div class="card">
+          <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+            <div style="text-align:center;padding:12px 20px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:24px;font-weight:700;color:{bar_color};">{eff_pct:.0f}%</div>
+              <div style="font-size:10px;color:#6b7280;">Effectiveness</div>
+            </div>
+            <div style="text-align:center;padding:12px 20px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:24px;font-weight:700;color:#16a34a;">{blocked}</div>
+              <div style="font-size:10px;color:#6b7280;">Blocked</div>
+            </div>
+            <div style="text-align:center;padding:12px 20px;background:#f3f4f6;border-radius:8px;">
+              <div style="font-size:24px;font-weight:700;color:#dc2626;">{bypassed}</div>
+              <div style="font-size:10px;color:#6b7280;">Bypassed</div>
+            </div>
+          </div>
+          <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;margin-bottom:12px;">
+            <div style="height:100%;width:{eff_pct}%;background:{bar_color};border-radius:4px;"></div>
+          </div>
+          {('<div style="margin-top:8px;"><div style="font-size:11px;font-weight:600;margin-bottom:4px;">Bypassed Findings:</div>' + bypassed_list + '</div>') if bypassed_list else ''}
+        </div>'''
+
+    def _remediation_priority_section(d: dict) -> str:
+        """Render AI-ranked Remediation Priority section."""
+        items = d.get("remediation_priority") or []
+        if not items:
+            return ""
+        sev_colors = {"critical": "#dc2626", "high": "#ea580c", "medium": "#ca8a04", "low": "#16a34a", "info": "#6b7280"}
+        rows = ""
+        for i, item in enumerate(items, 1):
+            sc = sev_colors.get((item.get("severity") or "info").lower(), "#6b7280")
+            rows += f'<tr><td class="count-cell" style="font-weight:700;">{i}</td>'
+            rows += f'<td style="color:{sc};font-weight:600;">{_html_escape((item.get("severity") or "").upper())}</td>'
+            rows += f'<td>{_html_escape(item.get("title", ""))}</td>'
+            rows += f'<td style="font-size:10px;">{_html_escape(item.get("affected_url", ""))}</td></tr>'
+        return f'''
+        <h2 class="section-heading"><span class="section-number"></span> Remediation Priority</h2>
+        <div class="card">
+          <p style="font-size:12px;color:#374151;margin-bottom:12px;">
+            AI-ranked remediation order based on severity, exploitability, and impact.
+            Address findings in the order listed below for maximum security improvement.
+          </p>
+          <table><tr><th>#</th><th>Severity</th><th>Finding</th><th>URL</th></tr>{rows}</table>
+        </div>'''
 
     # Build severity distribution rows
     sev_rows = "".join(
@@ -1357,6 +1603,18 @@ def generate_html(data: dict) -> str:
                     {compliance_rows}
                 </table>
             </div>
+
+            <!-- Claude AI Assessment (when Claude DAST findings present) -->
+            {_claude_ai_section(data)}
+
+            <!-- Business Logic Findings (Claude DAST) -->
+            {_business_logic_section(data)}
+
+            <!-- WAF Effectiveness (Claude DAST) -->
+            {_waf_effectiveness_section(data)}
+
+            <!-- Remediation Priority (Claude DAST) -->
+            {_remediation_priority_section(data)}
 
             <!-- 10. Findings Summary -->
             <h2 class="section-heading" id="findings-table"><span class="section-number">10</span> Findings Summary</h2>

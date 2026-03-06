@@ -1394,3 +1394,1139 @@ Respond in JSON:
     if parsed and isinstance(parsed, dict):
         return {**base, **parsed}
     return {**base, "gaps": [], "recommendations": ["Run full DAST scan", "Complete manual test cases"]}
+
+
+# ─── Claude AI DAST Endpoints ─────────────────────────────────────────────────
+
+
+class ClaudeScanRequest(BaseModel):
+    project_id: str
+    target_url: str | None = None
+    scan_mode: str = "standard"  # quick, standard, deep
+    include_subdomains: bool = False
+    max_cost_usd: float | None = None  # Override per-scan limit
+
+
+class ClaudeRetestRequest(BaseModel):
+    project_id: str
+    finding_ids: list[str]  # UUIDs of findings to retest
+    target_url: str | None = None
+
+
+class ClaudeCrawlOnlyRequest(BaseModel):
+    project_id: str
+    target_url: str | None = None
+    include_subdomains: bool = False
+
+
+class ClaudeGenerateChecksRequest(BaseModel):
+    project_id: str
+    target_url: str | None = None
+
+
+class ClaudePentestOptionRequest(BaseModel):
+    option_id: str
+    selected_action: str  # The action the user selected
+
+
+class ClaudeCostEstimateRequest(BaseModel):
+    scan_mode: str = "standard"
+    target_url: str = ""
+    include_subdomains: bool = False
+
+
+async def _run_claude_scan_background(
+    scan_id: str,
+    project_id: str,
+    target_url: str,
+    scan_mode: str,
+    include_subdomains: bool,
+    max_cost_usd: float,
+    user_id: uuid.UUID,
+):
+    """Run Claude AI DAST scan as background task."""
+    import time
+    import json
+    from datetime import datetime
+    from app.core.config import get_settings
+    from app.services.dast.runner import _dast_progress_set
+    from app.models.claude_scan_session import ClaudeScanSession
+    from app.models.claude_crawl_result import ClaudeCrawlResult
+
+    settings = get_settings()
+    api_key = settings.anthropic_api_key
+
+    # Try org-level API key first
+    try:
+        from app.models.organization import Organization
+        async with AsyncSessionLocal() as _db:
+            project_row = (await _db.execute(
+                select(Project).where(Project.id == uuid.UUID(project_id))
+            )).scalar_one_or_none()
+            if project_row and hasattr(project_row, "organization_id") and project_row.organization_id:
+                org_row = (await _db.execute(
+                    select(Organization).where(Organization.id == project_row.organization_id)
+                )).scalar_one_or_none()
+                if org_row and org_row.claude_dast_api_key:
+                    api_key = org_row.claude_dast_api_key
+    except Exception:
+        pass  # Fall back to global key
+
+    if not api_key:
+        _dast_progress_set(scan_id, {
+            "status": "error",
+            "error": "Anthropic API key not configured. Set it in Admin > AI Usage > Per-Organization settings.",
+            "last_updated": time.time(),
+        })
+        return
+
+    # Build project context
+    project_context = {}
+    async with AsyncSessionLocal() as db:
+        try:
+            project = (await db.execute(
+                select(Project).where(Project.id == uuid.UUID(project_id))
+            )).scalar_one_or_none()
+            if not project:
+                _dast_progress_set(scan_id, {"status": "error", "error": "Project not found"})
+                return
+
+            if not target_url:
+                target_url = project.application_url
+            if not target_url:
+                _dast_progress_set(scan_id, {"status": "error", "error": "No target URL"})
+                return
+
+            # Load existing findings for dedup / FP awareness
+            existing_findings_q = await db.execute(
+                select(Finding).where(
+                    Finding.project_id == uuid.UUID(project_id),
+                    Finding.affected_url == target_url,
+                ).limit(50)
+            )
+            existing_findings = [
+                {
+                    "title": f.title, "severity": f.severity, "status": f.status,
+                    "affected_url": f.affected_url, "cwe_id": f.cwe_id,
+                }
+                for f in existing_findings_q.scalars().all()
+            ]
+
+            project_context = {
+                "project_name": project.application_name,
+                "testing_scope": f"{target_url} and same-origin resources",
+                "include_subdomains": include_subdomains,
+                "stack_profile": project.technology_stack if hasattr(project, "technology_stack") else {},
+                "existing_findings": existing_findings,
+            }
+        except Exception as e:
+            logger.exception("Claude scan context build failed: %s", e)
+            _dast_progress_set(scan_id, {"status": "error", "error": str(e)[:300]})
+            return
+
+    # Load session context from Redis
+    session_context = None
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+        session_key = f"claude:session:{project_id}"
+        raw = r.get(session_key)
+        if raw:
+            session_context = json.loads(raw)
+    except Exception:
+        pass
+
+    # Create and run the agent
+    try:
+        from app.services.dast.claude_agent import ClaudeDastAgent
+        from app.services.dast.claude_executor import ClaudeToolExecutor
+
+        agent = ClaudeDastAgent(
+            anthropic_api_key=api_key,
+            project_id=project_id,
+            scan_id=scan_id,
+            scan_mode=scan_mode,
+            max_cost_usd=max_cost_usd,
+            max_api_calls=settings.claude_dast_max_api_calls,
+        )
+
+        executor = ClaudeToolExecutor(
+            project_id=project_id,
+            scan_id=scan_id,
+            target_url=target_url,
+            scope_domain=target_url,
+        )
+        agent.set_executor(executor)
+
+        # Progress callback → Redis
+        def _progress_cb(data: dict):
+            _dast_progress_set(scan_id, {**data, "project_id": project_id, "target_url": target_url})
+        agent.set_progress_callback(_progress_cb)
+
+        result = await agent.run_intelligent_scan(
+            target_url=target_url,
+            project_context=project_context,
+            session_context=session_context,
+        )
+    except Exception as e:
+        logger.exception("Claude scan %s failed: %s", scan_id, e)
+        _dast_progress_set(scan_id, {
+            "status": "error", "error": str(e)[:500],
+            "project_id": project_id, "target_url": target_url,
+            "last_updated": time.time(),
+        })
+        return
+
+    # Persist findings using the same pipeline as regular DAST
+    project_uuid = uuid.UUID(project_id)
+    findings_created = []
+    async with AsyncSessionLocal() as db:
+        try:
+            for finding_data in result.get("findings", []):
+                title = f"[Claude DAST] {finding_data.get('title', 'Unknown')}"
+                # Dedup
+                existing = await db.execute(
+                    select(Finding).where(
+                        Finding.project_id == project_uuid,
+                        Finding.title == title,
+                        Finding.affected_url == finding_data.get("affected_url", target_url),
+                        Finding.status.in_(["open", "confirmed"]),
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                finding = Finding(
+                    project_id=project_uuid,
+                    title=title,
+                    description=finding_data.get("description", ""),
+                    severity=finding_data.get("severity", "medium"),
+                    cvss_score=finding_data.get("cvss_score", ""),
+                    cwe_id=finding_data.get("cwe_id", ""),
+                    owasp_category=finding_data.get("owasp_category", ""),
+                    affected_url=finding_data.get("affected_url", target_url),
+                    affected_parameter=finding_data.get("affected_parameter", ""),
+                    request=finding_data.get("request_raw", ""),
+                    response=finding_data.get("response_raw", ""),
+                    reproduction_steps=finding_data.get("reproduction_steps", ""),
+                    impact=finding_data.get("impact", ""),
+                    recommendation=finding_data.get("recommendation", ""),
+                    status="open",
+                    created_by=user_id,
+                )
+                db.add(finding)
+                findings_created.append(finding_data.get("title", ""))
+
+            await db.commit()
+        except Exception as e:
+            logger.exception("Claude findings creation failed: %s", e)
+            await db.rollback()
+
+        # Persist ClaudeScanSession
+        try:
+            cost_data = result.get("cost", {})
+            session_record = ClaudeScanSession(
+                project_id=project_uuid,
+                scan_id=scan_id,
+                target_url=target_url,
+                scan_mode=scan_mode,
+                status="completed",
+                total_input_tokens=cost_data.get("total_input_tokens", 0),
+                total_output_tokens=cost_data.get("total_output_tokens", 0),
+                total_cached_tokens=cost_data.get("total_cached_tokens", 0),
+                total_api_calls=cost_data.get("total_api_calls", 0),
+                total_cost_usd=cost_data.get("total_cost_usd", 0.0),
+                cost_breakdown=cost_data.get("cost_per_model", {}),
+                total_findings=len(result.get("findings", [])),
+                findings_by_severity=result.get("findings_by_severity", {}),
+                pages_crawled=len(result.get("crawl_results", [])),
+                new_test_cases=len(result.get("new_test_cases", [])),
+                pentest_options_offered=len(result.get("pentest_options", [])),
+                duration_seconds=int(result.get("duration_seconds", 0)),
+                activity_log=result.get("activity_log", [])[-50:],
+                created_by=user_id,
+                completed_at=datetime.utcnow(),
+            )
+            db.add(session_record)
+            await db.commit()
+        except Exception as e:
+            logger.warning("Claude scan session persist failed: %s", e)
+            await db.rollback()
+
+        # Persist ClaudeCrawlResult
+        try:
+            crawl_results = result.get("crawl_results", [])
+            if crawl_results:
+                crawl_record = ClaudeCrawlResult(
+                    project_id=project_uuid,
+                    scan_id=scan_id,
+                    crawled_pages=crawl_results,
+                    total_pages=len(crawl_results),
+                    duration_seconds=int(result.get("duration_seconds", 0)),
+                )
+                db.add(crawl_record)
+                await db.commit()
+        except Exception as e:
+            logger.warning("Claude crawl result persist failed: %s", e)
+            await db.rollback()
+
+    # Save session context for future retests
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+        session_key = f"claude:session:{project_id}"
+        session_data = {
+            "project_id": project_id,
+            "target_url": target_url,
+            "messages": result.get("messages", [])[-30:],
+            "summary": f"Last scan: {len(findings_created)} findings, {len(result.get('crawl_results', []))} pages crawled",
+            "last_scan_id": scan_id,
+            "last_scan_at": time.time(),
+        }
+        r.setex(session_key, settings.claude_dast_session_ttl_days * 86400, json.dumps(session_data, default=str))
+    except Exception:
+        pass
+
+    # Update final progress
+    _dast_progress_set(scan_id, {
+        "status": "completed",
+        "project_id": project_id,
+        "target_url": target_url,
+        "findings_created": len(findings_created),
+        "finding_titles": findings_created,
+        "total_findings": len(result.get("findings", [])),
+        "cost": result.get("cost", {}),
+        "duration_seconds": result.get("duration_seconds", 0),
+        "last_updated": time.time(),
+    })
+
+
+@router.post("/claude/scan")
+async def claude_scan(
+    req: ClaudeScanRequest,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Start a Claude AI-powered DAST scan."""
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    if not settings.claude_dast_enabled:
+        raise HTTPException(400, "Claude DAST is not enabled")
+    if not settings.anthropic_api_key:
+        raise HTTPException(400, "Anthropic API key not configured")
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(req.project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    # ── Org-level budget enforcement ──
+    org_id = getattr(project, "organization_id", None)
+    if org_id:
+        from app.models.organization import Organization
+        org_result = await db.execute(select(Organization).where(Organization.id == org_id))
+        org = org_result.scalar_one_or_none()
+        if org:
+            if not org.claude_enabled:
+                raise HTTPException(403, "Claude DAST is disabled for this organization")
+            # Check daily scan limit
+            if org.claude_max_scans_per_day:
+                from app.models.claude_scan_session import ClaudeScanSession
+                from sqlalchemy import func
+                from datetime import datetime, timedelta
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                daily_count = (await db.execute(
+                    select(func.count(ClaudeScanSession.id))
+                    .where(ClaudeScanSession.project_id == project.id)
+                    .where(ClaudeScanSession.created_at >= today_start)
+                )).scalar() or 0
+                if daily_count >= org.claude_max_scans_per_day:
+                    raise HTTPException(429, f"Daily scan limit reached ({org.claude_max_scans_per_day} scans/day)")
+            # Check deep scan approval
+            if req.scan_mode == "deep" and org.claude_deep_scan_approval_required:
+                if not getattr(user, "is_superadmin", False) and not getattr(user, "role", "") == "admin":
+                    raise HTTPException(403, "Deep scan mode requires admin approval for this organization")
+            # Check monthly budget
+            if org.claude_monthly_budget_usd:
+                from app.models.claude_usage import ClaudeUsageTracking
+                from sqlalchemy import func
+                from datetime import datetime, timedelta
+                month_start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                monthly_cost = (await db.execute(
+                    select(func.sum(ClaudeUsageTracking.cost_usd))
+                    .where(ClaudeUsageTracking.organization_id == org_id)
+                    .where(ClaudeUsageTracking.created_at >= month_start)
+                )).scalar() or 0
+                if float(monthly_cost) >= float(org.claude_monthly_budget_usd):
+                    raise HTTPException(429, f"Monthly AI budget exceeded (${float(org.claude_monthly_budget_usd):.2f})")
+
+    target_url = req.target_url or project.application_url
+    if not target_url:
+        raise HTTPException(400, "No target URL specified")
+
+    # Use org per-scan limit if set, otherwise global config
+    org_scan_limit = None
+    if org_id:
+        try:
+            org_scan_limit = float(org.claude_per_scan_limit_usd) if org and org.claude_per_scan_limit_usd else None
+        except Exception:
+            pass
+    max_cost = req.max_cost_usd or org_scan_limit or settings.claude_dast_max_cost_per_scan
+    scan_id = f"claude-{uuid.uuid4().hex[:16]}"
+
+    # Seed initial progress
+    from app.services.dast.runner import _dast_progress_set
+    import time
+    _dast_progress_set(scan_id, {
+        "status": "starting",
+        "project_id": req.project_id,
+        "target_url": target_url,
+        "scan_mode": req.scan_mode,
+        "current_phase": "initializing",
+        "current_activity": "Starting Claude AI scan...",
+        "findings_so_far": 0,
+        "last_updated": time.time(),
+    })
+
+    background.add_task(
+        _run_claude_scan_background,
+        scan_id=scan_id,
+        project_id=req.project_id,
+        target_url=target_url,
+        scan_mode=req.scan_mode,
+        include_subdomains=req.include_subdomains,
+        max_cost_usd=max_cost,
+        user_id=user.id,
+    )
+
+    return {"scan_id": scan_id, "status": "started", "target_url": target_url, "scan_mode": req.scan_mode}
+
+
+@router.get("/claude/scan/{scan_id}")
+async def claude_scan_progress(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Poll live progress for a Claude AI scan."""
+    from app.services.dast.runner import _dast_progress_get
+    progress = _dast_progress_get(scan_id)
+    if not progress:
+        raise HTTPException(404, "Scan not found or expired")
+    return progress
+
+
+@router.post("/claude/scan/{scan_id}/stop")
+async def claude_scan_stop(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Gracefully stop a running Claude scan."""
+    from app.services.dast.runner import _dast_progress_get, _dast_progress_set
+    import time
+    progress = _dast_progress_get(scan_id)
+    if not progress:
+        raise HTTPException(404, "Scan not found")
+    progress["status"] = "stopped"
+    progress["current_activity"] = "Scan stopped by user"
+    progress["last_updated"] = time.time()
+    _dast_progress_set(scan_id, progress)
+    return {"status": "stopped", "scan_id": scan_id}
+
+
+@router.post("/claude/scan/{scan_id}/pentest-option")
+async def claude_pentest_option(
+    scan_id: str,
+    req: ClaudePentestOptionRequest,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """User selects a penetration option for deeper testing."""
+    from app.services.dast.runner import _dast_progress_get, _dast_progress_set
+    import time
+    progress = _dast_progress_get(scan_id)
+    if not progress:
+        raise HTTPException(404, "Scan not found")
+
+    # Store the user decision for the agent to pick up
+    pending = progress.get("pending_pentest_options", [])
+    for opt in pending:
+        if opt.get("option_id") == req.option_id:
+            opt["user_selected"] = req.selected_action
+            opt["selected_at"] = time.time()
+            break
+    progress["pending_pentest_options"] = pending
+    _dast_progress_set(scan_id, progress)
+    return {"status": "option_recorded", "option_id": req.option_id, "action": req.selected_action}
+
+
+@router.post("/claude/retest")
+async def claude_retest(
+    req: ClaudeRetestRequest,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Retest specific findings using Claude AI with session context."""
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    if not settings.anthropic_api_key:
+        raise HTTPException(400, "Anthropic API key not configured")
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(req.project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    # Load findings to retest
+    findings_to_retest = []
+    for fid in req.finding_ids:
+        f = (await db.execute(
+            select(Finding).where(Finding.id == uuid.UUID(fid))
+        )).scalar_one_or_none()
+        if f:
+            findings_to_retest.append({
+                "id": str(f.id), "title": f.title, "severity": f.severity,
+                "affected_url": f.affected_url, "affected_parameter": f.affected_parameter or "",
+                "description": f.description or "", "request": f.request or "",
+                "response": f.response or "", "cwe_id": f.cwe_id or "",
+            })
+
+    if not findings_to_retest:
+        raise HTTPException(400, "No valid findings to retest")
+
+    target_url = req.target_url or project.application_url
+    scan_id = f"claude-retest-{uuid.uuid4().hex[:12]}"
+
+    from app.services.dast.runner import _dast_progress_set
+    import time
+    _dast_progress_set(scan_id, {
+        "status": "starting",
+        "project_id": req.project_id,
+        "target_url": target_url,
+        "current_phase": "verification",
+        "current_activity": f"Retesting {len(findings_to_retest)} findings...",
+        "last_updated": time.time(),
+    })
+
+    async def _retest_background():
+        import json
+        from app.services.dast.claude_agent import ClaudeDastAgent
+        from app.services.dast.claude_executor import ClaudeToolExecutor
+        from app.services.dast.runner import _dast_progress_set
+
+        # Load session context
+        session_context = None
+        try:
+            import redis as redis_lib
+            r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+            raw = r.get(f"claude:session:{req.project_id}")
+            if raw:
+                session_context = json.loads(raw)
+        except Exception:
+            pass
+
+        try:
+            agent = ClaudeDastAgent(
+                anthropic_api_key=settings.anthropic_api_key,
+                project_id=req.project_id,
+                scan_id=scan_id,
+                scan_mode="standard",
+                max_cost_usd=settings.claude_dast_max_cost_per_scan / 2,
+                max_api_calls=settings.claude_dast_max_api_calls // 2,
+            )
+            executor = ClaudeToolExecutor(
+                project_id=req.project_id,
+                scan_id=scan_id,
+                target_url=target_url,
+                scope_domain=target_url,
+            )
+            agent.set_executor(executor)
+            agent.set_progress_callback(lambda data: _dast_progress_set(scan_id, {
+                **data, "project_id": req.project_id, "target_url": target_url,
+            }))
+
+            result = await agent.retest_findings(
+                target_url=target_url,
+                findings_to_retest=findings_to_retest,
+                project_context={"project_name": project.application_name},
+                session_context=session_context,
+            )
+
+            # Update original findings based on retest results
+            async with AsyncSessionLocal() as db2:
+                for finding_result in result.get("findings", []):
+                    original_id = finding_result.get("original_finding_id")
+                    if not original_id:
+                        continue
+                    try:
+                        from datetime import datetime
+                        f = (await db2.execute(
+                            select(Finding).where(Finding.id == uuid.UUID(original_id))
+                        )).scalar_one_or_none()
+                        if f:
+                            retest_status = finding_result.get("retest_status", "not_fixed")
+                            f.recheck_status = retest_status
+                            f.recheck_date = datetime.utcnow()
+                            f.recheck_by = user.id
+                            f.recheck_notes = finding_result.get("retest_notes", "Retested by Claude AI")
+                            f.recheck_count = (f.recheck_count or 0) + 1
+                            history = f.recheck_history or []
+                            history.append({
+                                "date": datetime.utcnow().isoformat(),
+                                "status": retest_status,
+                                "notes": finding_result.get("retest_notes", ""),
+                                "by": "Claude AI",
+                                "evidence": finding_result.get("evidence", ""),
+                            })
+                            f.recheck_history = history
+                            if retest_status == "resolved":
+                                f.status = "fixed"
+                    except Exception as e:
+                        logger.warning("Retest finding update failed: %s", e)
+                await db2.commit()
+
+            _dast_progress_set(scan_id, {
+                "status": "completed",
+                "findings": result.get("findings", []),
+                "cost": result.get("cost", {}),
+                "duration_seconds": result.get("duration_seconds", 0),
+                "last_updated": time.time(),
+            })
+        except Exception as e:
+            logger.exception("Claude retest %s failed: %s", scan_id, e)
+            _dast_progress_set(scan_id, {"status": "error", "error": str(e)[:300], "last_updated": time.time()})
+
+    background.add_task(_retest_background)
+    return {"scan_id": scan_id, "status": "started", "findings_count": len(findings_to_retest)}
+
+
+@router.post("/claude/crawl")
+async def claude_crawl_only(
+    req: ClaudeCrawlOnlyRequest,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Run Claude AI crawl only (no testing)."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise HTTPException(400, "Anthropic API key not configured")
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(req.project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    target_url = req.target_url or project.application_url
+    scan_id = f"claude-crawl-{uuid.uuid4().hex[:12]}"
+
+    from app.services.dast.runner import _dast_progress_set
+    import time
+    _dast_progress_set(scan_id, {
+        "status": "starting",
+        "current_phase": "crawling",
+        "current_activity": "Starting AI crawl...",
+        "last_updated": time.time(),
+    })
+
+    async def _crawl_background():
+        import json
+        from app.services.dast.claude_agent import ClaudeDastAgent
+        from app.services.dast.claude_executor import ClaudeToolExecutor
+        from app.services.dast.claude_prompts import SYSTEM_PROMPT_CRAWL_ONLY
+        from app.services.dast.runner import _dast_progress_set
+        from app.models.claude_crawl_result import ClaudeCrawlResult
+
+        try:
+            agent = ClaudeDastAgent(
+                anthropic_api_key=settings.anthropic_api_key,
+                project_id=req.project_id,
+                scan_id=scan_id,
+                scan_mode="standard",
+                max_cost_usd=settings.claude_dast_max_cost_per_scan / 4,
+                max_api_calls=settings.claude_dast_max_api_calls // 4,
+            )
+            executor = ClaudeToolExecutor(
+                project_id=req.project_id,
+                scan_id=scan_id,
+                target_url=target_url,
+                scope_domain=target_url,
+            )
+            agent.set_executor(executor)
+            agent.set_progress_callback(lambda data: _dast_progress_set(scan_id, data))
+
+            system_prompt = SYSTEM_PROMPT_CRAWL_ONLY.format(
+                target_url=target_url,
+                include_subdomains=req.include_subdomains,
+            )
+            messages = [{"role": "user", "content": f"Crawl {target_url} comprehensively. Discover all pages, APIs, forms, JS files, hidden paths, and parameters."}]
+            messages = await agent._tool_use_loop(system_prompt, messages, max_iterations=100)
+
+            # Persist crawl results
+            async with AsyncSessionLocal() as db2:
+                crawl_record = ClaudeCrawlResult(
+                    project_id=uuid.UUID(req.project_id),
+                    scan_id=scan_id,
+                    crawled_pages=agent.crawl_results,
+                    total_pages=len(agent.crawl_results),
+                    duration_seconds=0,
+                )
+                db2.add(crawl_record)
+                await db2.commit()
+
+            _dast_progress_set(scan_id, {
+                "status": "completed",
+                "crawl_results": agent.crawl_results[:100],
+                "total_pages": len(agent.crawl_results),
+                "cost": agent.cost.to_dict(),
+                "last_updated": time.time(),
+            })
+        except Exception as e:
+            logger.exception("Claude crawl %s failed: %s", scan_id, e)
+            _dast_progress_set(scan_id, {"status": "error", "error": str(e)[:300], "last_updated": time.time()})
+
+    background.add_task(_crawl_background)
+    return {"scan_id": scan_id, "status": "started", "target_url": target_url}
+
+
+@router.get("/claude/crawl/{project_id}/results")
+async def claude_crawl_results(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Get AI crawl results for a project."""
+    from app.models.claude_crawl_result import ClaudeCrawlResult
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    results = (await db.execute(
+        select(ClaudeCrawlResult)
+        .where(ClaudeCrawlResult.project_id == uuid.UUID(project_id))
+        .order_by(desc(ClaudeCrawlResult.created_at))
+        .limit(5)
+    )).scalars().all()
+
+    return [
+        {
+            "id": str(r.id),
+            "scan_id": r.scan_id,
+            "crawled_pages": r.crawled_pages or [],
+            "api_endpoints": r.api_endpoints or [],
+            "js_files": r.js_files or [],
+            "subdomains": r.subdomains or [],
+            "hidden_paths": r.hidden_paths or [],
+            "hidden_parameters": r.hidden_parameters or [],
+            "forms_discovered": r.forms_discovered or [],
+            "technology_stack": r.technology_stack or {},
+            "attack_surface_summary": r.attack_surface_summary,
+            "sca_results": r.sca_results or [],
+            "secrets_found": r.secrets_found or [],
+            "total_pages": r.total_pages,
+            "total_endpoints": r.total_endpoints,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in results
+    ]
+
+
+@router.post("/claude/generate-checks")
+async def claude_generate_checks(
+    req: ClaudeGenerateChecksRequest,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Generate new test cases from Claude's analysis of the target."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise HTTPException(400, "Anthropic API key not configured")
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(req.project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    target_url = req.target_url or project.application_url
+    scan_id = f"claude-gen-{uuid.uuid4().hex[:12]}"
+
+    from app.services.dast.runner import _dast_progress_set
+    import time
+    _dast_progress_set(scan_id, {"status": "starting", "last_updated": time.time()})
+
+    async def _gen_background():
+        import json
+        from app.services.dast.claude_agent import ClaudeDastAgent
+        from app.services.dast.claude_executor import ClaudeToolExecutor
+        from app.services.dast.claude_prompts import SYSTEM_PROMPT_GENERATE_CHECKS
+        from app.services.dast.runner import _dast_progress_set
+
+        try:
+            agent = ClaudeDastAgent(
+                anthropic_api_key=settings.anthropic_api_key,
+                project_id=req.project_id,
+                scan_id=scan_id,
+                scan_mode="quick",
+                max_cost_usd=5.0,
+                max_api_calls=50,
+            )
+            executor = ClaudeToolExecutor(
+                project_id=req.project_id,
+                scan_id=scan_id,
+                target_url=target_url,
+                scope_domain=target_url,
+            )
+            agent.set_executor(executor)
+            agent.set_progress_callback(lambda data: _dast_progress_set(scan_id, data))
+
+            system_prompt = SYSTEM_PROMPT_GENERATE_CHECKS.format(target_url=target_url)
+            messages = [{"role": "user", "content": f"Analyze {target_url} and generate additional security test cases beyond our existing checks."}]
+            messages = await agent._tool_use_loop(system_prompt, messages, max_iterations=50)
+
+            _dast_progress_set(scan_id, {
+                "status": "completed",
+                "new_test_cases": agent.new_test_cases,
+                "total_generated": len(agent.new_test_cases),
+                "cost": agent.cost.to_dict(),
+                "last_updated": time.time(),
+            })
+        except Exception as e:
+            logger.exception("Claude generate checks %s failed: %s", scan_id, e)
+            _dast_progress_set(scan_id, {"status": "error", "error": str(e)[:300], "last_updated": time.time()})
+
+    background.add_task(_gen_background)
+    return {"scan_id": scan_id, "status": "started"}
+
+
+@router.get("/claude/session/{project_id}")
+async def claude_session_info(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Get Claude session info for a project (context summary, history)."""
+    import json
+    from app.core.config import get_settings
+    from app.models.claude_scan_session import ClaudeScanSession
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    # Redis session context
+    session_context = None
+    try:
+        import redis as redis_lib
+        settings = get_settings()
+        r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+        raw = r.get(f"claude:session:{project_id}")
+        if raw:
+            session_context = json.loads(raw)
+            # Don't expose raw messages to frontend
+            session_context.pop("messages", None)
+    except Exception:
+        pass
+
+    # Scan history from DB
+    history = (await db.execute(
+        select(ClaudeScanSession)
+        .where(ClaudeScanSession.project_id == uuid.UUID(project_id))
+        .order_by(desc(ClaudeScanSession.created_at))
+        .limit(20)
+    )).scalars().all()
+
+    return {
+        "has_session": session_context is not None,
+        "session_summary": session_context.get("summary") if session_context else None,
+        "last_scan_at": session_context.get("last_scan_at") if session_context else None,
+        "scan_history": [
+            {
+                "scan_id": s.scan_id,
+                "scan_mode": s.scan_mode,
+                "status": s.status,
+                "total_findings": s.total_findings,
+                "findings_by_severity": s.findings_by_severity or {},
+                "pages_crawled": s.pages_crawled,
+                "total_cost_usd": s.total_cost_usd,
+                "duration_seconds": s.duration_seconds,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in history
+        ],
+    }
+
+
+@router.delete("/claude/session/{project_id}")
+async def claude_session_clear(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Clear Claude session for a project (fresh start)."""
+    from app.core.config import get_settings
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    try:
+        import redis as redis_lib
+        settings = get_settings()
+        r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+        r.delete(f"claude:session:{project_id}")
+    except Exception:
+        pass
+
+    return {"status": "cleared", "project_id": project_id}
+
+
+@router.post("/claude/cost-estimate")
+async def claude_cost_estimate(
+    req: ClaudeCostEstimateRequest,
+    user=Depends(get_current_user),
+):
+    """Estimate cost before running a Claude scan."""
+    from app.services.dast.claude_cost import estimate_scan_cost
+    estimate = estimate_scan_cost(
+        scan_mode=req.scan_mode,
+        target_url=req.target_url,
+        include_subdomains=req.include_subdomains,
+    )
+    return estimate
+
+
+@router.get("/claude/history/{project_id}")
+async def claude_scan_history(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """All Claude DAST scan history for a project."""
+    from app.models.claude_scan_session import ClaudeScanSession
+
+    project = (await db.execute(
+        select(Project).where(Project.id == uuid.UUID(project_id))
+    )).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not await user_can_read_project(db, user, project):
+        raise HTTPException(403, "Access denied")
+
+    sessions = (await db.execute(
+        select(ClaudeScanSession)
+        .where(ClaudeScanSession.project_id == uuid.UUID(project_id))
+        .order_by(desc(ClaudeScanSession.created_at))
+        .limit(50)
+    )).scalars().all()
+
+    return [
+        {
+            "id": str(s.id),
+            "scan_id": s.scan_id,
+            "target_url": s.target_url,
+            "scan_mode": s.scan_mode,
+            "status": s.status,
+            "models_used": s.models_used or [],
+            "total_input_tokens": s.total_input_tokens,
+            "total_output_tokens": s.total_output_tokens,
+            "total_api_calls": s.total_api_calls,
+            "total_cost_usd": s.total_cost_usd,
+            "cost_breakdown": s.cost_breakdown or {},
+            "total_findings": s.total_findings,
+            "findings_by_severity": s.findings_by_severity or {},
+            "pages_crawled": s.pages_crawled,
+            "new_test_cases": s.new_test_cases,
+            "duration_seconds": s.duration_seconds,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        }
+        for s in sessions
+    ]
+
+
+@router.get("/claude/admin/usage")
+async def claude_admin_usage(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Super admin: organization-wide Claude usage stats."""
+    from app.models.claude_usage import ClaudeUsageTracking
+    from sqlalchemy import func
+
+    if not getattr(user, "is_superadmin", False):
+        raise HTTPException(403, "Super admin access required")
+
+    # Aggregate usage by organization
+    from datetime import datetime, timedelta
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    usage_q = await db.execute(
+        select(
+            ClaudeUsageTracking.organization_id,
+            func.count(ClaudeUsageTracking.id).label("total_calls"),
+            func.sum(ClaudeUsageTracking.input_tokens).label("total_input"),
+            func.sum(ClaudeUsageTracking.output_tokens).label("total_output"),
+            func.sum(ClaudeUsageTracking.cost_usd).label("total_cost"),
+        )
+        .where(ClaudeUsageTracking.created_at >= thirty_days_ago)
+        .group_by(ClaudeUsageTracking.organization_id)
+    )
+
+    usage_rows = usage_q.all()
+    by_org = []
+    total_cost = 0.0
+    for row in usage_rows:
+        cost = float(row.total_cost or 0)
+        total_cost += cost
+        by_org.append({
+            "organization_id": str(row.organization_id),
+            "total_calls": row.total_calls or 0,
+            "total_input_tokens": row.total_input or 0,
+            "total_output_tokens": row.total_output or 0,
+            "total_cost_usd": round(cost, 4),
+        })
+
+    # By model breakdown
+    model_q = await db.execute(
+        select(
+            ClaudeUsageTracking.model,
+            func.count(ClaudeUsageTracking.id).label("calls"),
+            func.sum(ClaudeUsageTracking.cost_usd).label("cost"),
+        )
+        .where(ClaudeUsageTracking.created_at >= thirty_days_ago)
+        .group_by(ClaudeUsageTracking.model)
+    )
+    by_model = {row.model: {"calls": row.calls, "cost": round(float(row.cost or 0), 4)} for row in model_q.all()}
+
+    return {
+        "period": "last_30_days",
+        "total_cost_usd": round(total_cost, 4),
+        "by_organization": by_org,
+        "by_model": by_model,
+    }
+
+
+# ── Admin Claude Settings (global + per-org) ───────────────────────────
+
+class ClaudeSettingsUpdate(BaseModel):
+    claude_enabled: bool | None = None
+    claude_monthly_budget_usd: float | None = None
+    claude_per_scan_limit_usd: float | None = None
+    claude_allowed_models: list[str] | None = None
+    claude_max_scans_per_day: int | None = None
+    claude_deep_scan_approval_required: bool | None = None
+    claude_dast_api_key: str | None = None  # Per-org Anthropic API key
+
+
+@router.get("/claude/admin/settings")
+async def claude_admin_settings_global(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Get global Claude DAST settings from app config."""
+    if not getattr(user, "is_superadmin", False):
+        raise HTTPException(403, "Super admin access required")
+    from app.core.config import get_settings
+    s = get_settings()
+    return {
+        "claude_dast_enabled": s.claude_dast_enabled,
+        "claude_dast_default_model": s.claude_dast_default_model,
+        "claude_dast_max_cost_per_scan": s.claude_dast_max_cost_per_scan,
+        "claude_dast_max_api_calls": s.claude_dast_max_api_calls,
+        "claude_dast_max_daily_scans": s.claude_dast_max_daily_scans,
+        "claude_dast_session_ttl_days": s.claude_dast_session_ttl_days,
+        "claude_dast_allowed_models": s.claude_dast_allowed_models.split(",") if s.claude_dast_allowed_models else [],
+    }
+
+
+@router.get("/claude/admin/settings/{org_id}")
+async def claude_admin_settings_org(
+    org_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Get per-org Claude DAST settings."""
+    if not getattr(user, "is_superadmin", False):
+        raise HTTPException(403, "Super admin access required")
+    from app.models.organization import Organization
+    result = await db.execute(select(Organization).where(Organization.id == org_id))
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(404, "Organization not found")
+    return {
+        "organization_id": str(org.id),
+        "name": org.name,
+        "claude_enabled": org.claude_enabled,
+        "claude_monthly_budget_usd": float(org.claude_monthly_budget_usd) if org.claude_monthly_budget_usd is not None else None,
+        "claude_per_scan_limit_usd": float(org.claude_per_scan_limit_usd) if org.claude_per_scan_limit_usd is not None else None,
+        "claude_allowed_models": org.claude_allowed_models or ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"],
+        "claude_max_scans_per_day": org.claude_max_scans_per_day,
+        "claude_deep_scan_approval_required": org.claude_deep_scan_approval_required,
+        "claude_dast_api_key_set": bool(org.claude_dast_api_key),
+        "claude_dast_api_key_preview": f"sk-...{org.claude_dast_api_key[-6:]}" if org.claude_dast_api_key else None,
+    }
+
+
+@router.patch("/claude/admin/settings/{org_id}")
+async def claude_admin_settings_org_update(
+    org_id: str,
+    req: ClaudeSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Update per-org Claude DAST settings."""
+    if not getattr(user, "is_superadmin", False):
+        raise HTTPException(403, "Super admin access required")
+    from app.models.organization import Organization
+    result = await db.execute(select(Organization).where(Organization.id == org_id))
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(404, "Organization not found")
+    if req.claude_enabled is not None:
+        org.claude_enabled = req.claude_enabled
+    if req.claude_monthly_budget_usd is not None:
+        org.claude_monthly_budget_usd = req.claude_monthly_budget_usd
+    if req.claude_per_scan_limit_usd is not None:
+        org.claude_per_scan_limit_usd = req.claude_per_scan_limit_usd
+    if req.claude_allowed_models is not None:
+        org.claude_allowed_models = req.claude_allowed_models
+    if req.claude_max_scans_per_day is not None:
+        org.claude_max_scans_per_day = req.claude_max_scans_per_day
+    if req.claude_deep_scan_approval_required is not None:
+        org.claude_deep_scan_approval_required = req.claude_deep_scan_approval_required
+    if req.claude_dast_api_key is not None:
+        org.claude_dast_api_key = req.claude_dast_api_key if req.claude_dast_api_key else None
+    await db.commit()
+    return {"status": "updated", "organization_id": org_id}

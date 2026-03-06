@@ -1,9 +1,9 @@
 """Projects API — with Redis caching and pagination for enterprise load."""
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, delete
 from app.core.database import get_db
-from app.api.auth import get_current_user
+from app.api.auth import get_current_user, require_super_admin
 from app.api.deps import validate_project_id
 from app.core.rbac import require_roles
 from app.services.project_permissions import (
@@ -24,6 +24,7 @@ from app.models.result import ProjectTestResult
 from app.models.category import Category
 from app.models.finding import Finding
 from app.models.dast_scan_result import DastScanResult
+from app.models.phase_completion import UserPhaseCompletion
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectUpdate, ProjectMemberCreate, ProjectMemberUpdate, ProjectMemberOut
 
 # Map DAST check_id to testing phase for progress overlay
@@ -778,4 +779,36 @@ async def remove_project_member(
         raise HTTPException(404, "Member not found")
     await db.delete(pm)
     await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    request: Request,
+    project_id: str,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a project and all its data (findings, results, members, etc.). Super_admin only."""
+    try:
+        pid = uuid.UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    result = await db.execute(select(Project).where(Project.id == pid))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    name = project.name
+    await db.execute(delete(Finding).where(Finding.project_id == pid))
+    await db.execute(delete(ProjectTestResult).where(ProjectTestResult.project_id == pid))
+    await db.execute(delete(UserPhaseCompletion).where(UserPhaseCompletion.project_id == pid))
+    await db.execute(delete(ProjectMember).where(ProjectMember.project_id == pid))
+    await db.execute(delete(Project).where(Project.id == pid))
+    await log_audit(db, "delete_project", user_id=str(current_user.id), resource_type="project", resource_id=project_id, details={"name": name}, ip_address=get_client_ip(request))
+    await db.commit()
+    try:
+        from app.services.cache_service import invalidate_project_list
+        await invalidate_project_list(str(current_user.id))
+    except Exception:
+        pass
     return {"ok": True}

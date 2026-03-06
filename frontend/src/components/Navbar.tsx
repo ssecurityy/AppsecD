@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon, Shield } from "lucide-react";
+import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon, Shield, Cpu } from "lucide-react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
@@ -49,6 +49,7 @@ export default function Navbar() {
       { href: "/admin/organizations", icon: Building2, label: "Orgs" },
       { href: "/admin/audit", icon: FileText, label: "Audit" },
       { href: "/admin/settings", icon: Settings, label: "Settings" },
+      { href: "/admin/ai-usage", icon: Cpu, label: "AI Usage" },
     ] : []),
   ];
 

@@ -1,5 +1,5 @@
 """Security finding model with vulnerability management."""
-from sqlalchemy import Column, String, Text, DateTime, Date, ForeignKey, Integer
+from sqlalchemy import Column, String, Text, DateTime, Date, ForeignKey, Integer, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from datetime import datetime
 import uuid
@@ -10,6 +10,7 @@ class Finding(Base):
     __tablename__ = "findings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    include_in_report = Column(Boolean, default=True, nullable=False)  # Toggle for report inclusion (DAST/manual)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
     test_result_id = Column(UUID(as_uuid=True), ForeignKey("project_test_results.id"), nullable=True)
     title = Column(Text, nullable=False)

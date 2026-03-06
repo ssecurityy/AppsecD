@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     webhook_url: str = ""  # Generic outgoing webhook
     cache_enabled: bool = True
 
+    # Claude DAST — AI-powered scanning
+    claude_dast_enabled: bool = True
+    claude_dast_default_model: str = "claude-sonnet-4-6"
+    claude_dast_max_cost_per_scan: float = 20.0
+    claude_dast_max_api_calls: int = 200
+    claude_dast_max_daily_scans: int = 50
+    claude_dast_session_ttl_days: int = 30
+    claude_dast_allowed_models: str = "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-6"
+
     # Enterprise: connection pool
     db_pool_size: int = 20
     db_max_overflow: int = 10

@@ -11,7 +11,8 @@ import {
   Cookie, Server, FileText, Folder, File, ExternalLink, Zap, Clock,
   Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput,
   History, Calendar, Filter, Search, LayoutGrid,
-  Bug, Key, Link2, Eye, EyeOff, Settings2, Activity, Radio, Hash, Braces
+  Bug, Key, Link2, Eye, EyeOff, Settings2, Activity, Radio, Hash, Braces,
+  Sparkles, Square, DollarSign, RotateCcw, Brain
 } from "lucide-react";
 import Link from "next/link";
 
@@ -62,7 +63,7 @@ export default function DastScanPage() {
   const [resultSearch, setResultSearch] = useState("");
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [dirsSectionExpanded, setDirsSectionExpanded] = useState(false);
-  const [dastActiveTab, setDastActiveTab] = useState<"results" | "directories" | "crawl">("results");
+  const [dastActiveTab, setDastActiveTab] = useState<"results" | "directories" | "crawl" | "claude">("results");
   const [ffufScanning, setFfufScanning] = useState<string | null>(null);
   const [ffufResults, setFfufResults] = useState<Record<string, { discovered: { path: string; status: number }[]; wordlist_used: string }>>({});
   const [ffufExhaustiveJobId, setFfufExhaustiveJobId] = useState<string | null>(null);
@@ -106,6 +107,20 @@ export default function DastScanPage() {
   const [aiCrawlAnalysisLoading, setAiCrawlAnalysisLoading] = useState(false);
   const [aiSuggestedChecks, setAiSuggestedChecks] = useState<any>(null);
   const [aiSuggestLoading, setAiSuggestLoading] = useState(false);
+
+  // Claude AI DAST state
+  const [claudeScanning, setClaudeScanning] = useState(false);
+  const [claudeScanId, setClaudeScanId] = useState<string | null>(null);
+  const [claudeProgress, setClaudeProgress] = useState<any>(null);
+  const [claudeScanMode, setClaudeScanMode] = useState<"quick" | "standard" | "deep">("standard");
+  const [claudeIncludeSubdomains, setClaudeIncludeSubdomains] = useState(false);
+  const [claudeSession, setClaudeSession] = useState<any>(null);
+  const [claudeHistory, setClaudeHistory] = useState<any[]>([]);
+  const [claudeCostEstimate, setClaudeCostEstimate] = useState<any>(null);
+  const [claudeCrawlResults, setClaudeCrawlResults] = useState<any[]>([]);
+  const [claudeActiveSubTab, setClaudeActiveSubTab] = useState<"dashboard" | "crawled" | "history" | "session">("dashboard");
+  const [claudeCrawlSubTab, setClaudeCrawlSubTab] = useState<"pages" | "apis" | "hidden_paths" | "hidden_params" | "forms" | "subdomains" | "js_analysis" | "sca" | "technology" | "attack_surface">("pages");
+  const claudePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   type PathItem = { path: string; status: number };
   const buildPathTree = (items: PathItem[]): { name: string; fullPath: string; status?: number; children: any[]; isFile: boolean } => {
@@ -961,6 +976,27 @@ export default function DastScanPage() {
                 Spider / Crawl
                 {crawlResult?.stats?.total_urls > 0 && (
                   <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: dastActiveTab === "crawl" ? "rgba(255,255,255,0.25)" : "rgba(124,58,237,0.2)", color: "inherit" }}>{crawlResult.stats.total_urls}</span>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setDastActiveTab("claude");
+                  if (!claudeSession && id) {
+                    api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
+                    api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
+                    api.claudeDastCostEstimate({ scan_mode: claudeScanMode, target_url: project?.application_url || "" }).then(setClaudeCostEstimate).catch(() => {});
+                  }
+                }}
+                className={`flex-shrink-0 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${dastActiveTab === "claude" ? "text-white" : ""}`}
+                style={{
+                  background: dastActiveTab === "claude" ? "linear-gradient(135deg, #d97706 0%, #ea580c 100%)" : "transparent",
+                  color: dastActiveTab === "claude" ? "white" : "var(--text-secondary)",
+                }}
+              >
+                <Brain className="w-4 h-4" />
+                Claude AI DAST
+                {claudeScanning && (
+                  <Loader2 className="w-3 h-3 animate-spin" />
                 )}
               </button>
             </div>
@@ -2009,11 +2045,678 @@ export default function DastScanPage() {
               )}
             </div>
             </>
+            ) : dastActiveTab === "claude" ? (
+            <div className="space-y-4">
+              {/* Claude AI DAST Dashboard */}
+              <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                <div className="p-4 space-y-4">
+                  {/* Header */}
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div className="flex items-center gap-2">
+                      <Brain className="w-5 h-5" style={{ color: "#d97706" }} />
+                      <span className="font-semibold" style={{ color: "var(--text-primary)" }}>Claude AI Pentester</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: "rgba(217,119,6,0.2)", color: "#f59e0b" }}>AI-Native DAST</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {claudeSession?.has_session && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e" }}>
+                          Session Active ({claudeSession.scan_count || 0} scans)
+                        </span>
+                      )}
+                      {claudeSession?.has_session && (
+                        <button
+                          onClick={async () => {
+                            if (confirm("Clear session context? This removes all accumulated knowledge for this project.")) {
+                              await api.claudeDastSessionClear(id as string);
+                              setClaudeSession(null);
+                              toast.success("Session cleared");
+                            }
+                          }}
+                          className="text-[10px] px-2 py-0.5 rounded-full hover:opacity-80"
+                          style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}
+                        >
+                          Clear Context
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Scan Configuration */}
+                  {!claudeScanning && (
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div>
+                        <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Scan Mode</label>
+                        <select
+                          value={claudeScanMode}
+                          onChange={(e) => {
+                            const mode = e.target.value as "quick" | "standard" | "deep";
+                            setClaudeScanMode(mode);
+                            api.claudeDastCostEstimate({ scan_mode: mode, target_url: project?.application_url || "" }).then(setClaudeCostEstimate).catch(() => {});
+                          }}
+                          className="rounded-lg px-3 py-1.5 text-sm"
+                          style={{ background: "var(--bg-elevated)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                        >
+                          <option value="quick">Quick ($)</option>
+                          <option value="standard">Standard ($$)</option>
+                          <option value="deep">Deep ($$$)</option>
+                        </select>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: "var(--text-secondary)" }}>
+                        <input type="checkbox" checked={claudeIncludeSubdomains} onChange={(e) => setClaudeIncludeSubdomains(e.target.checked)} />
+                        Include Subdomains
+                      </label>
+                      {claudeCostEstimate && (
+                        <span className="text-[10px] px-2 py-1 rounded-lg" style={{ background: "rgba(217,119,6,0.1)", color: "#d97706" }}>
+                          <DollarSign className="w-3 h-3 inline" />
+                          Est. ${(claudeCostEstimate.estimated_cost_low_usd ?? 0).toFixed(2)} - ${(claudeCostEstimate.estimated_cost_high_usd ?? 0).toFixed(2)}
+                        </span>
+                      )}
+                      <button
+                        onClick={async () => {
+                          setClaudeScanning(true);
+                          try {
+                            const res = await api.claudeDastScan({
+                              project_id: id as string,
+                              scan_mode: claudeScanMode,
+                              include_subdomains: claudeIncludeSubdomains,
+                            });
+                            setClaudeScanId(res.scan_id);
+                            toast.success("Claude AI scan started");
+                            const poll = async () => {
+                              try {
+                                const prog = await api.claudeDastScanProgress(res.scan_id);
+                                setClaudeProgress(prog);
+                                if (prog.status === "completed" || prog.status === "error" || prog.status === "stopped") {
+                                  if (claudePollRef.current) clearInterval(claudePollRef.current);
+                                  setClaudeScanning(false);
+                                  if (prog.status === "completed") {
+                                    toast.success(`Scan complete: ${prog.total_findings || 0} findings`);
+                                    api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
+                                    api.claudeDastCrawlResults(id as string).then(setClaudeCrawlResults).catch(() => {});
+                                  } else if (prog.status === "error") {
+                                    toast.error(prog.error || "Scan failed");
+                                  }
+                                }
+                              } catch { /* polling continues */ }
+                            };
+                            claudePollRef.current = setInterval(poll, 2000);
+                            poll();
+                          } catch (e: any) {
+                            toast.error(e.message || "Failed to start scan");
+                            setClaudeScanning(false);
+                          }
+                        }}
+                        disabled={claudeScanning}
+                        className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-medium text-white"
+                        style={{ background: "linear-gradient(135deg, #d97706 0%, #ea580c 100%)" }}
+                      >
+                        <Play className="w-4 h-4" /> Start AI Scan
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Live Progress */}
+                  {claudeScanning && claudeProgress && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" style={{ color: "#d97706" }} />
+                          <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                            {claudeProgress.current_phase || "Running"}
+                          </span>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            if (claudeScanId) {
+                              await api.claudeDastScanStop(claudeScanId);
+                              toast.success("Scan stop requested");
+                            }
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 rounded text-xs"
+                          style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}
+                        >
+                          <Square className="w-3 h-3" /> Stop
+                        </button>
+                      </div>
+                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                        {claudeProgress.current_activity || "Processing..."}
+                      </p>
+                      <div className="flex flex-wrap gap-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+                        <span>{claudeProgress.pages_crawled || 0} pages</span>
+                        <span>{claudeProgress.findings_so_far || 0} findings</span>
+                        {claudeProgress.cost && <span>${(claudeProgress.cost.total_cost_usd || 0).toFixed(2)} cost</span>}
+                      </div>
+                      {claudeProgress.findings_by_severity && (
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(claudeProgress.findings_by_severity as Record<string, number>).filter(([, v]) => v > 0).map(([sev, count]) => (
+                            <span key={sev} className="text-[10px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: `${SEVERITY_COLORS[sev]}22`, color: SEVERITY_COLORS[sev] }}>
+                              {count} {sev}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {claudeProgress.activity_log && claudeProgress.activity_log.length > 0 && (
+                        <div className="max-h-40 overflow-y-auto space-y-1 rounded-lg p-2" style={{ background: "var(--bg-elevated)" }}>
+                          {(claudeProgress.activity_log as any[]).slice(-10).reverse().map((entry: any, i: number) => (
+                            <div key={i} className="flex items-start gap-2 text-[10px]" style={{ color: entry.type === "finding" ? "#22c55e" : entry.type === "tool" ? "#3b82f6" : "var(--text-secondary)" }}>
+                              <span style={{ opacity: 0.5 }}>{new Date(entry.ts * 1000).toLocaleTimeString()}</span>
+                              <span>{entry.msg}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {claudeProgress.pending_pentest_options && (claudeProgress.pending_pentest_options as any[]).filter((o: any) => !o.user_selected).length > 0 && (
+                        <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.2)" }}>
+                          <span className="text-xs font-medium" style={{ color: "#d97706" }}>Penetration Options Available</span>
+                          {(claudeProgress.pending_pentest_options as any[]).filter((o: any) => !o.user_selected).map((opt: any, i: number) => (
+                            <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+                              <span style={{ color: "var(--text-primary)" }}>{opt.title || opt.description}</span>
+                              {(opt.options || []).map((action: string, j: number) => (
+                                <button
+                                  key={j}
+                                  onClick={async () => {
+                                    if (claudeScanId) {
+                                      await api.claudeDastPentestOption(claudeScanId, { option_id: opt.option_id || String(i), selected_action: action });
+                                      toast.success(`Selected: ${action}`);
+                                    }
+                                  }}
+                                  className="px-2 py-0.5 rounded text-[10px]"
+                                  style={{ background: "rgba(217,119,6,0.15)", color: "#f59e0b" }}
+                                >
+                                  {action}
+                                </button>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Sub-tabs */}
+              <div className="flex gap-1 p-1 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                {(["dashboard", "crawled", "history", "session"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => {
+                      setClaudeActiveSubTab(tab);
+                      if (tab === "crawled" && claudeCrawlResults.length === 0 && id) api.claudeDastCrawlResults(id as string).then(setClaudeCrawlResults).catch(() => {});
+                      if (tab === "history" && claudeHistory.length === 0 && id) api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
+                      if (tab === "session" && !claudeSession && id) api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
+                    }}
+                    className="px-3 py-1.5 rounded-md text-xs font-medium"
+                    style={{
+                      background: claudeActiveSubTab === tab ? "rgba(217,119,6,0.2)" : "transparent",
+                      color: claudeActiveSubTab === tab ? "#f59e0b" : "var(--text-secondary)",
+                    }}
+                  >
+                    {tab === "dashboard" ? "Dashboard" : tab === "crawled" ? "AI Crawled" : tab === "history" ? "Scan History" : "Session"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Dashboard — latest scan results summary */}
+              {claudeActiveSubTab === "dashboard" && claudeProgress && claudeProgress.status === "completed" && (
+                <div className="rounded-xl p-4 space-y-3" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle className="w-4 h-4" style={{ color: "#22c55e" }} />
+                    <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Scan Complete</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      { label: "Findings", value: claudeProgress.total_findings || 0 },
+                      { label: "Pages Crawled", value: claudeProgress.pages_crawled || 0 },
+                      { label: "Cost", value: `$${(claudeProgress.cost?.total_cost_usd || 0).toFixed(2)}` },
+                      { label: "Duration", value: `${claudeProgress.duration_seconds || 0}s` },
+                    ].map((stat) => (
+                      <div key={stat.label} className="rounded-lg p-3 text-center" style={{ background: "var(--bg-elevated)" }}>
+                        <div className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>{stat.value}</div>
+                        <div className="text-[10px]" style={{ color: "var(--text-secondary)" }}>{stat.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* AI Crawled — Full Sub-Tabs */}
+              {claudeActiveSubTab === "crawled" && (
+                <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                  <div className="p-4 space-y-3">
+                    {claudeCrawlResults.length === 0 ? (
+                      <div className="text-center py-8">
+                        <Globe className="w-8 h-8 mx-auto mb-2" style={{ color: "var(--text-secondary)", opacity: 0.5 }} />
+                        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>No AI crawl results yet. Run a Claude AI scan to discover pages.</p>
+                      </div>
+                    ) : (() => {
+                      const cr = claudeCrawlResults[0];
+                      const crawlSubTabs = [
+                        { id: "pages" as const, label: "Pages", count: cr.total_pages || (cr.crawled_pages || []).length },
+                        { id: "apis" as const, label: "APIs", count: (cr.api_endpoints || []).length },
+                        { id: "hidden_paths" as const, label: "Hidden Paths", count: (cr.hidden_paths || []).length },
+                        { id: "hidden_params" as const, label: "Hidden Params", count: (cr.hidden_parameters || []).length },
+                        { id: "forms" as const, label: "Forms", count: (cr.forms_discovered || []).length },
+                        { id: "subdomains" as const, label: "Subdomains", count: (cr.subdomains || []).length },
+                        { id: "js_analysis" as const, label: "JS Analysis", count: (cr.js_files || []).length },
+                        { id: "sca" as const, label: "SCA", count: (cr.sca_results || []).length },
+                        { id: "technology" as const, label: "Technology", count: Object.keys(cr.technology_stack || {}).length },
+                        { id: "attack_surface" as const, label: "Attack Surface", count: cr.attack_surface_summary ? 1 : 0 },
+                      ];
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 text-[10px]" style={{ color: "var(--text-secondary)" }}>
+                            Scan: {cr.scan_id} | {cr.total_pages || 0} pages | {cr.total_endpoints || 0} endpoints | {cr.total_parameters || 0} params | {cr.duration_seconds || 0}s
+                          </div>
+                          {/* Crawl Sub-Tab Bar */}
+                          <div className="flex gap-1 flex-wrap">
+                            {crawlSubTabs.map((st) => (
+                              <button
+                                key={st.id}
+                                onClick={() => setClaudeCrawlSubTab(st.id)}
+                                className="px-2 py-1 rounded text-[10px] font-medium transition-all"
+                                style={{
+                                  background: claudeCrawlSubTab === st.id ? "rgba(217,119,6,0.2)" : "var(--bg-elevated)",
+                                  color: claudeCrawlSubTab === st.id ? "#f59e0b" : "var(--text-secondary)",
+                                  border: claudeCrawlSubTab === st.id ? "1px solid rgba(217,119,6,0.3)" : "1px solid transparent",
+                                }}
+                              >
+                                {st.label} {st.count > 0 && <span className="ml-0.5 opacity-70">({st.count})</span>}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Pages */}
+                          {claudeCrawlSubTab === "pages" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-1">
+                              {(cr.crawled_pages || []).slice(0, 200).map((page: any, pi: number) => (
+                                <details key={pi} className="rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <summary className="flex items-center gap-2 text-xs p-2 cursor-pointer">
+                                    <span className="px-1 py-0.5 rounded text-[10px] font-mono" style={{ background: (page.status_code || 200) < 400 ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", color: (page.status_code || 200) < 400 ? "#22c55e" : "#ef4444" }}>
+                                      {page.status_code || 200}
+                                    </span>
+                                    <span className="px-1 py-0.5 rounded text-[10px] font-mono" style={{ background: "rgba(59,130,246,0.1)", color: "#3b82f6" }}>{page.method || "GET"}</span>
+                                    <span className="truncate" style={{ color: "var(--text-primary)" }}>{page.url || page.path}</span>
+                                    {page.content_type && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--text-secondary)" }}>{page.content_type}</span>}
+                                  </summary>
+                                  <div className="px-3 pb-2 space-y-2">
+                                    {page.technology_detected && page.technology_detected.length > 0 && (
+                                      <div className="flex flex-wrap gap-1">
+                                        {(page.technology_detected as string[]).map((t: string, ti: number) => (
+                                          <span key={ti} className="text-[10px] px-1 py-0.5 rounded" style={{ background: "rgba(139,92,246,0.1)", color: "#8b5cf6" }}>{t}</span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {page.forms && page.forms.length > 0 && <div className="text-[10px]" style={{ color: "#f59e0b" }}>Forms: {page.forms.length}</div>}
+                                    {page.links && <div className="text-[10px]" style={{ color: "var(--text-secondary)" }}>Links: {page.links.length}</div>}
+                                    {page.interesting_findings && page.interesting_findings.length > 0 && (
+                                      <div className="space-y-0.5">
+                                        {(page.interesting_findings as string[]).map((f: string, fi: number) => (
+                                          <div key={fi} className="text-[10px] px-1.5 py-1 rounded" style={{ background: "rgba(239,68,68,0.06)", color: "#f87171" }}>{f}</div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {page.response_body_preview && (
+                                      <pre className="text-[10px] p-2 rounded overflow-x-auto max-h-32" style={{ background: "var(--bg-primary)", color: "var(--text-secondary)" }}>
+                                        {page.response_body_preview}
+                                      </pre>
+                                    )}
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* API Endpoints */}
+                          {claudeCrawlSubTab === "apis" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-1">
+                              {(cr.api_endpoints || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No API endpoints discovered</p>
+                              ) : (cr.api_endpoints as any[]).map((ep: any, ei: number) => (
+                                <div key={ei} className="p-2.5 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold" style={{ background: "rgba(59,130,246,0.15)", color: "#3b82f6" }}>{ep.method || "GET"}</span>
+                                    <span className="text-xs font-mono truncate" style={{ color: "var(--text-primary)" }}>{ep.url}</span>
+                                    {ep.auth_required && <span className="text-[10px] px-1 py-0.5 rounded ml-auto" style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444" }}>Auth</span>}
+                                  </div>
+                                  {ep.params && ep.params.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                      {(ep.params as string[]).map((p: string, pi: number) => (
+                                        <span key={pi} className="text-[10px] px-1 py-0.5 rounded font-mono" style={{ background: "rgba(34,197,94,0.1)", color: "#22c55e" }}>{p}</span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {ep.schema && <div className="text-[10px] mt-1" style={{ color: "var(--text-secondary)" }}>Schema: {typeof ep.schema === "string" ? ep.schema : JSON.stringify(ep.schema).slice(0, 120)}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Hidden Paths */}
+                          {claudeCrawlSubTab === "hidden_paths" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-1">
+                              {(cr.hidden_paths || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No hidden paths discovered</p>
+                              ) : (cr.hidden_paths as any[]).map((hp: any, hi: number) => (
+                                <div key={hi} className="flex items-center gap-2 p-2 rounded-lg text-xs" style={{ background: "var(--bg-elevated)" }}>
+                                  <span className="px-1 py-0.5 rounded text-[10px] font-mono" style={{ background: hp.status < 400 ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", color: hp.status < 400 ? "#22c55e" : "#ef4444" }}>
+                                    {hp.status}
+                                  </span>
+                                  <span className="font-mono truncate" style={{ color: "var(--text-primary)" }}>{hp.path}</span>
+                                  <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--text-secondary)" }}>{hp.how_found || hp.wordlist_used || ""}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Hidden Parameters */}
+                          {claudeCrawlSubTab === "hidden_params" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-1">
+                              {(cr.hidden_parameters || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No hidden parameters discovered</p>
+                              ) : (cr.hidden_parameters as any[]).map((hp: any, hi: number) => (
+                                <div key={hi} className="p-2 rounded-lg text-xs" style={{ background: "var(--bg-elevated)" }}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono font-bold" style={{ color: "#f59e0b" }}>{hp.param}</span>
+                                    <span className="text-[10px] px-1 py-0.5 rounded" style={{ background: "rgba(139,92,246,0.1)", color: "#8b5cf6" }}>{hp.type || "query"}</span>
+                                  </div>
+                                  <div className="text-[10px] mt-0.5" style={{ color: "var(--text-secondary)" }}>
+                                    {hp.url} {hp.how_found && <span>| Found via: {hp.how_found}</span>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Forms */}
+                          {claudeCrawlSubTab === "forms" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-2">
+                              {(cr.forms_discovered || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No forms discovered</p>
+                              ) : (cr.forms_discovered as any[]).map((form: any, fi: number) => (
+                                <div key={fi} className="p-3 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold" style={{ background: "rgba(217,119,6,0.15)", color: "#d97706" }}>{form.method || "POST"}</span>
+                                    <span className="text-xs font-mono truncate" style={{ color: "var(--text-primary)" }}>{form.action || form.url}</span>
+                                  </div>
+                                  <div className="text-[10px] mb-1" style={{ color: "var(--text-secondary)" }}>Page: {form.url}</div>
+                                  {form.fields && form.fields.length > 0 && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {(form.fields as any[]).map((field: any, ffi: number) => (
+                                        <span key={ffi} className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "rgba(59,130,246,0.08)", color: "#3b82f6" }}>
+                                          {field.name || field}: {field.type || "text"}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Subdomains */}
+                          {claudeCrawlSubTab === "subdomains" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-1">
+                              {(cr.subdomains || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No subdomains discovered</p>
+                              ) : (cr.subdomains as any[]).map((sd: any, si: number) => (
+                                <div key={si} className="p-2 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-mono font-medium" style={{ color: "var(--text-primary)" }}>{sd.subdomain}</span>
+                                    {sd.ip && <span className="text-[10px] font-mono" style={{ color: "var(--text-secondary)" }}>{sd.ip}</span>}
+                                    {sd.status && (
+                                      <span className="text-[10px] px-1 py-0.5 rounded ml-auto" style={{ background: sd.status === "active" ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", color: sd.status === "active" ? "#22c55e" : "#ef4444" }}>
+                                        {sd.status}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {sd.technologies && sd.technologies.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                      {(sd.technologies as string[]).map((t: string, ti: number) => (
+                                        <span key={ti} className="text-[10px] px-1 py-0.5 rounded" style={{ background: "rgba(139,92,246,0.1)", color: "#8b5cf6" }}>{t}</span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* JS Analysis */}
+                          {claudeCrawlSubTab === "js_analysis" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-2">
+                              {(cr.js_files || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No JavaScript files analyzed</p>
+                              ) : (cr.js_files as any[]).map((js: any, ji: number) => (
+                                <details key={ji} className="rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <summary className="p-2.5 cursor-pointer text-xs">
+                                    <span className="font-mono" style={{ color: "var(--text-primary)" }}>{js.url}</span>
+                                    <span className="ml-2 text-[10px]" style={{ color: "var(--text-secondary)" }}>{js.size ? `${(js.size / 1024).toFixed(0)}KB` : ""}</span>
+                                    {(js.secrets || []).length > 0 && <span className="ml-2 text-[10px] px-1 py-0.5 rounded" style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>{js.secrets.length} secrets</span>}
+                                    {(js.endpoints_found || []).length > 0 && <span className="ml-1 text-[10px] px-1 py-0.5 rounded" style={{ background: "rgba(59,130,246,0.1)", color: "#3b82f6" }}>{js.endpoints_found.length} endpoints</span>}
+                                  </summary>
+                                  <div className="px-3 pb-3 space-y-2">
+                                    {(js.secrets || []).length > 0 && (
+                                      <div>
+                                        <div className="text-[10px] font-medium mb-1" style={{ color: "#ef4444" }}>Secrets</div>
+                                        {(js.secrets as any[]).map((s: any, si: number) => (
+                                          <div key={si} className="text-[10px] p-1 rounded mb-0.5" style={{ background: "rgba(239,68,68,0.06)" }}>
+                                            <span style={{ color: "#ef4444" }}>{typeof s === "string" ? s : s.type || "secret"}</span>
+                                            {s.value_preview && <span style={{ color: "var(--text-secondary)" }}> — {s.value_preview}</span>}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {(js.endpoints_found || []).length > 0 && (
+                                      <div>
+                                        <div className="text-[10px] font-medium mb-1" style={{ color: "#3b82f6" }}>Endpoints Found</div>
+                                        <div className="flex flex-wrap gap-1">
+                                          {(js.endpoints_found as string[]).map((ep: string, ei: number) => (
+                                            <span key={ei} className="text-[10px] px-1 py-0.5 rounded font-mono" style={{ background: "rgba(59,130,246,0.08)", color: "#3b82f6" }}>{ep}</span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {(js.libraries || []).length > 0 && (
+                                      <div>
+                                        <div className="text-[10px] font-medium mb-1" style={{ color: "#22c55e" }}>Libraries</div>
+                                        <div className="flex flex-wrap gap-1">
+                                          {(js.libraries as any[]).map((lib: any, li: number) => (
+                                            <span key={li} className="text-[10px] px-1 py-0.5 rounded" style={{ background: "rgba(34,197,94,0.08)", color: "#22c55e" }}>
+                                              {typeof lib === "string" ? lib : `${lib.name}${lib.version ? `@${lib.version}` : ""}`}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* SCA */}
+                          {claudeCrawlSubTab === "sca" && (
+                            <div className="max-h-[500px] overflow-y-auto space-y-2">
+                              {(cr.sca_results || []).length === 0 ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No SCA results. Libraries found in JS Analysis tab may have version info.</p>
+                              ) : (cr.sca_results as any[]).map((sca: any, si: number) => (
+                                <div key={si} className="p-2.5 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{sca.library || sca.name}</span>
+                                    {sca.version && <span className="text-[10px] font-mono" style={{ color: "var(--text-secondary)" }}>v{sca.version}</span>}
+                                    {sca.severity && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded ml-auto" style={{
+                                        background: sca.severity === "critical" ? "rgba(239,68,68,0.15)" : sca.severity === "high" ? "rgba(249,115,22,0.15)" : "rgba(234,179,8,0.15)",
+                                        color: sca.severity === "critical" ? "#ef4444" : sca.severity === "high" ? "#f97316" : "#eab308",
+                                      }}>
+                                        {sca.severity}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {sca.cve && <div className="text-[10px] font-mono mt-1" style={{ color: "#ef4444" }}>{Array.isArray(sca.cve) ? sca.cve.join(", ") : sca.cve}</div>}
+                                  {sca.description && <div className="text-[10px] mt-1" style={{ color: "var(--text-secondary)" }}>{sca.description}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Technology Stack */}
+                          {claudeCrawlSubTab === "technology" && (
+                            <div className="space-y-3">
+                              {(!cr.technology_stack || Object.keys(cr.technology_stack).length === 0) ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No technology stack detected yet</p>
+                              ) : (
+                                <div className="grid grid-cols-2 gap-2">
+                                  {Object.entries(cr.technology_stack as Record<string, string>).map(([key, val]) => (
+                                    <div key={key} className="p-3 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                      <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: "var(--text-secondary)" }}>{key}</div>
+                                      <div className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{val || "Unknown"}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Attack Surface */}
+                          {claudeCrawlSubTab === "attack_surface" && (
+                            <div className="space-y-3">
+                              {!cr.attack_surface_summary ? (
+                                <p className="text-xs py-4 text-center" style={{ color: "var(--text-secondary)" }}>No attack surface analysis available</p>
+                              ) : (
+                                <div className="p-4 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                                  <div className="text-xs font-medium mb-2" style={{ color: "#d97706" }}>AI Attack Surface Analysis</div>
+                                  <div className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: "var(--text-primary)" }}>{cr.attack_surface_summary}</div>
+                                </div>
+                              )}
+                              {/* Quick stats */}
+                              <div className="grid grid-cols-3 gap-2">
+                                {[
+                                  { label: "Pages", value: cr.total_pages || 0 },
+                                  { label: "Endpoints", value: cr.total_endpoints || 0 },
+                                  { label: "Parameters", value: cr.total_parameters || 0 },
+                                  { label: "Forms", value: cr.total_forms || 0 },
+                                  { label: "JS Files", value: cr.total_js_files || 0 },
+                                  { label: "Subdomains", value: cr.total_subdomains || 0 },
+                                ].map((s) => (
+                                  <div key={s.label} className="p-2 rounded-lg text-center" style={{ background: "var(--bg-elevated)" }}>
+                                    <div className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>{s.value}</div>
+                                    <div className="text-[10px]" style={{ color: "var(--text-secondary)" }}>{s.label}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/* History */}
+              {claudeActiveSubTab === "history" && (
+                <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                  <div className="p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4" style={{ color: "#d97706" }} />
+                      <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Claude Scan History</span>
+                    </div>
+                    {claudeHistory.length === 0 ? (
+                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>No Claude AI scans yet for this project.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {claudeHistory.map((s: any, i: number) => (
+                          <div key={i} className="flex items-center justify-between p-3 rounded-lg" style={{ background: "var(--bg-elevated)" }}>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{s.scan_mode} scan</span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full"
+                                  style={{ background: s.status === "completed" ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)", color: s.status === "completed" ? "#22c55e" : "#ef4444" }}
+                                >
+                                  {s.status}
+                                </span>
+                              </div>
+                              <div className="flex gap-3 text-[10px]" style={{ color: "var(--text-secondary)" }}>
+                                <span>{s.total_findings} findings</span>
+                                <span>{s.pages_crawled} pages</span>
+                                <span>${(s.total_cost_usd || 0).toFixed(2)}</span>
+                                <span>{s.duration_seconds}s</span>
+                              </div>
+                            </div>
+                            <div className="text-[10px]" style={{ color: "var(--text-secondary)" }}>
+                              {s.created_at ? new Date(s.created_at).toLocaleDateString() : ""}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Session */}
+              {claudeActiveSubTab === "session" && (
+                <div className="rounded-xl overflow-hidden" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                  <div className="p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4" style={{ color: "#d97706" }} />
+                      <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Session Context</span>
+                    </div>
+                    {!claudeSession?.has_session ? (
+                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>No active session. Context will be created on first Claude AI scan.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="rounded-lg p-2.5" style={{ background: "var(--bg-elevated)" }}>
+                            <div className="text-[10px]" style={{ color: "var(--text-secondary)" }}>Scans</div>
+                            <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{claudeSession.scan_count || 0}</div>
+                          </div>
+                          <div className="rounded-lg p-2.5" style={{ background: "var(--bg-elevated)" }}>
+                            <div className="text-[10px]" style={{ color: "var(--text-secondary)" }}>Endpoints Discovered</div>
+                            <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{claudeSession.discovered_endpoints_count || 0}</div>
+                          </div>
+                        </div>
+                        {claudeSession.technology_stack && Object.keys(claudeSession.technology_stack).length > 0 && (
+                          <div>
+                            <div className="text-[10px] mb-1" style={{ color: "var(--text-secondary)" }}>Detected Technology</div>
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(claudeSession.technology_stack as Record<string, string>).map(([k, v]) => (
+                                <span key={k} className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(59,130,246,0.15)", color: "#3b82f6" }}>
+                                  {k}: {v}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {claudeSession.waf_detected && (
+                          <div className="text-xs" style={{ color: "#f59e0b" }}>WAF Detected: {claudeSession.waf_detected}</div>
+                        )}
+                        {claudeSession.interesting_behaviors && claudeSession.interesting_behaviors.length > 0 && (
+                          <div>
+                            <div className="text-[10px] mb-1" style={{ color: "var(--text-secondary)" }}>Interesting Behaviors</div>
+                            <div className="space-y-1">
+                              {(claudeSession.interesting_behaviors as string[]).map((b: string, i: number) => (
+                                <div key={i} className="text-xs p-1.5 rounded" style={{ background: "rgba(217,119,6,0.08)", color: "#d97706" }}>{b}</div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {claudeSession.summary && (
+                          <div className="text-xs" style={{ color: "var(--text-secondary)" }}>{claudeSession.summary}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             ) : null}
           </div>
         )}
 
-        {!scanResult && !scanning && dastActiveTab !== "crawl" && (
+        {!scanResult && !scanning && dastActiveTab !== "crawl" && dastActiveTab !== "claude" && (
           <div className="text-center py-16 rounded-xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
             <Shield className="w-12 h-12 mx-auto mb-3" style={{ color: "var(--text-secondary)", opacity: 0.5 }} />
             <p className="font-medium" style={{ color: "var(--text-primary)" }}>Ready to Scan</p>

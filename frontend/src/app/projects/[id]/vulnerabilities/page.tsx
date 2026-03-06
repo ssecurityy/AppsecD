@@ -11,6 +11,7 @@ import {
   ArrowLeft, Shield, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle,
   ChevronDown, ChevronUp, FileDown, Filter, RefreshCw, CheckCircle2, XCircle,
   Calendar, User, MessageSquare, History, ExternalLink, Square, CheckSquare, Loader2,
+  FileText, FileX,
 } from "lucide-react";
 
 const RECHECK_STATUSES = [
@@ -39,12 +40,17 @@ function getRecheckConfig(status: string) {
 function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }: { finding: any; onUpdate: () => void; selectable?: boolean; selected?: boolean; onToggleSelect?: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [includeInReport, setIncludeInReport] = useState(finding.include_in_report !== false);
   const [recheckNotes, setRecheckNotes] = useState("");
   const [newStatus, setNewStatus] = useState(finding.recheck_status || "pending");
   const [showHistory, setShowHistory] = useState(false);
 
   const rc = getRecheckConfig(finding.recheck_status || "pending");
   const RcIcon = rc.icon;
+
+  useEffect(() => {
+    setIncludeInReport(finding.include_in_report !== false);
+  }, [finding.id, finding.include_in_report]);
 
   const handleRecheck = async () => {
     if (!newStatus) return;
@@ -128,6 +134,31 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                 {finding.recheck_count}x rechecked
               </span>
             )}
+            <button
+              type="button"
+              onClick={async (e) => {
+                e.stopPropagation();
+                const next = !includeInReport;
+                setIncludeInReport(next);
+                try {
+                  await api.updateFinding(finding.id, { include_in_report: next });
+                  toast.success(next ? "Included in report" : "Excluded from report");
+                  onUpdate();
+                } catch {
+                  setIncludeInReport(!next);
+                  toast.error("Failed to update");
+                }
+              }}
+              className={`text-[10px] px-1.5 py-0.5 rounded border font-medium flex items-center gap-1 shrink-0 ${
+                includeInReport
+                  ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                  : "text-amber-400 bg-amber-500/10 border-amber-500/20"
+              }`}
+              title={includeInReport ? "Included in report (click to exclude)" : "Excluded from report (click to include)"}
+            >
+              {includeInReport ? <FileText className="w-2.5 h-2.5" /> : <FileX className="w-2.5 h-2.5" />}
+              {includeInReport ? "In report" : "Excluded"}
+            </button>
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
             {finding.affected_url && <span className="truncate max-w-[200px]" title={finding.affected_url}>{finding.affected_url}</span>}
