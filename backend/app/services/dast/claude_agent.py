@@ -14,6 +14,8 @@ from .claude_prompts import (
     SYSTEM_PROMPT_RETEST,
     SYSTEM_PROMPT_CRAWL_ONLY,
     SYSTEM_PROMPT_GENERATE_CHECKS,
+    AUTH_INSTRUCTIONS_TEMPLATE,
+    AUTH_INSTRUCTIONS_NONE,
 )
 from .claude_cost import CostTracker
 from .runner import ALL_CHECKS
@@ -37,6 +39,9 @@ class ClaudeDastAgent:
         scan_mode: str = "standard",
         max_cost_usd: float = 20.0,
         max_api_calls: int = 200,
+        auth_headers: dict | None = None,
+        auth_type: str = "none",
+        organization_id: str = "",
     ):
         from anthropic import Anthropic
 
@@ -44,6 +49,9 @@ class ClaudeDastAgent:
         self.project_id = project_id
         self.scan_id = scan_id
         self.scan_mode = scan_mode
+        self.auth_headers = auth_headers or {}
+        self.auth_type = auth_type
+        self.organization_id = organization_id
 
         # Cost tracking
         self.cost = CostTracker(
@@ -68,6 +76,7 @@ class ClaudeDastAgent:
         # Progress callback
         self._progress_callback: Callable | None = None
         self._executor = None  # Set by caller
+        self._start_time: float = time.time()
 
     def set_executor(self, executor) -> None:
         """Set the tool executor instance."""
@@ -96,6 +105,11 @@ class ClaudeDastAgent:
                 "activity_log": self.activity_log[-20:],
                 "pending_pentest_options": self.pentest_options,
                 "cost": self.cost.to_dict(),
+                # Live crawl results for real-time display (last 50)
+                "live_crawl_results": self.crawl_results[-50:] if self.crawl_results else [],
+                # Progress percentage and ETA
+                "progress_pct": self._calculate_progress_pct(phase),
+                "eta_seconds": self._estimate_eta(phase),
                 **extra,
             }
             self._progress_callback(progress)
@@ -106,6 +120,35 @@ class ClaudeDastAgent:
             sev = f.get("severity", "info")
             counts[sev] = counts.get(sev, 0) + 1
         return counts
+
+    # Phase weights for progress percentage
+    _PHASE_WEIGHTS = {
+        "initializing": 2, "crawling": 20, "recon": 10,
+        "automated_checks": 25, "dynamic_testing": 20,
+        "llm_testing": 10, "business_logic": 5,
+        "verification": 5, "test_generation": 2, "done": 1,
+    }
+    _PHASE_ORDER = list(_PHASE_WEIGHTS.keys())
+
+    def _calculate_progress_pct(self, current_phase: str) -> int:
+        """Approximate progress percentage based on scan phase."""
+        total = 0
+        for p in self._PHASE_ORDER:
+            if p == current_phase:
+                total += self._PHASE_WEIGHTS.get(p, 5) // 2  # midway through current
+                break
+            total += self._PHASE_WEIGHTS.get(p, 5)
+        return min(max(total, 1), 99)
+
+    def _estimate_eta(self, current_phase: str) -> int | None:
+        """Estimate seconds remaining based on elapsed time and progress."""
+        pct = self._calculate_progress_pct(current_phase)
+        if pct <= 2:
+            return None
+        elapsed = time.time() - self._start_time
+        rate = elapsed / pct
+        remaining = 100 - pct
+        return max(int(rate * remaining), 0)
 
     async def run_intelligent_scan(
         self,
@@ -127,6 +170,34 @@ class ClaudeDastAgent:
         start_time = time.time()
         check_names = [name for name, _ in ALL_CHECKS]
 
+        # Retrieve RAG learnings if available
+        past_learnings_text = ""
+        try:
+            from urllib.parse import urlparse as _urlparse
+            domain = _urlparse(target_url).hostname or ""
+            from .claude_rag import retrieve_learnings, get_domain_profile, format_learnings_for_prompt
+            from app.core.database import AsyncSessionLocal
+            import asyncio
+
+            async def _fetch_rag():
+                async with AsyncSessionLocal() as db:
+                    learnings = await retrieve_learnings(
+                        db, domain=domain,
+                        technology_stack=project_context.get("stack_profile"),
+                        organization_id=self.organization_id or None,
+                    )
+                    profile = await get_domain_profile(db, domain=domain, organization_id=self.organization_id or None)
+                    return format_learnings_for_prompt(learnings, profile)
+
+            past_learnings_text = asyncio.get_event_loop().run_until_complete(_fetch_rag())
+        except Exception as e:
+            logger.debug("RAG retrieval skipped: %s", e)
+
+        # Build auth instructions
+        auth_instructions = AUTH_INSTRUCTIONS_NONE
+        if self.auth_headers and self.auth_type != "none":
+            auth_instructions = AUTH_INSTRUCTIONS_TEMPLATE.format(auth_type=self.auth_type)
+
         # Build system prompt
         system_prompt = SYSTEM_PROMPT_SCAN.format(
             target_url=target_url,
@@ -140,6 +211,8 @@ class ClaudeDastAgent:
             num_checks=len(check_names),
             available_checks=", ".join(check_names),
             max_api_calls=self.cost.max_api_calls,
+            past_learnings=past_learnings_text,
+            auth_instructions=auth_instructions,
         )
 
         # Initial user message
@@ -380,8 +453,9 @@ class ClaudeDastAgent:
         logger.warning("Rate limited, waiting %ds (iteration %d)", delay, iteration)
         self._emit_progress(
             self.cost.current_phase,
-            f"Rate limited, retrying in {delay}s...",
-            log_type="retry",
+            f"Rate limited by API. Waiting {delay}s before retry... (attempt {iteration})",
+            log_type="rate_limit",
+            rate_limit_wait=delay,
         )
         await asyncio.sleep(delay)
 

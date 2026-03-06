@@ -8,7 +8,7 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy, TrendingUp
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy, TrendingUp, Trash2, ArrowRightLeft
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import Link from "next/link";
@@ -174,6 +174,12 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                 </span>
               )}
               {tc.module_id && <span className="text-xs" style={{ color: "var(--text-muted)" }}>{tc.module_id}</span>}
+              {tc.tool_used && tc.tool_used.includes("DAST") && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded border shrink-0"
+                  style={{ background: "rgba(217,119,6,0.15)", borderColor: "rgba(217,119,6,0.4)", color: "#d97706" }}>
+                  DAST Evidence
+                </span>
+              )}
             </div>
             {tc.description && (
               <p className="text-xs mt-1 line-clamp-1" style={{ color: "var(--text-secondary)" }}>{tc.description}</p>
@@ -520,6 +526,17 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
                   value={notes} onChange={e => setNotes(e.target.value)} />
               </div>
 
+              {tc.result_status === "failed" && tc.tool_used?.includes("DAST") && (
+                <div className="rounded-lg p-3 flex items-center gap-2" style={{ background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.2)" }}>
+                  <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+                  <span className="text-xs" style={{ color: "#d97706" }}>Vulnerability detected by automated DAST scan.</span>
+                  <Link href={`/projects/${projectId}/vulnerabilities`}
+                    className="text-xs text-orange-400 hover:underline ml-auto shrink-0 font-medium">
+                    View Findings →
+                  </Link>
+                </div>
+              )}
+
               {showFindingForm && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   className="bg-red-900/10 border border-red-800 rounded-lg p-4 space-y-3">
@@ -617,6 +634,12 @@ export default function ProjectDetail() {
   const [enrichingFinding, setEnrichingFinding] = useState<string | null>(null);
   const [deduplicating, setDeduplicating] = useState(false);
   const [findingsTrend, setFindingsTrend] = useState<{ by_date: { date: string; total: number; dast: number; manual: number }[]; by_severity: Record<string, number> } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferOrgId, setTransferOrgId] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [transferring, setTransferring] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -734,6 +757,35 @@ export default function ProjectDetail() {
     }
   };
 
+  const handleDeleteProject = async () => {
+    setDeleting(true);
+    try {
+      await api.deleteProject(id as string);
+      toast.success("Project deleted");
+      router.push("/projects");
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
+  const handleTransferProject = async () => {
+    if (!transferOrgId.trim()) return;
+    setTransferring(true);
+    try {
+      await api.transferProject(id as string, transferOrgId.trim());
+      toast.success("Project transferred");
+      setShowTransferModal(false);
+      setTransferOrgId("");
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ color: "var(--text-secondary)" }}>Loading project...</div>;
   if (!project) return <div className="min-h-screen flex items-center justify-center" style={{ color: "var(--text-secondary)" }}>Project not found</div>;
 
@@ -812,14 +864,108 @@ export default function ProjectDetail() {
           <div className="card p-4 mb-4 overflow-hidden">
             <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 overflow-hidden">
               <div className="min-w-0 flex-1 overflow-hidden">
-                <h1 className="text-xl font-bold truncate" style={{ color: "var(--text-primary)" }}>{project.application_name}</h1>
-                <p className="text-sm truncate max-w-md" style={{ color: "var(--text-secondary)" }} title={project.application_url}>{project.application_url}</p>
-                <div className="flex items-center gap-2 mt-2 flex-wrap overflow-hidden">
-                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>Owner: {project.app_owner_name || "—"}</span>
-                  <span className="text-[#374151] shrink-0">•</span>
-                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>SPOC: {project.app_spoc_name || "—"}</span>
-                  <span className="text-[#374151] shrink-0">•</span>
-                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>{project.testing_type}</span>
+                <div className="flex items-center gap-3">
+                  <h1 className="text-xl font-bold truncate" style={{ color: "var(--text-primary)" }}>{project.application_name}</h1>
+                  {/* Threat Level Badge */}
+                  {(() => {
+                    const failed = progress?.failed || 0;
+                    const critical = findings.filter((f: any) => f.severity === "critical").length;
+                    const high = findings.filter((f: any) => f.severity === "high").length;
+                    const threatLevel = critical > 0 ? "Critical" : high > 2 ? "High" : failed > 5 ? "Medium" : failed > 0 ? "Low" : "Secure";
+                    const threatColors: Record<string, string> = {
+                      Critical: "bg-red-500/20 text-red-400 border-red-500/30",
+                      High: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+                      Medium: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+                      Low: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+                      Secure: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+                    };
+                    return (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${threatColors[threatLevel]}`}>
+                        {threatLevel} Risk
+                      </span>
+                    );
+                  })()}
+                  {/* Status Badge */}
+                  {project.status && (
+                    <span className="px-2 py-0.5 rounded text-xs font-medium" style={{
+                      background: project.status === "completed" ? "rgba(16,185,129,0.15)" : project.status === "in_progress" ? "rgba(99,102,241,0.15)" : "rgba(148,163,184,0.15)",
+                      color: project.status === "completed" ? "#10b981" : project.status === "in_progress" ? "#818cf8" : "#94a3b8",
+                    }}>
+                      {project.status?.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                    </span>
+                  )}
+                </div>
+                {/* Target URL */}
+                <div className="flex items-center gap-2 mt-1">
+                  <a href={project.application_url} target="_blank" rel="noopener noreferrer"
+                    className="text-sm truncate max-w-lg hover:underline" style={{ color: "var(--accent)" }} title={project.application_url}>
+                    {project.application_url}
+                  </a>
+                  {project.application_version && (
+                    <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "var(--bg-elevated)", color: "var(--text-muted)" }}>v{project.application_version}</span>
+                  )}
+                </div>
+                {/* Info Row 1: Owner, SPOC, Testing Type, Environment */}
+                <div className="flex items-center gap-3 mt-2 flex-wrap overflow-hidden">
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>
+                    <strong style={{ color: "var(--text-muted)" }}>Owner:</strong> {project.app_owner_name || "—"}
+                  </span>
+                  <span className="text-[#374151] shrink-0">|</span>
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>
+                    <strong style={{ color: "var(--text-muted)" }}>SPOC:</strong> {project.app_spoc_name || "—"}
+                  </span>
+                  <span className="text-[#374151] shrink-0">|</span>
+                  <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>
+                    <strong style={{ color: "var(--text-muted)" }}>Type:</strong> {project.testing_type?.replace("_", " ") || "—"}
+                  </span>
+                  {project.environment && (
+                    <>
+                      <span className="text-[#374151] shrink-0">|</span>
+                      <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>
+                        <strong style={{ color: "var(--text-muted)" }}>Env:</strong> {project.environment}
+                      </span>
+                    </>
+                  )}
+                  {project.classification && (
+                    <>
+                      <span className="text-[#374151] shrink-0">|</span>
+                      <span className="text-xs shrink-0" style={{ color: "var(--text-secondary)" }}>
+                        <strong style={{ color: "var(--text-muted)" }}>Class:</strong> {project.classification}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {/* Info Row 2: Dates */}
+                <div className="flex items-center gap-3 mt-1 flex-wrap overflow-hidden">
+                  {project.created_at && (
+                    <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+                      Created: {new Date(project.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                  )}
+                  {project.started_at && (
+                    <>
+                      <span className="text-[#374151] shrink-0">|</span>
+                      <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+                        Started: {new Date(project.started_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </span>
+                    </>
+                  )}
+                  {project.target_completion_date && (
+                    <>
+                      <span className="text-[#374151] shrink-0">|</span>
+                      <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+                        Target: {new Date(project.target_completion_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </span>
+                    </>
+                  )}
+                  {project.organization_name && (
+                    <>
+                      <span className="text-[#374151] shrink-0">|</span>
+                      <span className="text-xs shrink-0" style={{ color: "var(--text-muted)" }}>
+                        Org: {project.organization_name}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0 min-w-0">
@@ -895,6 +1041,26 @@ export default function ProjectDetail() {
                 >
                   <Users className="w-4 h-4" /> Team
                 </button>
+                {user?.role === "super_admin" && (
+                  <button
+                    onClick={() => setShowTransferModal(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-yellow-500 transition-colors text-sm shrink-0"
+                    style={{ borderColor: "var(--border-subtle)", color: "rgb(234, 179, 8)" }}
+                    title="Transfer project to another organization"
+                  >
+                    <ArrowRightLeft className="w-4 h-4" /> Transfer
+                  </button>
+                )}
+                {(user?.role === "super_admin" || user?.role === "admin") && (
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-red-500 transition-colors text-sm shrink-0"
+                    style={{ borderColor: "var(--border-subtle)", color: "rgb(239, 68, 68)" }}
+                    title="Delete this project permanently"
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete
+                  </button>
+                )}
                 <div className="text-right shrink-0 min-w-[3rem]">
                   <div className="text-2xl font-bold text-red-400 truncate" title={`${findings.length} findings`}>{findings.length}</div>
                   <div className="text-xs truncate" style={{ color: "var(--text-secondary)" }}>findings</div>
@@ -1287,6 +1453,104 @@ export default function ProjectDetail() {
                   )}
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Project Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }}>
+          <div className="rounded-lg max-w-md w-full" style={{ background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+              <h2 className="text-lg font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                <Trash2 className="w-5 h-5 text-red-400" /> Delete Project
+              </h2>
+              <button onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }} className="hover:text-white" style={{ color: "var(--text-secondary)" }}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="p-3 rounded-lg" style={{ background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                <p className="text-sm font-medium text-red-400">Warning: This action cannot be undone</p>
+                <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                  This will permanently delete <strong style={{ color: "var(--text-primary)" }}>{project.application_name}</strong> and all associated data including test results, findings, evidence, DAST scan data, and crawl results.
+                </p>
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: "var(--text-secondary)" }}>
+                  Type <strong style={{ color: "var(--text-primary)" }}>delete {project.application_name?.toLowerCase()}</strong> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmText}
+                  onChange={e => setDeleteConfirmText(e.target.value)}
+                  className="w-full px-3 py-2 rounded text-sm"
+                  style={{ background: "var(--bg-primary)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}
+                  placeholder={`delete ${project.application_name?.toLowerCase()}`}
+                  autoFocus
+                />
+              </div>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }}
+                  className="px-4 py-2 rounded border text-sm transition-colors hover:text-white"
+                  style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteProject}
+                  disabled={deleting || deleteConfirmText !== `delete ${project.application_name?.toLowerCase()}`}
+                  className="px-4 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {deleting ? "Deleting..." : "Delete Project Permanently"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer Project Modal */}
+      {showTransferModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setShowTransferModal(false)}>
+          <div className="rounded-lg max-w-md w-full" style={{ background: "var(--bg-tertiary)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+              <h2 className="text-lg font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                <ArrowRightLeft className="w-5 h-5 text-yellow-400" /> Transfer Project
+              </h2>
+              <button onClick={() => { setShowTransferModal(false); setTransferOrgId(""); }} className="hover:text-white" style={{ color: "var(--text-secondary)" }}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                Transfer <strong style={{ color: "var(--text-primary)" }}>{project.application_name}</strong> to another organization. Enter the target organization ID below.
+              </p>
+              <input
+                type="text"
+                placeholder="Target Organization ID"
+                value={transferOrgId}
+                onChange={(e) => setTransferOrgId(e.target.value)}
+                className="input-field w-full"
+              />
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => { setShowTransferModal(false); setTransferOrgId(""); }}
+                  className="px-4 py-2 rounded border text-sm transition-colors hover:text-white"
+                  style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleTransferProject}
+                  disabled={transferring || !transferOrgId.trim()}
+                  className="px-4 py-2 rounded bg-yellow-600 hover:bg-yellow-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  {transferring ? "Transferring..." : "Transfer Project"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

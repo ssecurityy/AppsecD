@@ -54,3 +54,15 @@ class Finding(Base):
     remediation_deadline = Column(Date, nullable=True)
     remediation_owner = Column(Text, nullable=True)  # dev team / person responsible
     recheck_history = Column(JSONB, default=list)  # [{date, status, notes, by}]
+
+    # CVE correlation
+    cve_ids = Column(JSONB, default=list)  # ["CVE-2024-1234", ...]
+
+    # Deduplication fields
+    dedup_fingerprint = Column(String(64), nullable=True, index=True)  # SHA256 hash for smart dedup
+    last_seen_at = Column(DateTime, nullable=True)  # Last time this vuln was confirmed by a scan
+    scan_count = Column(Integer, default=1)  # How many scans detected this finding
+
+    # Activity log — comprehensive event tracking [{date, action, user_id, user_name, details}]
+    activity_log = Column(JSONB, default=list)
+    sla_breached = Column(Boolean, default=False)

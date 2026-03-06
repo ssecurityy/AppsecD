@@ -12,7 +12,7 @@ import {
   Code, Database, BookOpen, Layers, Wrench, HardDrive, FormInput,
   History, Calendar, Filter, Search, LayoutGrid,
   Bug, Key, Link2, Eye, EyeOff, Settings2, Activity, Radio, Hash, Braces,
-  Sparkles, Square, DollarSign, RotateCcw, Brain
+  Sparkles, Square, DollarSign, RotateCcw, Brain, FileDown
 } from "lucide-react";
 import Link from "next/link";
 
@@ -121,6 +121,18 @@ export default function DastScanPage() {
   const [claudeActiveSubTab, setClaudeActiveSubTab] = useState<"dashboard" | "crawled" | "history" | "session">("dashboard");
   const [claudeCrawlSubTab, setClaudeCrawlSubTab] = useState<"pages" | "apis" | "hidden_paths" | "hidden_params" | "forms" | "subdomains" | "js_analysis" | "sca" | "technology" | "attack_surface">("pages");
   const claudePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Export dropdown state
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  // Claude DAST auth config state
+  const [claudeAuthType, setClaudeAuthType] = useState("none");
+  const [claudeAuthToken, setClaudeAuthToken] = useState("");
+  const [claudeAuthUsername, setClaudeAuthUsername] = useState("");
+  const [claudeAuthPassword, setClaudeAuthPassword] = useState("");
+  const [claudeAuthHeaderName, setClaudeAuthHeaderName] = useState("");
+  const [claudeAuthHeaderValue, setClaudeAuthHeaderValue] = useState("");
+  const [claudeProxyUrl, setClaudeProxyUrl] = useState("");
 
   type PathItem = { path: string; status: number };
   const buildPathTree = (items: PathItem[]): { name: string; fullPath: string; status?: number; children: any[]; isFile: boolean } => {
@@ -283,10 +295,59 @@ export default function DastScanPage() {
           poll();
           recursiveDirPollRef.current = setInterval(poll, 2000);
         }
+        // Resume Claude AI scan from sessionStorage
+        const storedClaude = sessionStorage.getItem(`dast_claude_job_${id}`);
+        if (storedClaude) {
+          setClaudeScanId(storedClaude);
+          setClaudeScanning(true);
+          setDastActiveTab("claude");
+          // Restore last progress snapshot immediately
+          try {
+            const savedProg = sessionStorage.getItem(`dast_claude_progress_${id}`);
+            if (savedProg) setClaudeProgress(JSON.parse(savedProg));
+          } catch {}
+          const claudeResumePoll = async () => {
+            try {
+              const prog = await api.claudeDastScanProgress(storedClaude);
+              setClaudeProgress(prog);
+              try {
+                sessionStorage.setItem(`dast_claude_progress_${id}`, JSON.stringify({
+                  current_phase: prog.current_phase, current_activity: prog.current_activity,
+                  findings_so_far: prog.findings_so_far, pages_crawled: prog.pages_crawled,
+                  cost: prog.cost, activity_log: prog.activity_log, findings_by_severity: prog.findings_by_severity,
+                  checks_completed: prog.checks_completed, tool_calls_used: prog.tool_calls_used,
+                  progress_pct: prog.progress_pct, eta_seconds: prog.eta_seconds,
+                  live_crawl_results: prog.live_crawl_results,
+                }));
+              } catch {}
+              if (prog.live_crawl_results?.length > 0) {
+                setClaudeCrawlResults((prev: any[]) => {
+                  const urls = new Set((prev || []).map((p: any) => p.url));
+                  const newItems = prog.live_crawl_results.filter((r: any) => !urls.has(r.url));
+                  return newItems.length > 0 ? [...(prev || []), ...newItems] : prev;
+                });
+              }
+              if (prog.status === "completed" || prog.status === "error" || prog.status === "stopped") {
+                sessionStorage.removeItem(`dast_claude_job_${id}`);
+                sessionStorage.removeItem(`dast_claude_progress_${id}`);
+                setClaudeScanning(false);
+                if (claudePollRef.current) { clearInterval(claudePollRef.current); claudePollRef.current = null; }
+                if (prog.status === "completed") {
+                  toast.success(`Scan complete: ${prog.total_findings || 0} findings`);
+                  api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
+                  api.claudeDastCrawlResults(id as string).then(setClaudeCrawlResults).catch(() => {});
+                  api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
+                }
+              }
+            } catch { sessionStorage.removeItem(`dast_claude_job_${id}`); setClaudeScanning(false); }
+          };
+          claudeResumePoll();
+          claudePollRef.current = setInterval(claudeResumePoll, 2000);
+        }
       } catch {}
       // If a scan is still running for this project, resume polling
       api.dastScans().then((r: any) => {
-        const active = (r?.scans ?? []).find((s: any) => s.project_id === id && s.status === "running");
+        const active = (r?.scans ?? []).find((s: any) => s.project_id === id && s.status === "running" && !s.scan_id?.startsWith("claude-"));
         if (active?.scan_id) {
           setScanning(true);
           setScanId(active.scan_id);
@@ -310,6 +371,41 @@ export default function DastScanPage() {
           poll();
           pollRef.current = setInterval(poll, 1500);
         }
+        // Also check for active Claude scans (fallback if sessionStorage was cleared)
+        const activeClaude = (r?.scans ?? []).find((s: any) => s.project_id === id && s.status === "running" && s.scan_id?.startsWith("claude-"));
+        if (activeClaude?.scan_id && !sessionStorage.getItem(`dast_claude_job_${id}`)) {
+          setClaudeScanId(activeClaude.scan_id);
+          setClaudeScanning(true);
+          setDastActiveTab("claude");
+          sessionStorage.setItem(`dast_claude_job_${id}`, activeClaude.scan_id);
+          const claudeFallbackPoll = async () => {
+            try {
+              const prog = await api.claudeDastScanProgress(activeClaude.scan_id);
+              setClaudeProgress(prog);
+              if (prog.live_crawl_results?.length > 0) {
+                setClaudeCrawlResults((prev: any[]) => {
+                  const urls = new Set((prev || []).map((p: any) => p.url));
+                  const newItems = prog.live_crawl_results.filter((r: any) => !urls.has(r.url));
+                  return newItems.length > 0 ? [...(prev || []), ...newItems] : prev;
+                });
+              }
+              if (prog.status === "completed" || prog.status === "error" || prog.status === "stopped") {
+                sessionStorage.removeItem(`dast_claude_job_${id}`);
+                sessionStorage.removeItem(`dast_claude_progress_${id}`);
+                setClaudeScanning(false);
+                if (claudePollRef.current) { clearInterval(claudePollRef.current); claudePollRef.current = null; }
+                if (prog.status === "completed") {
+                  toast.success(`Scan complete: ${prog.total_findings || 0} findings`);
+                  api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
+                  api.claudeDastCrawlResults(id as string).then(setClaudeCrawlResults).catch(() => {});
+                  api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
+                }
+              }
+            } catch {}
+          };
+          claudeFallbackPoll();
+          claudePollRef.current = setInterval(claudeFallbackPoll, 2000);
+        }
       }).catch(() => {});
     }
   }, [id]);
@@ -317,6 +413,10 @@ export default function DastScanPage() {
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (claudePollRef.current) clearInterval(claudePollRef.current);
+      if (exhaustivePollRef.current) clearInterval(exhaustivePollRef.current);
+      if (recursiveDirPollRef.current) clearInterval(recursiveDirPollRef.current);
+      if (crawlPollRef.current) clearInterval(crawlPollRef.current);
     };
   }, []);
 
@@ -2078,61 +2178,291 @@ export default function DastScanPage() {
                           Clear Context
                         </button>
                       )}
+                      {/* Export Dropdown */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowExportMenu(!showExportMenu)}
+                          className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full hover:opacity-80"
+                          style={{ background: "rgba(59,130,246,0.15)", color: "#3b82f6" }}
+                        >
+                          <FileDown className="w-3 h-3" /> Export <ChevronDown className="w-3 h-3" />
+                        </button>
+                        {showExportMenu && (
+                          <div
+                            className="absolute right-0 top-full mt-1 z-50 rounded-lg shadow-lg py-1 min-w-[160px]"
+                            style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}
+                          >
+                            {[
+                              { label: "Burp XML", fn: () => api.dastExportBurpXml(id as string) },
+                              { label: "JSON", fn: () => api.dastExportJson(id as string) },
+                              { label: "CSV", fn: () => api.dastExportCsv(id as string) },
+                              { label: "HAR (Crawl)", fn: () => api.dastExportHar(id as string) },
+                            ].map((opt) => (
+                              <button
+                                key={opt.label}
+                                onClick={async () => {
+                                  setShowExportMenu(false);
+                                  try {
+                                    await opt.fn();
+                                    toast.success(`Exported as ${opt.label}`);
+                                  } catch (e: any) {
+                                    toast.error(e.message || `Export failed: ${opt.label}`);
+                                  }
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs hover:opacity-80"
+                                style={{ color: "var(--text-primary)" }}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
                   {/* Scan Configuration */}
                   {!claudeScanning && (
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div>
-                        <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Scan Mode</label>
-                        <select
-                          value={claudeScanMode}
-                          onChange={(e) => {
-                            const mode = e.target.value as "quick" | "standard" | "deep";
-                            setClaudeScanMode(mode);
-                            api.claudeDastCostEstimate({ scan_mode: mode, target_url: project?.application_url || "" }).then(setClaudeCostEstimate).catch(() => {});
-                          }}
-                          className="rounded-lg px-3 py-1.5 text-sm"
-                          style={{ background: "var(--bg-elevated)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
-                        >
-                          <option value="quick">Quick ($)</option>
-                          <option value="standard">Standard ($$)</option>
-                          <option value="deep">Deep ($$$)</option>
-                        </select>
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div>
+                          <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Scan Mode</label>
+                          <select
+                            value={claudeScanMode}
+                            onChange={(e) => {
+                              const mode = e.target.value as "quick" | "standard" | "deep";
+                              setClaudeScanMode(mode);
+                              api.claudeDastCostEstimate({ scan_mode: mode, target_url: project?.application_url || "" }).then(setClaudeCostEstimate).catch(() => {});
+                            }}
+                            className="rounded-lg px-3 py-1.5 text-sm"
+                            style={{ background: "var(--bg-elevated)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                          >
+                            <option value="quick">Quick ($)</option>
+                            <option value="standard">Standard ($$)</option>
+                            <option value="deep">Deep ($$$)</option>
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: "var(--text-secondary)" }}>
+                          <input type="checkbox" checked={claudeIncludeSubdomains} onChange={(e) => setClaudeIncludeSubdomains(e.target.checked)} />
+                          Include Subdomains
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            className="input-field text-xs flex-1"
+                            placeholder="Proxy URL (e.g., socks5://127.0.0.1:1080 or http://proxy:8080)"
+                            value={claudeProxyUrl}
+                            onChange={(e) => setClaudeProxyUrl(e.target.value)}
+                            style={{ maxWidth: 320 }}
+                          />
+                          {claudeProxyUrl && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(59,130,246,0.15)", color: "#3b82f6" }}>
+                              VPN/Internal
+                            </span>
+                          )}
+                        </div>
+                        {claudeCostEstimate && (
+                          <span className="text-[10px] px-2 py-1 rounded-lg" style={{ background: "rgba(217,119,6,0.1)", color: "#d97706" }}>
+                            <DollarSign className="w-3 h-3 inline" />
+                            Est. ${(claudeCostEstimate.estimated_cost_low_usd ?? 0).toFixed(2)} - ${(claudeCostEstimate.estimated_cost_high_usd ?? 0).toFixed(2)}
+                          </span>
+                        )}
                       </div>
-                      <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: "var(--text-secondary)" }}>
-                        <input type="checkbox" checked={claudeIncludeSubdomains} onChange={(e) => setClaudeIncludeSubdomains(e.target.checked)} />
-                        Include Subdomains
-                      </label>
-                      {claudeCostEstimate && (
-                        <span className="text-[10px] px-2 py-1 rounded-lg" style={{ background: "rgba(217,119,6,0.1)", color: "#d97706" }}>
-                          <DollarSign className="w-3 h-3 inline" />
-                          Est. ${(claudeCostEstimate.estimated_cost_low_usd ?? 0).toFixed(2)} - ${(claudeCostEstimate.estimated_cost_high_usd ?? 0).toFixed(2)}
-                        </span>
-                      )}
+
+                      {/* Auth Configuration Panel */}
+                      <div className="rounded-lg p-3 space-y-2" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <Key className="w-3.5 h-3.5" style={{ color: "var(--text-secondary)" }} />
+                          <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>Authentication Config</span>
+                        </div>
+                        <div>
+                          <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Auth Type</label>
+                          <select
+                            value={claudeAuthType}
+                            onChange={(e) => setClaudeAuthType(e.target.value)}
+                            className="rounded-lg px-3 py-1.5 text-sm w-full"
+                            style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                          >
+                            <option value="none">None</option>
+                            <option value="bearer">Bearer Token</option>
+                            <option value="cookie">Cookie</option>
+                            <option value="basic">Basic Auth</option>
+                            <option value="api_key">API Key</option>
+                            <option value="custom_header">Custom Header</option>
+                          </select>
+                        </div>
+                        {claudeAuthType === "bearer" && (
+                          <div>
+                            <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Bearer Token</label>
+                            <input
+                              type="password"
+                              value={claudeAuthToken}
+                              onChange={(e) => setClaudeAuthToken(e.target.value)}
+                              placeholder="Enter bearer token"
+                              className="rounded-lg px-3 py-1.5 text-sm w-full"
+                              style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                            />
+                          </div>
+                        )}
+                        {claudeAuthType === "cookie" && (
+                          <div>
+                            <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Cookie Value</label>
+                            <input
+                              type="text"
+                              value={claudeAuthToken}
+                              onChange={(e) => setClaudeAuthToken(e.target.value)}
+                              placeholder="session=abc123; token=xyz"
+                              className="rounded-lg px-3 py-1.5 text-sm w-full"
+                              style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                            />
+                          </div>
+                        )}
+                        {claudeAuthType === "basic" && (
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Username</label>
+                              <input
+                                type="text"
+                                value={claudeAuthUsername}
+                                onChange={(e) => setClaudeAuthUsername(e.target.value)}
+                                placeholder="Username"
+                                className="rounded-lg px-3 py-1.5 text-sm w-full"
+                                style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Password</label>
+                              <input
+                                type="password"
+                                value={claudeAuthPassword}
+                                onChange={(e) => setClaudeAuthPassword(e.target.value)}
+                                placeholder="Password"
+                                className="rounded-lg px-3 py-1.5 text-sm w-full"
+                                style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {claudeAuthType === "api_key" && (
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Header Name</label>
+                              <input
+                                type="text"
+                                value={claudeAuthHeaderName}
+                                onChange={(e) => setClaudeAuthHeaderName(e.target.value)}
+                                placeholder="X-API-Key"
+                                className="rounded-lg px-3 py-1.5 text-sm w-full"
+                                style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>API Key</label>
+                              <input
+                                type="password"
+                                value={claudeAuthHeaderValue}
+                                onChange={(e) => setClaudeAuthHeaderValue(e.target.value)}
+                                placeholder="Your API key"
+                                className="rounded-lg px-3 py-1.5 text-sm w-full"
+                                style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {claudeAuthType === "custom_header" && (
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Header Name</label>
+                              <input
+                                type="text"
+                                value={claudeAuthHeaderName}
+                                onChange={(e) => setClaudeAuthHeaderName(e.target.value)}
+                                placeholder="X-Custom-Auth"
+                                className="rounded-lg px-3 py-1.5 text-sm w-full"
+                                style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <label className="text-[10px] block mb-1" style={{ color: "var(--text-secondary)" }}>Header Value</label>
+                              <input
+                                type="password"
+                                value={claudeAuthHeaderValue}
+                                onChange={(e) => setClaudeAuthHeaderValue(e.target.value)}
+                                placeholder="Header value"
+                                className="rounded-lg px-3 py-1.5 text-sm w-full"
+                                style={{ background: "var(--bg-card)", color: "var(--text-primary)", border: "1px solid var(--border-subtle)" }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <button
                         onClick={async () => {
                           setClaudeScanning(true);
                           try {
-                            const res = await api.claudeDastScan({
+                            // Build auth_config based on selected type
+                            let authConfig: any = undefined;
+                            if (claudeAuthType !== "none") {
+                              authConfig = { type: claudeAuthType };
+                              if (claudeAuthType === "bearer") {
+                                authConfig.token = claudeAuthToken;
+                              } else if (claudeAuthType === "cookie") {
+                                authConfig.cookie = claudeAuthToken;
+                              } else if (claudeAuthType === "basic") {
+                                authConfig.username = claudeAuthUsername;
+                                authConfig.password = claudeAuthPassword;
+                              } else if (claudeAuthType === "api_key") {
+                                authConfig.header_name = claudeAuthHeaderName;
+                                authConfig.header_value = claudeAuthHeaderValue;
+                              } else if (claudeAuthType === "custom_header") {
+                                authConfig.header_name = claudeAuthHeaderName;
+                                authConfig.header_value = claudeAuthHeaderValue;
+                              }
+                            }
+                            const res = await api.claudeDastScanWithAuth({
                               project_id: id as string,
                               scan_mode: claudeScanMode,
                               include_subdomains: claudeIncludeSubdomains,
+                              auth_config: authConfig,
+                              proxy_url: claudeProxyUrl || undefined,
                             });
                             setClaudeScanId(res.scan_id);
+                            sessionStorage.setItem(`dast_claude_job_${id}`, res.scan_id);
                             toast.success("Claude AI scan started");
                             const poll = async () => {
                               try {
                                 const prog = await api.claudeDastScanProgress(res.scan_id);
                                 setClaudeProgress(prog);
+                                // Persist progress snapshot for tab-switch recovery
+                                try {
+                                  sessionStorage.setItem(`dast_claude_progress_${id}`, JSON.stringify({
+                                    current_phase: prog.current_phase, current_activity: prog.current_activity,
+                                    findings_so_far: prog.findings_so_far, pages_crawled: prog.pages_crawled,
+                                    cost: prog.cost, activity_log: prog.activity_log, findings_by_severity: prog.findings_by_severity,
+                                    checks_completed: prog.checks_completed, tool_calls_used: prog.tool_calls_used,
+                                    progress_pct: prog.progress_pct, eta_seconds: prog.eta_seconds,
+                                    live_crawl_results: prog.live_crawl_results,
+                                  }));
+                                } catch {}
+                                // Update live crawl results as they come in
+                                if (prog.live_crawl_results?.length > 0) {
+                                  setClaudeCrawlResults((prev: any[]) => {
+                                    const urls = new Set((prev || []).map((p: any) => p.url));
+                                    const newItems = prog.live_crawl_results.filter((r: any) => !urls.has(r.url));
+                                    return newItems.length > 0 ? [...(prev || []), ...newItems] : prev;
+                                  });
+                                }
                                 if (prog.status === "completed" || prog.status === "error" || prog.status === "stopped") {
                                   if (claudePollRef.current) clearInterval(claudePollRef.current);
                                   setClaudeScanning(false);
+                                  sessionStorage.removeItem(`dast_claude_job_${id}`);
+                                  sessionStorage.removeItem(`dast_claude_progress_${id}`);
                                   if (prog.status === "completed") {
                                     toast.success(`Scan complete: ${prog.total_findings || 0} findings`);
                                     api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
                                     api.claudeDastCrawlResults(id as string).then(setClaudeCrawlResults).catch(() => {});
+                                    api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
                                   } else if (prog.status === "error") {
                                     toast.error(prog.error || "Scan failed");
                                   }
@@ -2155,59 +2485,155 @@ export default function DastScanPage() {
                     </div>
                   )}
 
-                  {/* Live Progress */}
+                  {/* Live Progress — Enhanced Terminal View */}
                   {claudeScanning && claudeProgress && (
                     <div className="space-y-3">
+                      {/* Header with phase, stop button, elapsed time */}
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="w-4 h-4 animate-spin" style={{ color: "#d97706" }} />
-                          <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
-                            {claudeProgress.current_phase || "Running"}
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            <Radio className="w-4 h-4 text-red-500 animate-pulse" />
+                            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                          </div>
+                          <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+                            {claudeProgress.current_phase || "Initializing"}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full font-medium animate-pulse" style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>
+                            LIVE
                           </span>
                         </div>
-                        <button
-                          onClick={async () => {
-                            if (claudeScanId) {
-                              await api.claudeDastScanStop(claudeScanId);
-                              toast.success("Scan stop requested");
-                            }
-                          }}
-                          className="flex items-center gap-1 px-2 py-1 rounded text-xs"
-                          style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}
-                        >
-                          <Square className="w-3 h-3" /> Stop
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {claudeProgress.cost && (
+                            <span className="text-[10px] px-2 py-0.5 rounded border font-mono" style={{ color: "var(--text-muted)", borderColor: "var(--border-subtle)" }}>
+                              ${(claudeProgress.cost.total_cost_usd || 0).toFixed(3)}
+                            </span>
+                          )}
+                          <button
+                            onClick={async () => {
+                              if (claudeScanId) {
+                                await api.claudeDastScanStop(claudeScanId);
+                                toast.success("Scan stop requested");
+                              }
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors hover:bg-red-500/20"
+                            style={{ background: "rgba(239,68,68,0.15)", color: "#ef4444" }}
+                          >
+                            <Square className="w-3 h-3" /> Stop Scan
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                        {claudeProgress.current_activity || "Processing..."}
-                      </p>
-                      <div className="flex flex-wrap gap-3 text-xs" style={{ color: "var(--text-secondary)" }}>
-                        <span>{claudeProgress.pages_crawled || 0} pages</span>
-                        <span>{claudeProgress.findings_so_far || 0} findings</span>
-                        {claudeProgress.cost && <span>${(claudeProgress.cost.total_cost_usd || 0).toFixed(2)} cost</span>}
+
+                      {/* Current activity */}
+                      <div className="rounded-lg p-2.5" style={{ background: "rgba(217,119,6,0.05)", border: "1px solid rgba(217,119,6,0.15)" }}>
+                        <p className="text-xs font-medium" style={{ color: "#f59e0b" }}>
+                          {claudeProgress.current_activity || "Processing..."}
+                        </p>
                       </div>
+
+                      {/* Progress bar + ETA */}
+                      <div className="space-y-1">
+                        <div className="w-full rounded-full h-2" style={{ background: "var(--bg-elevated)" }}>
+                          <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${claudeProgress.progress_pct || 5}%`, background: "linear-gradient(90deg, #d97706 0%, #ea580c 100%)" }} />
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                            {claudeProgress.progress_pct ? `${claudeProgress.progress_pct}%` : "Starting..."}
+                          </span>
+                          {claudeProgress.eta_seconds != null && claudeProgress.eta_seconds > 0 && (
+                            <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+                              ETA: ~{claudeProgress.eta_seconds >= 60 ? `${Math.ceil(claudeProgress.eta_seconds / 60)}min` : `${claudeProgress.eta_seconds}s`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Stats row */}
+                      <div className="grid grid-cols-4 gap-2">
+                        <div className="rounded-lg p-2 text-center" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+                          <div className="text-lg font-bold" style={{ color: "#3b82f6" }}>{claudeProgress.pages_crawled || 0}</div>
+                          <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Pages</div>
+                        </div>
+                        <div className="rounded-lg p-2 text-center" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+                          <div className="text-lg font-bold" style={{ color: claudeProgress.findings_so_far > 0 ? "#ef4444" : "var(--text-primary)" }}>{claudeProgress.findings_so_far || 0}</div>
+                          <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Findings</div>
+                        </div>
+                        <div className="rounded-lg p-2 text-center" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+                          <div className="text-lg font-bold" style={{ color: "#22c55e" }}>{claudeProgress.checks_completed || 0}</div>
+                          <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Checks</div>
+                        </div>
+                        <div className="rounded-lg p-2 text-center" style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}>
+                          <div className="text-lg font-bold" style={{ color: "#d97706" }}>{claudeProgress.tool_calls_used || 0}</div>
+                          <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Tool Calls</div>
+                        </div>
+                      </div>
+
+                      {/* Severity breakdown */}
                       {claudeProgress.findings_by_severity && (
                         <div className="flex flex-wrap gap-2">
                           {Object.entries(claudeProgress.findings_by_severity as Record<string, number>).filter(([, v]) => v > 0).map(([sev, count]) => (
-                            <span key={sev} className="text-[10px] px-1.5 py-0.5 rounded-full font-medium" style={{ background: `${SEVERITY_COLORS[sev]}22`, color: SEVERITY_COLORS[sev] }}>
+                            <span key={sev} className="text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: `${SEVERITY_COLORS[sev]}22`, color: SEVERITY_COLORS[sev], border: `1px solid ${SEVERITY_COLORS[sev]}44` }}>
                               {count} {sev}
                             </span>
                           ))}
                         </div>
                       )}
+
+                      {/* Live Terminal */}
                       {claudeProgress.activity_log && claudeProgress.activity_log.length > 0 && (
-                        <div className="max-h-40 overflow-y-auto space-y-1 rounded-lg p-2" style={{ background: "var(--bg-elevated)" }}>
-                          {(claudeProgress.activity_log as any[]).slice(-10).reverse().map((entry: any, i: number) => (
-                            <div key={i} className="flex items-start gap-2 text-[10px]" style={{ color: entry.type === "finding" ? "#22c55e" : entry.type === "tool" ? "#3b82f6" : "var(--text-secondary)" }}>
-                              <span style={{ opacity: 0.5 }}>{new Date(entry.ts * 1000).toLocaleTimeString()}</span>
-                              <span>{entry.msg}</span>
-                            </div>
-                          ))}
+                        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--border-subtle)" }}>
+                          <div className="px-3 py-1.5 flex items-center gap-2" style={{ background: "var(--bg-elevated)", borderBottom: "1px solid var(--border-subtle)" }}>
+                            <Activity className="w-3 h-3" style={{ color: "#d97706" }} />
+                            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Live Activity Feed</span>
+                            <span className="text-[9px] ml-auto font-mono" style={{ color: "var(--text-muted)" }}>{(claudeProgress.activity_log as any[]).length} events</span>
+                          </div>
+                          <div
+                            className="max-h-64 overflow-y-auto space-y-0.5 p-2 font-mono"
+                            style={{ background: "rgba(0,0,0,0.4)" }}
+                            ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+                          >
+                            {(claudeProgress.activity_log as any[]).map((entry: any, i: number) => {
+                              const typeColors: Record<string, string> = {
+                                finding: "#22c55e",
+                                tool: "#3b82f6",
+                                error: "#ef4444",
+                                phase: "#d97706",
+                                info: "#94a3b8",
+                                rate_limit: "#eab308",
+                                retry: "#eab308",
+                              };
+                              const typeBadges: Record<string, string> = {
+                                finding: "VULN",
+                                tool: "TOOL",
+                                error: "ERR",
+                                phase: "PHASE",
+                                info: "INFO",
+                                rate_limit: "WAIT",
+                                retry: "RETRY",
+                              };
+                              const color = typeColors[entry.type] || "#94a3b8";
+                              return (
+                                <div key={i} className="flex items-start gap-2 text-[10px] leading-relaxed">
+                                  <span className="shrink-0 opacity-40 tabular-nums">{new Date(entry.ts * 1000).toLocaleTimeString()}</span>
+                                  <span
+                                    className="shrink-0 px-1 py-0 rounded text-[8px] font-bold uppercase"
+                                    style={{ background: `${color}22`, color, border: `1px solid ${color}44`, minWidth: "36px", textAlign: "center" }}
+                                  >
+                                    {typeBadges[entry.type] || entry.type?.toUpperCase() || "LOG"}
+                                  </span>
+                                  <span style={{ color }}>{entry.msg}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
+
+                      {/* Pentest Options */}
                       {claudeProgress.pending_pentest_options && (claudeProgress.pending_pentest_options as any[]).filter((o: any) => !o.user_selected).length > 0 && (
                         <div className="rounded-lg p-3 space-y-2" style={{ background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.2)" }}>
-                          <span className="text-xs font-medium" style={{ color: "#d97706" }}>Penetration Options Available</span>
+                          <span className="text-xs font-semibold flex items-center gap-1.5" style={{ color: "#d97706" }}>
+                            <Sparkles className="w-3 h-3" /> Penetration Options Available
+                          </span>
                           {(claudeProgress.pending_pentest_options as any[]).filter((o: any) => !o.user_selected).map((opt: any, i: number) => (
                             <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
                               <span style={{ color: "var(--text-primary)" }}>{opt.title || opt.description}</span>
@@ -2220,7 +2646,7 @@ export default function DastScanPage() {
                                       toast.success(`Selected: ${action}`);
                                     }
                                   }}
-                                  className="px-2 py-0.5 rounded text-[10px]"
+                                  className="px-2 py-0.5 rounded text-[10px] font-medium transition-colors hover:bg-amber-500/20"
                                   style={{ background: "rgba(217,119,6,0.15)", color: "#f59e0b" }}
                                 >
                                   {action}
@@ -2244,7 +2670,7 @@ export default function DastScanPage() {
                       setClaudeActiveSubTab(tab);
                       if (tab === "crawled" && claudeCrawlResults.length === 0 && id) api.claudeDastCrawlResults(id as string).then(setClaudeCrawlResults).catch(() => {});
                       if (tab === "history" && claudeHistory.length === 0 && id) api.claudeDastHistory(id as string).then(setClaudeHistory).catch(() => {});
-                      if (tab === "session" && !claudeSession && id) api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
+                      if (tab === "session" && id) api.claudeDastSession(id as string).then(setClaudeSession).catch(() => {});
                     }}
                     className="px-3 py-1.5 rounded-md text-xs font-medium"
                     style={{

@@ -24,7 +24,39 @@ RECHECK_STATUSES = [
 ]
 
 
+DEFAULT_SLA_DAYS = {"critical": 1, "high": 3, "medium": 7, "low": 30, "info": 90}
+
+
+def _compute_age_days(f: Finding) -> int:
+    """Days since finding was created."""
+    if not f.created_at:
+        return 0
+    return (datetime.utcnow() - f.created_at).days
+
+
+def _compute_sla_status(f: Finding) -> str:
+    """Return sla_status: on_track, at_risk, breached, resolved, no_sla."""
+    rs = getattr(f, "recheck_status", None) or "pending"
+    if rs in ("resolved", "exception"):
+        return "resolved"
+    deadline = getattr(f, "remediation_deadline", None)
+    if not deadline:
+        return "no_sla"
+    from datetime import date
+    today = date.today()
+    if hasattr(deadline, "date"):
+        deadline = deadline.date()
+    days_left = (deadline - today).days
+    if days_left < 0:
+        return "breached"
+    if days_left <= 1:
+        return "at_risk"
+    return "on_track"
+
+
 def f_to_dict(f: Finding) -> dict:
+    age_days = _compute_age_days(f)
+    sla_status = _compute_sla_status(f)
     return {
         "id": str(f.id),
         "project_id": str(f.project_id),
@@ -45,7 +77,10 @@ def f_to_dict(f: Finding) -> dict:
         "reproduction_steps": f.reproduction_steps,
         "impact": f.impact,
         "recommendation": f.recommendation,
+        "references": getattr(f, "references", None) or [],
+        "evidence_urls": getattr(f, "evidence_urls", None) or [],
         "created_at": f.created_at.isoformat() if f.created_at else "",
+        "updated_at": f.updated_at.isoformat() if getattr(f, "updated_at", None) else None,
         # JIRA integration fields
         "jira_key": getattr(f, "jira_key", None),
         "jira_url": getattr(f, "jira_url", None),
@@ -62,6 +97,16 @@ def f_to_dict(f: Finding) -> dict:
         "remediation_owner": getattr(f, "remediation_owner", None),
         "recheck_history": getattr(f, "recheck_history", None) or [],
         "include_in_report": getattr(f, "include_in_report", True),
+        # CVE correlation
+        "cve_ids": getattr(f, "cve_ids", None) or [],
+        # Dedup tracking
+        "last_seen_at": f.last_seen_at.isoformat() if getattr(f, "last_seen_at", None) else None,
+        "scan_count": getattr(f, "scan_count", None) or 1,
+        # Computed fields
+        "age_days": age_days,
+        "sla_status": sla_status,
+        # Activity log
+        "activity_log": getattr(f, "activity_log", None) or [],
     }
 
 
@@ -74,6 +119,23 @@ async def create_finding(
 ):
     if not await user_can_write_project(db, current_user, str(payload.project_id)):
         raise HTTPException(403, "Write access denied to this project")
+    # Auto-set SLA deadline based on org policy
+    sla_deadline = None
+    try:
+        proj_result = await db.execute(select(Project).where(Project.id == payload.project_id))
+        proj = proj_result.scalar_one_or_none()
+        if proj and getattr(proj, "organization_id", None):
+            from app.models.organization import Organization
+            org_result = await db.execute(select(Organization).where(Organization.id == proj.organization_id))
+            org = org_result.scalar_one_or_none()
+            if org:
+                sla_policy = getattr(org, "sla_policy", None) or DEFAULT_SLA_DAYS
+                sla_days = sla_policy.get(payload.severity, DEFAULT_SLA_DAYS.get(payload.severity, 30))
+                from datetime import timedelta
+                sla_deadline = (datetime.utcnow() + timedelta(days=sla_days)).date()
+    except Exception:
+        pass
+
     finding = Finding(
         project_id=payload.project_id,
         test_result_id=payload.test_result_id,
@@ -93,6 +155,14 @@ async def create_finding(
         created_by=current_user.id,
         original_severity=payload.severity,
         recheck_status="pending",
+        remediation_deadline=sla_deadline,
+        activity_log=[{
+            "date": datetime.utcnow().isoformat(),
+            "action": "created",
+            "user_id": str(current_user.id),
+            "user_name": current_user.full_name,
+            "details": f"Finding created with severity {payload.severity}",
+        }],
     )
     db.add(finding)
     await db.flush()
@@ -229,12 +299,38 @@ async def get_vulnerability_summary(
     total = len(findings)
     by_recheck = {}
     by_severity = {}
+    sla_breached = 0
+    sla_at_risk = 0
+    sla_on_track = 0
+    total_age = 0
+    overdue_findings = []
+    from datetime import date as _date
     for f in findings:
         rs = getattr(f, "recheck_status", None) or "pending"
         by_recheck[rs] = by_recheck.get(rs, 0) + 1
         sv = f.severity or "info"
         by_severity[sv] = by_severity.get(sv, 0) + 1
+        # SLA computation
+        sla = _compute_sla_status(f)
+        if sla == "breached":
+            sla_breached += 1
+            overdue_findings.append({"id": str(f.id), "title": f.title, "severity": f.severity, "age_days": _compute_age_days(f)})
+        elif sla == "at_risk":
+            sla_at_risk += 1
+        elif sla == "on_track":
+            sla_on_track += 1
+        total_age += _compute_age_days(f)
     resolved = by_recheck.get("resolved", 0)
+    avg_age = round(total_age / total, 1) if total > 0 else 0
+    # Mean time to resolve (for resolved findings)
+    mttr_days = 0
+    resolved_count = 0
+    for f in findings:
+        rs = getattr(f, "recheck_status", None) or "pending"
+        if rs == "resolved" and f.created_at and getattr(f, "recheck_date", None):
+            mttr_days += (f.recheck_date - f.created_at).days
+            resolved_count += 1
+    mttr = round(mttr_days / resolved_count, 1) if resolved_count > 0 else None
     return {
         "total": total,
         "resolved": resolved,
@@ -247,6 +343,13 @@ async def get_vulnerability_summary(
         "by_recheck_status": by_recheck,
         "by_severity": by_severity,
         "resolution_rate": round((resolved / total * 100) if total > 0 else 0, 1),
+        # SLA metrics
+        "sla_breached": sla_breached,
+        "sla_at_risk": sla_at_risk,
+        "sla_on_track": sla_on_track,
+        "avg_age_days": avg_age,
+        "mttr_days": mttr,
+        "overdue_findings": sorted(overdue_findings, key=lambda x: x["age_days"], reverse=True)[:10],
     }
 
 
@@ -269,8 +372,10 @@ async def update_finding(
         "cwe_id", "cvss_score", "remediation_deadline", "remediation_owner",
         "include_in_report",
     }
+    changes = []
     for key, val in payload.items():
         if key in allowed and hasattr(finding, key):
+            old_val = getattr(finding, key, None)
             if key in ("due_date", "remediation_deadline") and isinstance(val, str):
                 try:
                     val = datetime.fromisoformat(val.replace("Z", "")).date()
@@ -279,6 +384,18 @@ async def update_finding(
             if key == "include_in_report":
                 val = bool(val)
             setattr(finding, key, val)
+            changes.append(f"{key}: {old_val} -> {val}")
+    # Log activity
+    if changes:
+        activity = list(getattr(finding, "activity_log", None) or [])
+        activity.append({
+            "date": datetime.utcnow().isoformat(),
+            "action": "updated",
+            "user_id": str(current_user.id),
+            "user_name": current_user.full_name,
+            "details": "Updated: " + "; ".join(changes),
+        })
+        finding.activity_log = activity
     finding.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(finding)
@@ -340,6 +457,17 @@ async def update_recheck_status(
     history.append(history_entry)
     finding.recheck_history = history
 
+    # Log activity
+    activity = list(getattr(finding, "activity_log", None) or [])
+    activity.append({
+        "date": datetime.utcnow().isoformat(),
+        "action": "status_changed",
+        "user_id": str(current_user.id),
+        "user_name": current_user.full_name,
+        "details": f"Status changed from {history_entry['old_status']} to {history_entry['new_status']}" + (f": {payload.get('recheck_notes', '')}" if payload.get('recheck_notes') else ""),
+    })
+    finding.activity_log = activity
+
     # If resolved, auto-update main status
     if new_status == "resolved":
         finding.status = "fixed"
@@ -357,6 +485,40 @@ async def update_recheck_status(
         details={"recheck_status": new_status, "project_id": str(finding.project_id)},
         ip_address=get_client_ip(request),
     )
+    await db.commit()
+    await db.refresh(finding)
+    return f_to_dict(finding)
+
+
+@router.post("/{finding_id}/comment", response_model=dict)
+async def add_finding_comment(
+    finding_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a comment/note to a finding's activity log."""
+    result = await db.execute(select(Finding).where(Finding.id == finding_id))
+    finding = result.scalar_one_or_none()
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    if not await user_can_read_project(db, current_user, str(finding.project_id)):
+        raise HTTPException(403, "Access denied to this project")
+    comment = (payload.get("comment") or "").strip()
+    if not comment:
+        raise HTTPException(400, "Comment cannot be empty")
+    if len(comment) > 5000:
+        raise HTTPException(400, "Comment too long (max 5000 chars)")
+    activity = list(getattr(finding, "activity_log", None) or [])
+    activity.append({
+        "date": datetime.utcnow().isoformat(),
+        "action": "comment",
+        "user_id": str(current_user.id),
+        "user_name": current_user.full_name,
+        "details": comment,
+    })
+    finding.activity_log = activity
+    finding.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(finding)
     return f_to_dict(finding)

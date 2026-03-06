@@ -1,11 +1,12 @@
 """Projects API — with Redis caching and pagination for enterprise load."""
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case, delete
+from sqlalchemy import select, func, case, delete, or_
 from app.core.database import get_db
-from app.api.auth import get_current_user, require_super_admin
+from app.api.auth import get_current_user, require_super_admin, require_admin
 from app.api.deps import validate_project_id
 from app.core.rbac import require_roles
+from pydantic import BaseModel
 from app.services.project_permissions import (
     get_visible_project_ids,
     user_can_read_project,
@@ -378,8 +379,8 @@ async def get_all_projects_findings_trend(
         return {"by_date": [], "by_severity": {}}
 
     date_col = func.date(Finding.created_at)
-    dast_case = case((Finding.title.like("[DAST]%"), 1), else_=0)
-    manual_case = case((~Finding.title.like("[DAST]%"), 1), else_=0)
+    dast_case = case((or_(Finding.title.like("[DAST]%"), Finding.title.like("[Claude DAST]%")), 1), else_=0)
+    manual_case = case((or_(Finding.title.like("[DAST]%"), Finding.title.like("[Claude DAST]%")), 0), else_=1)
 
     by_date_q = (
         select(
@@ -565,8 +566,8 @@ async def get_project_findings_trend(
 
     # by_date: date, total, dast, manual
     date_col = func.date(Finding.created_at)
-    dast_case = case((Finding.title.like("[DAST]%"), 1), else_=0)
-    manual_case = case((~Finding.title.like("[DAST]%"), 1), else_=0)
+    dast_case = case((or_(Finding.title.like("[DAST]%"), Finding.title.like("[Claude DAST]%")), 1), else_=0)
+    manual_case = case((or_(Finding.title.like("[DAST]%"), Finding.title.like("[Claude DAST]%")), 0), else_=1)
 
     by_date_q = (
         select(
@@ -786,10 +787,12 @@ async def remove_project_member(
 async def delete_project(
     request: Request,
     project_id: str,
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a project and all its data (findings, results, members, etc.). Super_admin only."""
+    """Delete a project and all its data. Super_admin can delete any; org admin can delete own org's projects."""
+    if current_user.role not in ("super_admin", "admin"):
+        raise HTTPException(403, "Admin or super_admin role required")
     try:
         pid = uuid.UUID(project_id)
     except (ValueError, TypeError):
@@ -798,11 +801,26 @@ async def delete_project(
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
+    # Org admin can only delete projects in their own org
+    if current_user.role == "admin" and project.organization_id != current_user.organization_id:
+        raise HTTPException(403, "Cannot delete projects outside your organization")
     name = project.name
+    # Cascade delete all related data
     await db.execute(delete(Finding).where(Finding.project_id == pid))
     await db.execute(delete(ProjectTestResult).where(ProjectTestResult.project_id == pid))
     await db.execute(delete(UserPhaseCompletion).where(UserPhaseCompletion.project_id == pid))
     await db.execute(delete(ProjectMember).where(ProjectMember.project_id == pid))
+    await db.execute(delete(DastScanResult).where(DastScanResult.project_id == pid))
+    # Claude DAST tables
+    try:
+        from app.models.claude_scan_session import ClaudeScanSession
+        from app.models.claude_crawl_result import ClaudeCrawlResult
+        from app.models.dast_learning import DastLearning
+        await db.execute(delete(ClaudeScanSession).where(ClaudeScanSession.project_id == pid))
+        await db.execute(delete(ClaudeCrawlResult).where(ClaudeCrawlResult.project_id == pid))
+        await db.execute(delete(DastLearning).where(DastLearning.project_id == pid))
+    except Exception:
+        pass
     await db.execute(delete(Project).where(Project.id == pid))
     await log_audit(db, "delete_project", user_id=str(current_user.id), resource_type="project", resource_id=project_id, details={"name": name}, ip_address=get_client_ip(request))
     await db.commit()
@@ -812,3 +830,44 @@ async def delete_project(
     except Exception:
         pass
     return {"ok": True}
+
+
+class ProjectTransferRequest(BaseModel):
+    target_organization_id: str
+
+
+@router.post("/{project_id}/transfer")
+async def transfer_project(
+    request: Request,
+    project_id: str,
+    payload: ProjectTransferRequest,
+    current_user: User = Depends(require_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Transfer a project to another organization. Super_admin only."""
+    try:
+        pid = uuid.UUID(project_id)
+        target_org_id = uuid.UUID(payload.target_organization_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid ID format")
+    result = await db.execute(select(Project).where(Project.id == pid))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    from app.models.organization import Organization
+    org_result = await db.execute(select(Organization).where(Organization.id == target_org_id))
+    target_org = org_result.scalar_one_or_none()
+    if not target_org:
+        raise HTTPException(404, "Target organization not found")
+    old_org_id = str(project.organization_id) if project.organization_id else None
+    project.organization_id = target_org_id
+    await log_audit(
+        db, "transfer_project",
+        user_id=str(current_user.id),
+        resource_type="project",
+        resource_id=project_id,
+        details={"name": project.name, "from_org": old_org_id, "to_org": str(target_org_id), "to_org_name": target_org.name},
+        ip_address=get_client_ip(request),
+    )
+    await db.commit()
+    return {"ok": True, "message": f"Project '{project.name}' transferred to {target_org.name}"}

@@ -1,7 +1,10 @@
 """DAST Automation API — run automated security scans."""
 import asyncio
 import uuid
+import re
+import hashlib
 import logging
+from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +22,40 @@ from app.models.crawl_session import CrawlSession
 
 logger = logging.getLogger(__name__)
 
+
+def _finding_fingerprint(cwe_id: str, affected_url: str, parameter: str, title: str) -> str:
+    """Generate a dedup fingerprint from normalized attributes."""
+    # Strip prefix [DAST] / [Claude DAST], lowercase, strip whitespace
+    norm_title = re.sub(r'^\[(Claude )?DAST\]\s*', '', title).strip().lower()
+    # Use URL path only (ignore query params, fragments, host differences)
+    parsed = urlparse(affected_url or "")
+    url_path = parsed.path.rstrip("/").lower() or "/"
+    raw = f"{(cwe_id or '').strip()}|{url_path}|{(parameter or '').strip().lower()}|{norm_title}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
 router = APIRouter(prefix="/dast", tags=["dast"])
+
+
+async def _resolve_claude_api_key(db: AsyncSession, project) -> str:
+    """Resolve Claude API key: org-level first, then global fallback."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    api_key = settings.anthropic_api_key or ""
+
+    # Try org-level API key first
+    try:
+        org_id = getattr(project, "organization_id", None)
+        if org_id:
+            from app.models.organization import Organization
+            org_row = (await db.execute(
+                select(Organization).where(Organization.id == org_id)
+            )).scalar_one_or_none()
+            if org_row and getattr(org_row, "claude_dast_api_key", None):
+                api_key = org_row.claude_dast_api_key
+    except Exception:
+        pass
+
+    return api_key
 
 
 class DastScanRequest(BaseModel):
@@ -104,23 +140,53 @@ async def _run_scan_background(
     project_uuid = uuid.UUID(project_id)
     async with AsyncSessionLocal() as db:
         try:
+            from datetime import datetime as _dt
             for check in result["results"]:
                 title = f"[DAST] {check['title']}"
                 if check["status"] == "failed":
-                    # Deduplicate: skip if same finding already exists (open/confirmed)
-                    existing = await db.execute(
+                    # Smart dedup: fingerprint-based first, then fallback to exact match
+                    fp = _finding_fingerprint(
+                        check.get("cwe_id", ""), target_url,
+                        check.get("affected_parameter", ""), title,
+                    )
+                    existing_row = None
+                    # Try fingerprint match
+                    existing_q = await db.execute(
                         select(Finding).where(
                             Finding.project_id == project_uuid,
-                            Finding.title == title,
-                            Finding.affected_url == target_url,
+                            Finding.dedup_fingerprint == fp,
                             Finding.status.in_(["open", "confirmed"]),
                         )
                     )
-                    if existing.scalar_one_or_none():
+                    existing_row = existing_q.scalar_one_or_none()
+                    # Fallback: legacy exact-match
+                    if not existing_row:
+                        existing_q2 = await db.execute(
+                            select(Finding).where(
+                                Finding.project_id == project_uuid,
+                                Finding.title == title,
+                                Finding.affected_url == target_url,
+                                Finding.status.in_(["open", "confirmed"]),
+                            )
+                        )
+                        existing_row = existing_q2.scalar_one_or_none()
+                    if existing_row:
+                        # Update existing finding with latest evidence
+                        existing_row.last_seen_at = _dt.utcnow()
+                        existing_row.scan_count = (existing_row.scan_count or 1) + 1
+                        existing_row.dedup_fingerprint = fp
+                        if check.get("request_raw"):
+                            existing_row.request = check["request_raw"]
+                        if check.get("response_raw"):
+                            existing_row.response = check["response_raw"]
+                        if check.get("evidence"):
+                            existing_row.description = check["description"] + f"\n\nEvidence:\n{check['evidence']}"
                         continue
                     finding = Finding(
                         project_id=project_uuid,
                         title=title,
+                        dedup_fingerprint=fp,
+                        last_seen_at=_dt.utcnow(),
                         description=check["description"],
                         severity=check.get("severity", "medium"),
                         cwe_id=check.get("cwe_id", ""),
@@ -255,6 +321,33 @@ async def _run_scan_background(
                 "DAST-CMDI-01": "WSTG-INPV-12",
                 "DAST-CORS-02": "WSTG-CLNT-07",
                 "DAST-SMUGGLE-01": "WSTG-CONF-07",
+                # Modern OWASP 2021-2025 checks
+                "DAST-DESER-01": "WSTG-INPV-12",
+                "DAST-SSRF-02": "WSTG-INPV-19",
+                "DAST-BAC-01": "WSTG-ATHZ-02",
+                "DAST-MASS-01": "WSTG-INPV-11",
+                "DAST-APIMISC-01": "WSTG-CONF-07",
+                "DAST-SSTI-01": "WSTG-INPV-18",
+                "DAST-PROTO-01": "WSTG-INPV-01",
+                "DAST-DNSR-01": "WSTG-INPV-19",
+                "DAST-CACHEP-01": "WSTG-ATHN-06",
+                "DAST-CORSNULL-01": "WSTG-CLNT-07",
+                # Exposure checks
+                "DAST-CLOUD-01": "WSTG-CONF-04",
+                "DAST-GIT-01": "WSTG-CONF-04",
+                "DAST-ENVF-01": "WSTG-CONF-04",
+                "DAST-DOCKER-01": "WSTG-CONF-04",
+                "DAST-CICD-01": "WSTG-CONF-04",
+                "DAST-SECRET-01": "WSTG-INFO-05",
+                "DAST-GQL-01": "WSTG-INFO-10",
+                "DAST-SRCMAP-01": "WSTG-INFO-05",
+                # Network/Infrastructure checks
+                "DAST-ADMIN-01": "WSTG-CONF-04",
+                "DAST-DBEXP-01": "WSTG-CONF-04",
+                "DAST-WS-01": "WSTG-CLNT-10",
+                "DAST-SW-01": "WSTG-CLNT-13",
+                "DAST-CSPBY-01": "WSTG-CONF-07",
+                "DAST-SUBTO-01": "WSTG-CONF-10",
             }
             from datetime import datetime as dt
             for check in result["results"]:
@@ -1405,6 +1498,8 @@ class ClaudeScanRequest(BaseModel):
     scan_mode: str = "standard"  # quick, standard, deep
     include_subdomains: bool = False
     max_cost_usd: float | None = None  # Override per-scan limit
+    auth_config: dict | None = None  # Grey-box auth: {type, token, cookie_string, username, password, ...}
+    proxy_url: str | None = None  # HTTP/SOCKS5 proxy for internal targets (e.g., socks5://127.0.0.1:1080)
 
 
 class ClaudeRetestRequest(BaseModel):
@@ -1443,6 +1538,8 @@ async def _run_claude_scan_background(
     include_subdomains: bool,
     max_cost_usd: float,
     user_id: uuid.UUID,
+    auth_config: dict | None = None,
+    proxy_url: str | None = None,
 ):
     """Run Claude AI DAST scan as background task."""
     import time
@@ -1536,6 +1633,25 @@ async def _run_claude_scan_background(
     except Exception:
         pass
 
+    # Resolve auth config if provided
+    resolved_auth = {"headers": {}, "cookies": {}, "auth_type": "none"}
+    if auth_config:
+        try:
+            from app.services.dast.auth_resolver import resolve_auth
+            resolved_auth = await resolve_auth(auth_config)
+        except Exception as e:
+            logger.warning("Auth resolution failed: %s", e)
+
+    # Get organization_id for RAG
+    org_id = ""
+    try:
+        async with AsyncSessionLocal() as _db2:
+            _proj = (await _db2.execute(select(Project).where(Project.id == uuid.UUID(project_id)))).scalar_one_or_none()
+            if _proj and _proj.organization_id:
+                org_id = str(_proj.organization_id)
+    except Exception:
+        pass
+
     # Create and run the agent
     try:
         from app.services.dast.claude_agent import ClaudeDastAgent
@@ -1548,6 +1664,9 @@ async def _run_claude_scan_background(
             scan_mode=scan_mode,
             max_cost_usd=max_cost_usd,
             max_api_calls=settings.claude_dast_max_api_calls,
+            auth_headers=resolved_auth.get("headers", {}),
+            auth_type=resolved_auth.get("auth_type", "none"),
+            organization_id=org_id,
         )
 
         executor = ClaudeToolExecutor(
@@ -1555,12 +1674,31 @@ async def _run_claude_scan_background(
             scan_id=scan_id,
             target_url=target_url,
             scope_domain=target_url,
+            auth_headers=resolved_auth.get("headers", {}),
+            organization_id=org_id,
+            proxy_url=proxy_url,
         )
         agent.set_executor(executor)
 
-        # Progress callback → Redis
+        # Progress callback → Redis (also update session context periodically)
+        _last_session_update = [0.0]
         def _progress_cb(data: dict):
             _dast_progress_set(scan_id, {**data, "project_id": project_id, "target_url": target_url})
+            # Update session context every 30s so Session tab shows live info
+            now = time.time()
+            if now - _last_session_update[0] > 30:
+                _last_session_update[0] = now
+                try:
+                    import redis as redis_lib
+                    _r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+                    _r.setex(f"claude:session:{project_id}", settings.claude_dast_session_ttl_days * 86400, json.dumps({
+                        "project_id": project_id, "target_url": target_url,
+                        "summary": f"Scanning... {data.get('findings_so_far', 0)} findings, {data.get('pages_crawled', 0)} pages crawled",
+                        "last_scan_id": scan_id, "last_scan_at": now, "status": "running",
+                        "scan_count": 1, "discovered_endpoints_count": data.get("pages_crawled", 0),
+                    }, default=str))
+                except Exception:
+                    pass
         agent.set_progress_callback(_progress_cb)
 
         result = await agent.run_intelligent_scan(
@@ -1584,27 +1722,59 @@ async def _run_claude_scan_background(
         try:
             for finding_data in result.get("findings", []):
                 title = f"[Claude DAST] {finding_data.get('title', 'Unknown')}"
-                # Dedup
-                existing = await db.execute(
+                affected = finding_data.get("affected_url", target_url)
+                # Smart dedup: fingerprint-based first, then fallback to exact match
+                fp = _finding_fingerprint(
+                    finding_data.get("cwe_id", ""), affected,
+                    finding_data.get("affected_parameter", ""), title,
+                )
+                existing_row = None
+                # Try fingerprint match
+                fp_q = await db.execute(
                     select(Finding).where(
                         Finding.project_id == project_uuid,
-                        Finding.title == title,
-                        Finding.affected_url == finding_data.get("affected_url", target_url),
+                        Finding.dedup_fingerprint == fp,
                         Finding.status.in_(["open", "confirmed"]),
                     )
                 )
-                if existing.scalar_one_or_none():
+                existing_row = fp_q.scalar_one_or_none()
+                # Fallback: legacy exact-match
+                if not existing_row:
+                    legacy_q = await db.execute(
+                        select(Finding).where(
+                            Finding.project_id == project_uuid,
+                            Finding.title == title,
+                            Finding.affected_url == affected,
+                            Finding.status.in_(["open", "confirmed"]),
+                        )
+                    )
+                    existing_row = legacy_q.scalar_one_or_none()
+                if existing_row:
+                    # Update existing finding with latest evidence instead of skipping
+                    existing_row.last_seen_at = datetime.utcnow()
+                    existing_row.scan_count = (existing_row.scan_count or 1) + 1
+                    existing_row.dedup_fingerprint = fp
+                    if finding_data.get("request_raw"):
+                        existing_row.request = finding_data["request_raw"]
+                    if finding_data.get("response_raw"):
+                        existing_row.response = finding_data["response_raw"]
+                    if finding_data.get("description"):
+                        existing_row.description = finding_data["description"]
+                    if finding_data.get("reproduction_steps"):
+                        existing_row.reproduction_steps = finding_data["reproduction_steps"]
                     continue
 
                 finding = Finding(
                     project_id=project_uuid,
                     title=title,
+                    dedup_fingerprint=fp,
+                    last_seen_at=datetime.utcnow(),
                     description=finding_data.get("description", ""),
                     severity=finding_data.get("severity", "medium"),
                     cvss_score=finding_data.get("cvss_score", ""),
                     cwe_id=finding_data.get("cwe_id", ""),
                     owasp_category=finding_data.get("owasp_category", ""),
-                    affected_url=finding_data.get("affected_url", target_url),
+                    affected_url=affected,
                     affected_parameter=finding_data.get("affected_parameter", ""),
                     request=finding_data.get("request_raw", ""),
                     response=finding_data.get("response_raw", ""),
@@ -1618,6 +1788,122 @@ async def _run_claude_scan_background(
                 findings_created.append(finding_data.get("title", ""))
 
             await db.commit()
+
+            # Auto-mark test cases based on Claude findings
+            try:
+                from datetime import datetime as dt
+                # CWE to WSTG module mapping for Claude findings
+                CWE_TO_MODULE = {
+                    "CWE-79": "WSTG-INPV-01",   # XSS
+                    "CWE-89": "WSTG-INPV-05",   # SQLi
+                    "CWE-78": "WSTG-INPV-12",   # OS Command Injection
+                    "CWE-22": "WSTG-INPV-12",   # Path Traversal
+                    "CWE-918": "WSTG-INPV-19",  # SSRF
+                    "CWE-352": "WSTG-SESS-05",  # CSRF
+                    "CWE-287": "WSTG-ATHN-01",  # Improper Auth
+                    "CWE-862": "WSTG-ATHZ-02",  # Missing Auth
+                    "CWE-306": "WSTG-ATHN-01",  # Missing Critical Auth
+                    "CWE-502": "WSTG-INPV-12",  # Deserialization
+                    "CWE-434": "WSTG-BUSL-08",  # File Upload
+                    "CWE-611": "WSTG-INPV-07",  # XXE
+                    "CWE-200": "WSTG-INFO-05",  # Info Exposure
+                    "CWE-522": "WSTG-ATHN-02",  # Insuff Protected Creds
+                    "CWE-798": "WSTG-ATHN-02",  # Hardcoded Creds
+                    "CWE-269": "WSTG-ATHZ-03",  # Priv Escalation
+                    "CWE-639": "WSTG-ATHZ-04",  # IDOR
+                    "CWE-601": "WSTG-CLNT-04",  # Open Redirect
+                    "CWE-94": "WSTG-INPV-18",   # Code Injection / SSTI
+                    "CWE-1021": "WSTG-CLNT-09", # Clickjacking
+                    "CWE-326": "WSTG-CRYP-01",  # Weak Crypto
+                    "CWE-327": "WSTG-CRYP-01",  # Broken Crypto
+                    "CWE-614": "WSTG-SESS-02",  # Cookie not Secure
+                    "CWE-384": "WSTG-SESS-03",  # Session Fixation
+                    "CWE-346": "WSTG-CLNT-07",  # CORS
+                    # Extended mappings for broader coverage
+                    "CWE-77": "WSTG-INPV-12",   # Command Injection (alt)
+                    "CWE-90": "WSTG-INPV-06",   # LDAP Injection
+                    "CWE-91": "WSTG-INPV-07",   # XML Injection
+                    "CWE-116": "WSTG-INPV-01",  # Improper Output Encoding
+                    "CWE-285": "WSTG-ATHZ-01",  # Improper Authorization
+                    "CWE-307": "WSTG-ATHN-03",  # Brute Force
+                    "CWE-312": "WSTG-INFO-05",  # Cleartext Storage
+                    "CWE-319": "WSTG-CRYP-03",  # Cleartext Transmission
+                    "CWE-400": "WSTG-ATHN-03",  # Uncontrolled Resource
+                    "CWE-548": "WSTG-CONF-04",  # Directory Listing
+                    "CWE-613": "WSTG-SESS-07",  # Insufficient Session Expiration
+                    "CWE-693": "WSTG-CONF-07",  # Protection Mechanism Failure
+                    "CWE-732": "WSTG-CONF-04",  # Incorrect Permission
+                    "CWE-829": "WSTG-CLNT-13",  # Untrusted Functionality
+                    "CWE-942": "WSTG-CLNT-07",  # Overly Permissive CORS
+                    "CWE-1004": "WSTG-SESS-02", # Cookie without HttpOnly
+                    "CWE-1275": "WSTG-SESS-02", # Cookie with SameSite=None
+                }
+                # Title-based fallback mapping for findings without matching CWEs
+                TITLE_TO_MODULE = {
+                    "xss": "WSTG-INPV-01", "cross-site scripting": "WSTG-INPV-01",
+                    "sql injection": "WSTG-INPV-05", "sqli": "WSTG-INPV-05",
+                    "ssrf": "WSTG-INPV-19", "server-side request": "WSTG-INPV-19",
+                    "csrf": "WSTG-SESS-05", "cross-site request forgery": "WSTG-SESS-05",
+                    "open redirect": "WSTG-CLNT-04", "url redirect": "WSTG-CLNT-04",
+                    "directory listing": "WSTG-CONF-04", "directory traversal": "WSTG-INPV-12",
+                    "path traversal": "WSTG-INPV-12", "lfi": "WSTG-INPV-12",
+                    "security header": "WSTG-CONF-07", "missing header": "WSTG-CONF-07",
+                    "cookie": "WSTG-SESS-02", "session": "WSTG-SESS-01",
+                    "cors": "WSTG-CLNT-07", "information disclosure": "WSTG-INFO-05",
+                    "info leak": "WSTG-INFO-05", "sensitive data": "WSTG-INFO-05",
+                    "command injection": "WSTG-INPV-12", "rce": "WSTG-INPV-12",
+                    "authentication": "WSTG-ATHN-01", "brute force": "WSTG-ATHN-03",
+                    "idor": "WSTG-ATHZ-04", "access control": "WSTG-ATHZ-02",
+                    "jwt": "WSTG-SESS-01", "deserialization": "WSTG-INPV-12",
+                    "ssti": "WSTG-INPV-18", "template injection": "WSTG-INPV-18",
+                    "xxe": "WSTG-INPV-07", "xml external": "WSTG-INPV-07",
+                }
+
+                def _auto_mark_test_result(module_id, finding_data):
+                    """Auto-mark a project test result as failed for the given module."""
+                    return (
+                        select(ProjectTestResult, TestCase)
+                        .join(TestCase, ProjectTestResult.test_case_id == TestCase.id)
+                        .where(
+                            ProjectTestResult.project_id == project_uuid,
+                            TestCase.module_id == module_id,
+                            ProjectTestResult.is_applicable == True,
+                        )
+                        .limit(1)
+                    )
+
+                marked_modules = set()
+                for finding_data in result.get("findings", []):
+                    cwe = finding_data.get("cwe_id", "")
+                    module_id = CWE_TO_MODULE.get(cwe)
+                    # Fallback: title-based matching
+                    if not module_id:
+                        title_lower = finding_data.get("title", "").lower()
+                        for keyword, mod_id in TITLE_TO_MODULE.items():
+                            if keyword in title_lower:
+                                module_id = mod_id
+                                break
+                    if not module_id or module_id in marked_modules:
+                        continue
+                    ptr_q = _auto_mark_test_result(module_id, finding_data)
+                    ptr_rows = (await db.execute(ptr_q)).all()
+                    for ptr, tc in ptr_rows:
+                        ptr.status = "failed"
+                        ptr.tester_id = user_id
+                        ptr.completed_at = dt.utcnow()
+                        ptr.evidence = [{"filename": "claude_dast_evidence", "url": "", "description": finding_data.get("description", "")[:500]}]
+                        ptr.request_captured = finding_data.get("request_raw", "")[:3000]
+                        ptr.response_captured = finding_data.get("response_raw", "")[:3000]
+                        ptr.reproduction_steps = finding_data.get("reproduction_steps", "")
+                        ptr.tool_used = "Claude AI DAST (Navigator)"
+                        ptr.payload_used = finding_data.get("payload_used", finding_data.get("affected_parameter", ""))
+                        marked_modules.add(module_id)
+                        break
+                await db.commit()
+            except Exception as e:
+                logger.warning("Claude auto-mark test cases failed: %s", e)
+                await db.rollback()
+
         except Exception as e:
             logger.exception("Claude findings creation failed: %s", e)
             await db.rollback()
@@ -1653,14 +1939,56 @@ async def _run_claude_scan_background(
             logger.warning("Claude scan session persist failed: %s", e)
             await db.rollback()
 
-        # Persist ClaudeCrawlResult
+        # Persist ClaudeCrawlResult with structured extraction
         try:
             crawl_results = result.get("crawl_results", [])
             if crawl_results:
+                # Extract structured data from raw crawl results
+                api_endpoints = []
+                js_files = []
+                forms_discovered = []
+                hidden_paths = []
+                subdomains_found = []
+                technology_stack = {}
+                secrets_found = []
+                for cr in crawl_results:
+                    # API endpoints
+                    url = cr.get("url", "")
+                    if any(p in url.lower() for p in ["/api/", "/graphql", "/rest/", "/v1/", "/v2/", "/v3/"]):
+                        api_endpoints.append({"url": url, "method": cr.get("method", "GET"), "status_code": cr.get("status_code")})
+                    # JS files
+                    if url.endswith(".js") or url.endswith(".mjs"):
+                        js_files.append({"url": url, "size": len(cr.get("response_body_preview", "")), "secrets": cr.get("secrets", []), "libraries": cr.get("libraries_detected", [])})
+                    # Forms
+                    for form in (cr.get("forms") or cr.get("forms_found") or []):
+                        forms_discovered.append(form if isinstance(form, dict) else {"action": str(form)})
+                    # Hidden/interesting paths
+                    for finding in (cr.get("interesting_findings") or []):
+                        if isinstance(finding, str):
+                            hidden_paths.append({"path": finding, "source": url})
+                        elif isinstance(finding, dict):
+                            hidden_paths.append(finding)
+                    # Technology detection
+                    for tech in (cr.get("technology_detected") or []):
+                        if isinstance(tech, str):
+                            technology_stack[tech] = True
+                        elif isinstance(tech, dict):
+                            technology_stack.update(tech)
+                    # Secrets
+                    for secret in (cr.get("secrets_found") or cr.get("secrets") or []):
+                        secrets_found.append(secret if isinstance(secret, dict) else {"type": "unknown", "value_preview": str(secret)[:50]})
+
                 crawl_record = ClaudeCrawlResult(
                     project_id=project_uuid,
                     scan_id=scan_id,
                     crawled_pages=crawl_results,
+                    api_endpoints=api_endpoints or [],
+                    js_files=js_files or [],
+                    forms_discovered=forms_discovered or [],
+                    hidden_paths=hidden_paths or [],
+                    subdomains=subdomains_found or [],
+                    technology_stack=technology_stack or {},
+                    secrets_found=secrets_found or [],
                     total_pages=len(crawl_results),
                     duration_seconds=int(result.get("duration_seconds", 0)),
                 )
@@ -1669,6 +1997,37 @@ async def _run_claude_scan_background(
         except Exception as e:
             logger.warning("Claude crawl result persist failed: %s", e)
             await db.rollback()
+
+    # Store RAG learnings from findings for future scans
+    try:
+        from app.services.dast.claude_rag import store_learning
+        from urllib.parse import urlparse as _urlparse
+        _domain = _urlparse(target_url).hostname or ""
+        async with AsyncSessionLocal() as rag_db:
+            for fd in result.get("findings", []):
+                await store_learning(
+                    rag_db,
+                    finding_data={
+                        "title": fd.get("title", ""),
+                        "description": fd.get("description", ""),
+                        "severity": fd.get("severity", "info"),
+                        "owasp_category": fd.get("owasp_category", ""),
+                        "cwe_id": fd.get("cwe_id", ""),
+                        "affected_url": fd.get("affected_url", ""),
+                        "parameter": fd.get("affected_parameter", ""),
+                        "payload": fd.get("payload_used", ""),
+                        "evidence": {"request": fd.get("request_raw", "")[:500], "response": fd.get("response_raw", "")[:500]},
+                    },
+                    scan_context={
+                        "domain": _domain,
+                        "technology_stack": project_context.get("stack_profile", {}),
+                        "project_id": project_id,
+                        "organization_id": org_id or None,
+                    },
+                )
+            await rag_db.commit()
+    except Exception as e:
+        logger.debug("RAG learning storage skipped: %s", e)
 
     # Save session context for future retests
     try:
@@ -1714,8 +2073,6 @@ async def claude_scan(
 
     if not settings.claude_dast_enabled:
         raise HTTPException(400, "Claude DAST is not enabled")
-    if not settings.anthropic_api_key:
-        raise HTTPException(400, "Anthropic API key not configured")
 
     project = (await db.execute(
         select(Project).where(Project.id == uuid.UUID(req.project_id))
@@ -1724,6 +2081,11 @@ async def claude_scan(
         raise HTTPException(404, "Project not found")
     if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
+
+    # Check org-level or global API key
+    resolved_key = await _resolve_claude_api_key(db, project)
+    if not resolved_key:
+        raise HTTPException(400, "Anthropic API key not configured. Ask your admin to set it in Organization Settings.")
 
     # ── Org-level budget enforcement ──
     org_id = getattr(project, "organization_id", None)
@@ -1793,6 +2155,23 @@ async def claude_scan(
         "last_updated": time.time(),
     })
 
+    # Pre-seed session context in Redis so "No active session" isn't shown during scan
+    try:
+        import json as _json
+        import redis as redis_lib
+        _r = redis_lib.from_url(settings.redis_url, decode_responses=True)
+        _session_key = f"claude:session:{req.project_id}"
+        _r.setex(_session_key, settings.claude_dast_session_ttl_days * 86400, _json.dumps({
+            "project_id": req.project_id,
+            "target_url": target_url,
+            "summary": f"Scan in progress (mode: {req.scan_mode})",
+            "last_scan_id": scan_id,
+            "last_scan_at": time.time(),
+            "status": "running",
+        }, default=str))
+    except Exception:
+        pass
+
     background.add_task(
         _run_claude_scan_background,
         scan_id=scan_id,
@@ -1802,6 +2181,8 @@ async def claude_scan(
         include_subdomains=req.include_subdomains,
         max_cost_usd=max_cost,
         user_id=user.id,
+        auth_config=req.auth_config,
+        proxy_url=req.proxy_url,
     )
 
     return {"scan_id": scan_id, "status": "started", "target_url": target_url, "scan_mode": req.scan_mode}
@@ -1877,9 +2258,6 @@ async def claude_retest(
     from app.core.config import get_settings
     settings = get_settings()
 
-    if not settings.anthropic_api_key:
-        raise HTTPException(400, "Anthropic API key not configured")
-
     project = (await db.execute(
         select(Project).where(Project.id == uuid.UUID(req.project_id))
     )).scalar_one_or_none()
@@ -1887,6 +2265,10 @@ async def claude_retest(
         raise HTTPException(404, "Project not found")
     if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
+
+    resolved_key = await _resolve_claude_api_key(db, project)
+    if not resolved_key:
+        raise HTTPException(400, "Anthropic API key not configured. Ask your admin to set it in Organization Settings.")
 
     # Load findings to retest
     findings_to_retest = []
@@ -1936,9 +2318,22 @@ async def claude_retest(
         except Exception:
             pass
 
+        # Resolve org-level API key
+        _retest_api_key = settings.anthropic_api_key
+        try:
+            from app.models.organization import Organization
+            async with AsyncSessionLocal() as _rdb:
+                _rproj = (await _rdb.execute(select(Project).where(Project.id == uuid.UUID(req.project_id)))).scalar_one_or_none()
+                if _rproj and _rproj.organization_id:
+                    _rorg = (await _rdb.execute(select(Organization).where(Organization.id == _rproj.organization_id))).scalar_one_or_none()
+                    if _rorg and getattr(_rorg, "claude_dast_api_key", None):
+                        _retest_api_key = _rorg.claude_dast_api_key
+        except Exception:
+            pass
+
         try:
             agent = ClaudeDastAgent(
-                anthropic_api_key=settings.anthropic_api_key,
+                anthropic_api_key=_retest_api_key,
                 project_id=req.project_id,
                 scan_id=scan_id,
                 scan_mode="standard",
@@ -2021,8 +2416,6 @@ async def claude_crawl_only(
     """Run Claude AI crawl only (no testing)."""
     from app.core.config import get_settings
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise HTTPException(400, "Anthropic API key not configured")
 
     project = (await db.execute(
         select(Project).where(Project.id == uuid.UUID(req.project_id))
@@ -2031,6 +2424,10 @@ async def claude_crawl_only(
         raise HTTPException(404, "Project not found")
     if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
+
+    resolved_key = await _resolve_claude_api_key(db, project)
+    if not resolved_key:
+        raise HTTPException(400, "Anthropic API key not configured. Ask your admin to set it in Organization Settings.")
 
     target_url = req.target_url or project.application_url
     scan_id = f"claude-crawl-{uuid.uuid4().hex[:12]}"
@@ -2052,9 +2449,22 @@ async def claude_crawl_only(
         from app.services.dast.runner import _dast_progress_set
         from app.models.claude_crawl_result import ClaudeCrawlResult
 
+        # Resolve org-level API key
+        _crawl_api_key = settings.anthropic_api_key
+        try:
+            from app.models.organization import Organization
+            async with AsyncSessionLocal() as _cdb:
+                _cproj = (await _cdb.execute(select(Project).where(Project.id == uuid.UUID(req.project_id)))).scalar_one_or_none()
+                if _cproj and _cproj.organization_id:
+                    _corg = (await _cdb.execute(select(Organization).where(Organization.id == _cproj.organization_id))).scalar_one_or_none()
+                    if _corg and getattr(_corg, "claude_dast_api_key", None):
+                        _crawl_api_key = _corg.claude_dast_api_key
+        except Exception:
+            pass
+
         try:
             agent = ClaudeDastAgent(
-                anthropic_api_key=settings.anthropic_api_key,
+                anthropic_api_key=_crawl_api_key,
                 project_id=req.project_id,
                 scan_id=scan_id,
                 scan_mode="standard",
@@ -2128,7 +2538,7 @@ async def claude_crawl_results(
         .limit(5)
     )).scalars().all()
 
-    return [
+    db_results = [
         {
             "id": str(r.id),
             "scan_id": r.scan_id,
@@ -2150,6 +2560,39 @@ async def claude_crawl_results(
         for r in results
     ]
 
+    # If there's an active scan, include live crawl data from progress
+    try:
+        from app.services.dast.runner import list_dast_progress
+        for s in list_dast_progress():
+            if s.get("project_id") == project_id and s.get("status") in ("running", "starting"):
+                live_crawl = s.get("live_crawl_results", [])
+                if live_crawl and (not db_results or not db_results[0].get("crawled_pages")):
+                    # Insert live results as a virtual entry at the top
+                    db_results.insert(0, {
+                        "id": "live",
+                        "scan_id": s.get("scan_id", ""),
+                        "crawled_pages": live_crawl,
+                        "api_endpoints": [cr for cr in live_crawl if any(p in (cr.get("url", "")).lower() for p in ["/api/", "/graphql", "/rest/", "/v1/", "/v2/"])],
+                        "js_files": [cr for cr in live_crawl if (cr.get("url", "")).endswith((".js", ".mjs"))],
+                        "subdomains": [],
+                        "hidden_paths": [],
+                        "hidden_parameters": [],
+                        "forms_discovered": [],
+                        "technology_stack": {},
+                        "attack_surface_summary": None,
+                        "sca_results": [],
+                        "secrets_found": [],
+                        "total_pages": len(live_crawl),
+                        "total_endpoints": 0,
+                        "created_at": None,
+                        "_live": True,
+                    })
+                break
+    except Exception:
+        pass
+
+    return db_results
+
 
 @router.post("/claude/generate-checks")
 async def claude_generate_checks(
@@ -2161,8 +2604,6 @@ async def claude_generate_checks(
     """Generate new test cases from Claude's analysis of the target."""
     from app.core.config import get_settings
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise HTTPException(400, "Anthropic API key not configured")
 
     project = (await db.execute(
         select(Project).where(Project.id == uuid.UUID(req.project_id))
@@ -2171,6 +2612,10 @@ async def claude_generate_checks(
         raise HTTPException(404, "Project not found")
     if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
+
+    resolved_key = await _resolve_claude_api_key(db, project)
+    if not resolved_key:
+        raise HTTPException(400, "Anthropic API key not configured. Ask your admin to set it in Organization Settings.")
 
     target_url = req.target_url or project.application_url
     scan_id = f"claude-gen-{uuid.uuid4().hex[:12]}"
@@ -2186,9 +2631,22 @@ async def claude_generate_checks(
         from app.services.dast.claude_prompts import SYSTEM_PROMPT_GENERATE_CHECKS
         from app.services.dast.runner import _dast_progress_set
 
+        # Resolve org-level API key
+        _gen_api_key = settings.anthropic_api_key
+        try:
+            from app.models.organization import Organization
+            async with AsyncSessionLocal() as _gdb:
+                _gproj = (await _gdb.execute(select(Project).where(Project.id == uuid.UUID(req.project_id)))).scalar_one_or_none()
+                if _gproj and _gproj.organization_id:
+                    _gorg = (await _gdb.execute(select(Organization).where(Organization.id == _gproj.organization_id))).scalar_one_or_none()
+                    if _gorg and getattr(_gorg, "claude_dast_api_key", None):
+                        _gen_api_key = _gorg.claude_dast_api_key
+        except Exception:
+            pass
+
         try:
             agent = ClaudeDastAgent(
-                anthropic_api_key=settings.anthropic_api_key,
+                anthropic_api_key=_gen_api_key,
                 project_id=req.project_id,
                 scan_id=scan_id,
                 scan_mode="quick",
@@ -2264,10 +2722,50 @@ async def claude_session_info(
         .limit(20)
     )).scalars().all()
 
+    # Also check for active scan in progress (fallback if session wasn't seeded)
+    active_scan = None
+    try:
+        from app.services.dast.runner import list_dast_progress
+        for s in list_dast_progress():
+            if s.get("project_id") == project_id and s.get("status") in ("running", "starting"):
+                active_scan = s
+                break
+    except Exception:
+        pass
+
+    has_session = session_context is not None or active_scan is not None
+    summary = None
+    if session_context:
+        summary = session_context.get("summary")
+    elif active_scan:
+        summary = f"Scan in progress: {active_scan.get('current_activity', 'Initializing...')}"
+
+    scan_count = 0
+    discovered_endpoints_count = 0
+    technology_stack = {}
+    waf_detected = None
+    interesting_behaviors = []
+    if session_context:
+        scan_count = session_context.get("scan_count", len(history))
+        discovered_endpoints_count = session_context.get("discovered_endpoints_count", 0)
+        technology_stack = session_context.get("technology_stack", {})
+        waf_detected = session_context.get("waf_detected")
+        interesting_behaviors = session_context.get("interesting_behaviors", [])
+    elif active_scan:
+        discovered_endpoints_count = active_scan.get("pages_crawled", 0)
+
     return {
-        "has_session": session_context is not None,
-        "session_summary": session_context.get("summary") if session_context else None,
+        "has_session": has_session,
+        "session_summary": summary,
+        "summary": summary,
         "last_scan_at": session_context.get("last_scan_at") if session_context else None,
+        "active_scan": active_scan is not None,
+        "active_scan_id": active_scan.get("scan_id") if active_scan else (session_context.get("last_scan_id") if session_context else None),
+        "scan_count": scan_count or len(history),
+        "discovered_endpoints_count": discovered_endpoints_count,
+        "technology_stack": technology_stack,
+        "waf_detected": waf_detected,
+        "interesting_behaviors": interesting_behaviors,
         "scan_history": [
             {
                 "scan_id": s.scan_id,
@@ -2526,3 +3024,165 @@ async def claude_admin_settings_org_update(
         org.claude_dast_api_key = req.claude_dast_api_key if req.claude_dast_api_key else None
     await db.commit()
     return {"status": "updated", "organization_id": org_id}
+
+
+# ── Export Endpoints ──────────────────────────────────────────────────────────
+
+
+@router.get("/export/{project_id}/burp-xml")
+async def export_burp_xml(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Export findings as Burp Suite XML."""
+    if not await user_can_read_project(db, user, project_id):
+        raise HTTPException(403, "Access denied")
+    findings_q = await db.execute(
+        select(Finding).where(Finding.project_id == uuid.UUID(project_id))
+    )
+    findings = [
+        {
+            "title": f.title, "severity": f.severity, "description": f.description or "",
+            "affected_url": f.affected_url or "", "affected_parameter": f.affected_parameter or "",
+            "cwe_id": f.cwe_id or "", "request": f.request or "", "response": f.response or "",
+            "remediation": f.recommendation or "", "reproduction_steps": f.reproduction_steps or "",
+            "confidence": "certain" if f.status == "confirmed" else "tentative",
+        }
+        for f in findings_q.scalars().all()
+    ]
+    from app.services.dast.export_burp import export_findings_burp_xml
+    xml_content = export_findings_burp_xml(findings)
+    from fastapi.responses import Response
+    return Response(content=xml_content, media_type="application/xml",
+                    headers={"Content-Disposition": f"attachment; filename=dast-findings-{project_id[:8]}.xml"})
+
+
+@router.get("/export/{project_id}/json")
+async def export_json(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Export findings as JSON."""
+    if not await user_can_read_project(db, user, project_id):
+        raise HTTPException(403, "Access denied")
+    findings_q = await db.execute(
+        select(Finding).where(Finding.project_id == uuid.UUID(project_id))
+    )
+    findings = [
+        {
+            "title": f.title, "severity": f.severity, "description": f.description or "",
+            "affected_url": f.affected_url or "", "affected_parameter": f.affected_parameter or "",
+            "cwe_id": f.cwe_id or "", "owasp_category": f.owasp_category or "",
+            "request": f.request or "", "response": f.response or "",
+            "remediation": f.recommendation or "", "reproduction_steps": f.reproduction_steps or "",
+            "status": f.status or "", "cvss_score": f.cvss_score or "",
+        }
+        for f in findings_q.scalars().all()
+    ]
+    from app.services.dast.export_burp import export_findings_json
+    json_content = export_findings_json(findings)
+    from fastapi.responses import Response
+    return Response(content=json_content, media_type="application/json",
+                    headers={"Content-Disposition": f"attachment; filename=dast-findings-{project_id[:8]}.json"})
+
+
+@router.get("/export/{project_id}/csv")
+async def export_csv(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Export findings as CSV."""
+    if not await user_can_read_project(db, user, project_id):
+        raise HTTPException(403, "Access denied")
+    findings_q = await db.execute(
+        select(Finding).where(Finding.project_id == uuid.UUID(project_id))
+    )
+    findings = [
+        {
+            "title": f.title, "severity": f.severity, "description": f.description or "",
+            "affected_url": f.affected_url or "", "affected_parameter": f.affected_parameter or "",
+            "cwe_id": f.cwe_id or "", "owasp_category": f.owasp_category or "",
+            "request": f.request or "", "response": f.response or "",
+            "remediation": f.recommendation or "", "status": f.status or "",
+        }
+        for f in findings_q.scalars().all()
+    ]
+    from app.services.dast.export_burp import export_findings_csv
+    csv_content = export_findings_csv(findings)
+    from fastapi.responses import Response
+    return Response(content=csv_content, media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=dast-findings-{project_id[:8]}.csv"})
+
+
+@router.get("/export/{project_id}/har")
+async def export_har(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Export crawl data as HAR (HTTP Archive)."""
+    if not await user_can_read_project(db, user, project_id):
+        raise HTTPException(403, "Access denied")
+    from app.models.claude_crawl_result import ClaudeCrawlResult
+    crawl_q = await db.execute(
+        select(ClaudeCrawlResult).where(
+            ClaudeCrawlResult.project_id == uuid.UUID(project_id)
+        ).order_by(ClaudeCrawlResult.created_at.desc()).limit(1)
+    )
+    crawl = crawl_q.scalar_one_or_none()
+    if not crawl or not crawl.crawled_pages:
+        raise HTTPException(404, "No crawl data found")
+    from app.services.dast.export_burp import export_har
+    har_content = export_har(crawl.crawled_pages)
+    from fastapi.responses import Response
+    return Response(content=har_content, media_type="application/json",
+                    headers={"Content-Disposition": f"attachment; filename=dast-crawl-{project_id[:8]}.har"})
+
+
+# ── Learning Management Endpoints ────────────────────────────────────────────
+
+
+@router.get("/learnings/{project_id}")
+async def get_learnings(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Get RAG learnings for a project."""
+    if not await user_can_read_project(db, user, project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.dast.claude_rag import get_learnings_stats
+    stats = await get_learnings_stats(db)
+    from app.models.dast_learning import DastLearning
+    learnings_q = await db.execute(
+        select(DastLearning).where(
+            DastLearning.project_id == uuid.UUID(project_id)
+        ).order_by(DastLearning.confidence.desc()).limit(100)
+    )
+    learnings = [
+        {
+            "id": str(l.id), "domain": l.domain, "title": l.title,
+            "severity": l.severity, "category": l.category,
+            "confidence": float(l.confidence) if l.confidence else 0.8,
+            "times_confirmed": l.times_confirmed or 1, "created_at": str(l.created_at),
+        }
+        for l in learnings_q.scalars().all()
+    ]
+    return {"stats": stats, "learnings": learnings}
+
+
+@router.delete("/learnings/{project_id}")
+async def delete_learnings(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Delete all RAG learnings for a project."""
+    if not await user_can_read_project(db, user, project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.dast.claude_rag import delete_learnings_for_project
+    deleted = await delete_learnings_for_project(db, project_id=project_id)
+    return {"status": "deleted", "count": deleted}

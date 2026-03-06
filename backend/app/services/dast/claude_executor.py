@@ -40,11 +40,17 @@ class ClaudeToolExecutor:
         scan_id: str = "",
         scope_domains: list[str] | None = None,
         scope_domain: str = "",
+        auth_headers: dict | None = None,
+        organization_id: str = "",
+        proxy_url: str | None = None,
     ):
         self.target_url = target_url
         self.ctx = scan_context or ScanContext(target_url)
         self.project_id = project_id
         self.scan_id = scan_id
+        self.organization_id = organization_id
+        self.auth_headers = auth_headers or {}  # Grey-box auth headers injected into all requests
+        self.proxy_url = proxy_url  # HTTP/SOCKS5 proxy for internal targets
         # Accept both scope_domain (str) and scope_domains (list)
         if scope_domains:
             self.scope_domains = scope_domains
@@ -77,12 +83,15 @@ class ClaudeToolExecutor:
             "test_websocket": self._test_websocket,
             "test_graphql": self._test_graphql,
             "test_llm_chatbot": self._test_llm_chatbot,
+            "retrieve_past_learnings": self._retrieve_past_learnings,
             "create_finding": self._create_finding,
             "save_crawl_result": self._save_crawl_result,
             "save_test_case": self._save_test_case,
             "get_project_context": self._get_project_context,
             "offer_pentest_option": self._offer_pentest_option,
             "update_progress": self._update_progress,
+            "get_wordlists": self._get_wordlists,
+            "load_wordlist": self._load_wordlist,
         }
         handler = handlers.get(tool_name)
         if not handler:
@@ -234,6 +243,9 @@ class ClaudeToolExecutor:
             return {"error": f"URL out of scope: {url}"}
 
         headers = dict(BROWSER_HEADERS)
+        # Inject grey-box auth headers first, then allow tool-level overrides
+        if self.auth_headers:
+            headers.update(self.auth_headers)
         headers.update(inp.get("auth_headers", {}))
         headers.update(inp.get("headers", {}))
 
@@ -251,12 +263,15 @@ class ClaudeToolExecutor:
 
         self.ctx.throttle()
         try:
-            with httpx.Client(
+            client_kwargs = dict(
                 timeout=httpx.Timeout(float(timeout)),
                 headers=headers,
                 verify=False,
                 follow_redirects=follow,
-            ) as client:
+            )
+            if self.proxy_url:
+                client_kwargs["proxy"] = self.proxy_url
+            with httpx.Client(**client_kwargs) as client:
                 start = time.time()
                 kwargs = {}
                 if body and method in ("POST", "PUT", "PATCH", "DELETE"):
@@ -288,7 +303,10 @@ class ClaudeToolExecutor:
 
         def make_request(i):
             try:
-                with httpx.Client(timeout=httpx.Timeout(float(timeout)), verify=False) as c:
+                ckw = {"timeout": httpx.Timeout(float(timeout)), "verify": False}
+                if self.proxy_url:
+                    ckw["proxy"] = self.proxy_url
+                with httpx.Client(**ckw) as c:
                     req_start = time.time()
                     kwargs = {}
                     if body and method in ("POST", "PUT", "PATCH", "DELETE"):
@@ -448,6 +466,55 @@ class ClaudeToolExecutor:
             test_type=inp.get("test_type", "prompt_injection"),
         )
 
+    # ── RAG TOOLS ─────────────────────────────────────────────────
+
+    def _retrieve_past_learnings(self, inp: dict) -> dict:
+        """Retrieve past learnings from RAG database."""
+        import asyncio
+        try:
+            from app.core.database import AsyncSessionLocal
+            from .claude_rag import retrieve_learnings, retrieve_similar_learnings, get_domain_profile, format_learnings_for_prompt
+
+            domain = inp.get("domain", "")
+            categories = inp.get("categories")
+            include_similar = inp.get("include_similar", False)
+
+            async def _fetch():
+                async with AsyncSessionLocal() as db:
+                    learnings = await retrieve_learnings(
+                        db, domain=domain, categories=categories,
+                        organization_id=self.organization_id or None,
+                    )
+                    profile = await get_domain_profile(db, domain=domain, organization_id=self.organization_id or None)
+                    similar = []
+                    if include_similar:
+                        tech = inp.get("technology")
+                        tech_stack = {tech.split(":")[0]: tech} if tech and ":" in tech else {"server": tech} if tech else None
+                        similar = await retrieve_similar_learnings(
+                            db, domain=domain, technology_stack=tech_stack,
+                            organization_id=self.organization_id or None, limit=20,
+                        )
+                    return learnings, profile, similar
+
+            loop = asyncio.new_event_loop()
+            try:
+                learnings, profile, similar = loop.run_until_complete(_fetch())
+            finally:
+                loop.close()
+
+            all_learnings = learnings + similar
+            formatted = format_learnings_for_prompt(all_learnings, profile)
+
+            return {
+                "domain_profile": profile,
+                "learnings_count": len(all_learnings),
+                "formatted_context": formatted[:5000],
+                "learnings": all_learnings[:30],
+            }
+        except Exception as e:
+            logger.warning("RAG retrieval failed: %s", e)
+            return {"error": str(e)[:300], "learnings_count": 0, "learnings": []}
+
     # ── REPORTING TOOLS ───────────────────────────────────────────
 
     def _create_finding(self, inp: dict) -> dict:
@@ -499,3 +566,67 @@ class ClaudeToolExecutor:
     def _update_progress(self, inp: dict) -> dict:
         """Update progress — handled by agent, this is a no-op."""
         return {"status": "updated", "phase": inp.get("phase", "")}
+
+    def _get_wordlists(self, inp: dict) -> dict:
+        """List available wordlists by category."""
+        import os
+        base_dir = "/opt/navigator/data/IntruderPayloads/FuzzLists"
+        category = inp.get("category", "all")
+
+        CATEGORY_MAP = {
+            "directory": ["dirbuster-dirs.txt", "dirbuster-top1000.txt", "dirbuster-quick.txt", "dirbuster-cgi.txt"],
+            "sqli": ["sqli-error-based.txt", "sqli-time-based.txt", "sqli-union-select.txt", "sqli_escape_chars.txt"],
+            "xss": ["xss_payloads_quick.txt", "xss_find_inject.txt", "xss_escape_chars.txt", "xss_funny_stored.txt", "xss_grep.txt", "xss_swf_fuzz.txt"],
+            "lfi": ["lfi.txt", "traversal.txt", "traversal-short.txt"],
+            "auth_bypass": ["auth_bypass.txt"],
+            "command_exec": ["command_exec.txt"],
+            "traversal": ["traversal.txt", "traversal-short.txt"],
+            "passwords": ["passwords_quick.txt", "passwords_medium.txt", "passwords_long.txt"],
+            "usernames": ["usernames.txt"],
+            "fuzzing": ["basic_fuzz.txt", "quick_fuzz.txt", "full_fuzz.txt", "bad_chars.txt", "vulnerability_discovery.txt"],
+        }
+
+        wordlists = []
+        if category == "all":
+            target_files = os.listdir(base_dir) if os.path.isdir(base_dir) else []
+        else:
+            target_files = CATEGORY_MAP.get(category, [])
+
+        for fname in target_files:
+            fpath = os.path.join(base_dir, fname)
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath, "r", errors="ignore") as f:
+                        line_count = sum(1 for _ in f)
+                    wordlists.append({"name": fname, "lines": line_count, "path": fpath})
+                except Exception:
+                    wordlists.append({"name": fname, "lines": 0, "path": fpath})
+
+        return {"category": category, "wordlists": wordlists, "total": len(wordlists)}
+
+    def _load_wordlist(self, inp: dict) -> dict:
+        """Load contents of a wordlist file."""
+        import os
+        name = inp.get("wordlist_name", "")
+        max_lines = min(inp.get("max_lines", 500), 2000)  # Cap at 2000
+
+        # Security: only allow files from the FuzzLists directory
+        base_dir = "/opt/navigator/data/IntruderPayloads/FuzzLists"
+        safe_name = os.path.basename(name)
+        fpath = os.path.join(base_dir, safe_name)
+
+        if not os.path.isfile(fpath):
+            return {"error": f"Wordlist not found: {safe_name}", "available": os.listdir(base_dir)[:20]}
+
+        try:
+            with open(fpath, "r", errors="ignore") as f:
+                lines = []
+                for i, line in enumerate(f):
+                    if i >= max_lines:
+                        break
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        lines.append(stripped)
+            return {"wordlist": safe_name, "lines": lines, "total_loaded": len(lines), "truncated": len(lines) >= max_lines}
+        except Exception as e:
+            return {"error": str(e)[:200]}

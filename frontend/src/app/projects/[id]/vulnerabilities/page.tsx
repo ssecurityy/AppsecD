@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Navbar from "@/components/Navbar";
@@ -11,7 +11,8 @@ import {
   ArrowLeft, Shield, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle,
   ChevronDown, ChevronUp, FileDown, Filter, RefreshCw, CheckCircle2, XCircle,
   Calendar, User, MessageSquare, History, ExternalLink, Square, CheckSquare, Loader2,
-  FileText, FileX,
+  FileText, FileX, Search, Send, Timer, Activity, TrendingUp, BarChart3,
+  AlertCircle, ArrowUpRight, Settings, Copy,
 } from "lucide-react";
 
 const RECHECK_STATUSES = [
@@ -33,8 +34,33 @@ const SEVERITY_BADGE: Record<string, string> = {
   info: "severity-info",
 };
 
+const SLA_BADGE: Record<string, { label: string; color: string; icon: typeof Clock }> = {
+  breached: { label: "SLA Breached", color: "text-red-400 bg-red-500/10 border-red-500/30", icon: AlertCircle },
+  at_risk: { label: "At Risk", color: "text-amber-400 bg-amber-500/10 border-amber-500/30", icon: AlertTriangle },
+  on_track: { label: "On Track", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30", icon: CheckCircle2 },
+  resolved: { label: "Resolved", color: "text-indigo-400 bg-indigo-500/10 border-indigo-500/30", icon: Shield },
+  no_sla: { label: "No SLA", color: "text-slate-400 bg-slate-500/10 border-slate-500/30", icon: Clock },
+};
+
 function getRecheckConfig(status: string) {
   return RECHECK_STATUSES.find(s => s.value === status) || RECHECK_STATUSES[0];
+}
+
+function formatAge(days: number): string {
+  if (days === 0) return "Today";
+  if (days === 1) return "1 day";
+  if (days < 30) return `${days} days`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ${days % 30}d`;
+  return `${Math.floor(days / 365)}y ${Math.floor((days % 365) / 30)}mo`;
+}
+
+function getAgeColor(days: number, severity: string): string {
+  const thresholds: Record<string, number> = { critical: 1, high: 3, medium: 7, low: 30, info: 90 };
+  const limit = thresholds[severity] || 30;
+  if (days > limit * 2) return "text-red-400";
+  if (days > limit) return "text-orange-400";
+  if (days > limit * 0.5) return "text-yellow-400";
+  return "text-slate-400";
 }
 
 function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }: { finding: any; onUpdate: () => void; selectable?: boolean; selected?: boolean; onToggleSelect?: (id: string) => void }) {
@@ -44,9 +70,16 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
   const [recheckNotes, setRecheckNotes] = useState("");
   const [newStatus, setNewStatus] = useState(finding.recheck_status || "pending");
   const [showHistory, setShowHistory] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
+  const [showRequest, setShowRequest] = useState(false);
+  const [showResponse, setShowResponse] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [commenting, setCommenting] = useState(false);
 
   const rc = getRecheckConfig(finding.recheck_status || "pending");
   const RcIcon = rc.icon;
+  const sla = SLA_BADGE[finding.sla_status] || SLA_BADGE.no_sla;
+  const SlaIcon = sla.icon;
 
   useEffect(() => {
     setIncludeInReport(finding.include_in_report !== false);
@@ -70,7 +103,23 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
     }
   };
 
+  const handleComment = async () => {
+    if (!commentText.trim()) return;
+    setCommenting(true);
+    try {
+      await api.addFindingComment(finding.id, commentText.trim());
+      toast.success("Comment added");
+      setCommentText("");
+      onUpdate();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to add comment");
+    } finally {
+      setCommenting(false);
+    }
+  };
+
   const history = finding.recheck_history || [];
+  const activityLog = finding.activity_log || [];
 
   return (
     <motion.div
@@ -78,7 +127,7 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       className="border rounded-xl overflow-hidden transition-all"
-      style={{ background: "var(--bg-tertiary)", borderColor: "var(--border-subtle)" }}
+      style={{ background: "var(--bg-tertiary)", borderColor: finding.sla_status === "breached" ? "rgba(239,68,68,0.3)" : "var(--border-subtle)" }}
     >
       {/* Header row */}
       <div
@@ -112,6 +161,16 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
             <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${rc.color}`}>
               {rc.label}
             </span>
+            {/* SLA badge */}
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium flex items-center gap-1 ${sla.color}`}>
+              <SlaIcon className="w-2.5 h-2.5" />
+              {sla.label}
+            </span>
+            {/* Age badge */}
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium flex items-center gap-1 ${getAgeColor(finding.age_days || 0, finding.severity)}`} style={{ background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
+              <Timer className="w-2.5 h-2.5" />
+              {formatAge(finding.age_days || 0)}
+            </span>
             {finding.jira_key && (
               <a
                 href={finding.jira_url || "#"}
@@ -124,14 +183,19 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                 {finding.jira_key}
               </a>
             )}
-            {finding.jira_status && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-500/20 bg-blue-500/5 text-blue-300 font-medium">
-                {finding.jira_status}
-              </span>
-            )}
             {finding.recheck_count > 0 && (
               <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ color: "var(--text-muted)", background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
                 {finding.recheck_count}x rechecked
+              </span>
+            )}
+            {finding.scan_count > 1 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ color: "#d97706", background: "rgba(217,119,6,0.1)", borderColor: "rgba(217,119,6,0.3)" }}>
+                Seen {finding.scan_count}x
+              </span>
+            )}
+            {finding.last_seen_at && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ color: "var(--text-muted)", background: "var(--bg-elevated)", borderColor: "var(--border-subtle)" }}>
+                Last: {new Date(finding.last_seen_at).toLocaleDateString()}
               </span>
             )}
             <button
@@ -161,15 +225,17 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
             </button>
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            {finding.affected_url && <span className="truncate max-w-[200px]" title={finding.affected_url}>{finding.affected_url}</span>}
+            {finding.affected_url && <span className="truncate max-w-[250px]" title={finding.affected_url}>{finding.affected_url}</span>}
             {finding.owasp_category && <span>{finding.owasp_category}</span>}
             {finding.cwe_id && <span>CWE-{finding.cwe_id}</span>}
             {finding.cvss_score && <span>CVSS: {finding.cvss_score}</span>}
+            {finding.cve_ids?.length > 0 && <span className="text-red-400">{finding.cve_ids.join(", ")}</span>}
+            {finding.remediation_owner && <span className="flex items-center gap-1"><User className="w-2.5 h-2.5" />{finding.remediation_owner}</span>}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {finding.remediation_deadline && (
-            <span className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
+            <span className={`text-xs flex items-center gap-1 ${finding.sla_status === "breached" ? "text-red-400 font-semibold" : ""}`} style={finding.sla_status !== "breached" ? { color: "var(--text-muted)" } : undefined}>
               <Calendar className="w-3 h-3" />
               {new Date(finding.remediation_deadline).toLocaleDateString()}
             </span>
@@ -218,6 +284,95 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                 )}
               </div>
 
+              {/* HTTP Request / Response Evidence */}
+              {(finding.request || finding.response) && (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider flex items-center gap-2" style={{ color: "var(--text-secondary)" }}>
+                    <Activity className="w-3 h-3 text-indigo-400" />
+                    HTTP Evidence
+                  </h4>
+                  {finding.request && (
+                    <div>
+                      <button
+                        onClick={() => setShowRequest(!showRequest)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 mb-1"
+                      >
+                        {showRequest ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        Vulnerable Request
+                        <button
+                          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(finding.request); toast.success("Copied request"); }}
+                          className="ml-2 p-0.5 rounded hover:bg-white/10"
+                          title="Copy"
+                        >
+                          <Copy className="w-2.5 h-2.5" />
+                        </button>
+                      </button>
+                      <AnimatePresence>
+                        {showRequest && (
+                          <motion.pre
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="text-[11px] p-3 rounded-lg whitespace-pre-wrap break-all font-mono max-h-80 overflow-auto"
+                            style={{ color: "var(--text-secondary)", background: "rgba(0,0,0,0.3)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}
+                          >
+                            {finding.request}
+                          </motion.pre>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                  {finding.response && (
+                    <div>
+                      <button
+                        onClick={() => setShowResponse(!showResponse)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 mb-1"
+                      >
+                        {showResponse ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        Server Response
+                        <button
+                          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(finding.response); toast.success("Copied response"); }}
+                          className="ml-2 p-0.5 rounded hover:bg-white/10"
+                          title="Copy"
+                        >
+                          <Copy className="w-2.5 h-2.5" />
+                        </button>
+                      </button>
+                      <AnimatePresence>
+                        {showResponse && (
+                          <motion.pre
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="text-[11px] p-3 rounded-lg whitespace-pre-wrap break-all font-mono max-h-80 overflow-auto"
+                            style={{ color: "var(--text-secondary)", background: "rgba(0,0,0,0.3)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}
+                          >
+                            {finding.response}
+                          </motion.pre>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* References & CVEs */}
+              {(finding.references?.length > 0 || finding.cve_ids?.length > 0) && (
+                <div className="flex flex-wrap gap-2">
+                  {finding.cve_ids?.map((cve: string) => (
+                    <a key={cve} href={`https://nvd.nist.gov/vuln/detail/${cve}`} target="_blank" rel="noopener noreferrer" className="text-[10px] px-2 py-0.5 rounded border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">
+                      {cve}
+                    </a>
+                  ))}
+                  {finding.references?.map((ref: any, i: number) => (
+                    <a key={i} href={typeof ref === "string" ? ref : ref.url} target="_blank" rel="noopener noreferrer" className="text-[10px] px-2 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors flex items-center gap-1">
+                      <ExternalLink className="w-2 h-2" />
+                      {typeof ref === "string" ? ref : ref.title || ref.url}
+                    </a>
+                  ))}
+                </div>
+              )}
+
               {/* Previous recheck notes */}
               {finding.recheck_notes && (
                 <div className="rounded-lg p-3" style={{ background: "var(--bg-elevated)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
@@ -233,6 +388,31 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                   )}
                 </div>
               )}
+
+              {/* Comment / Note section */}
+              <div className="rounded-lg p-3" style={{ background: "var(--bg-elevated)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
+                <h4 className="text-xs font-semibold mb-2 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                  <MessageSquare className="w-3 h-3 text-indigo-400" />
+                  Add Comment
+                </h4>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    className="input-field text-xs flex-1"
+                    placeholder="Add a note or comment about this finding..."
+                    value={commentText}
+                    onChange={e => setCommentText(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") handleComment(); }}
+                  />
+                  <button
+                    onClick={handleComment}
+                    disabled={commenting || !commentText.trim()}
+                    className="btn-primary text-xs px-3 disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {commenting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                  </button>
+                </div>
+              </div>
 
               {/* Recheck action panel */}
               <div className="bg-gradient-to-r from-indigo-500/5 to-purple-500/5 rounded-xl p-4 border border-indigo-500/10">
@@ -296,6 +476,61 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
                   </button>
                 </div>
               </div>
+
+              {/* Activity Log */}
+              {activityLog.length > 0 && (
+                <div>
+                  <button
+                    onClick={() => setShowActivity(!showActivity)}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 mb-2"
+                  >
+                    <Activity className="w-3 h-3" />
+                    {showActivity ? "Hide" : "Show"} Activity Log ({activityLog.length})
+                  </button>
+                  <AnimatePresence>
+                    {showActivity && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="relative pl-4 space-y-2 max-h-64 overflow-y-auto" style={{ borderLeft: "2px solid var(--border-subtle)" }}>
+                          {[...activityLog].reverse().map((a: any, i: number) => {
+                            const actionColors: Record<string, string> = {
+                              created: "text-emerald-400",
+                              status_changed: "text-amber-400",
+                              updated: "text-blue-400",
+                              comment: "text-indigo-400",
+                            };
+                            const actionIcons: Record<string, typeof Activity> = {
+                              created: CheckCircle2,
+                              status_changed: RefreshCw,
+                              updated: ArrowUpRight,
+                              comment: MessageSquare,
+                            };
+                            const AIcon = actionIcons[a.action] || Activity;
+                            return (
+                              <div key={i} className="relative">
+                                <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full border-2 border-indigo-500" style={{ background: "var(--bg-elevated)" }} />
+                                <div className="rounded-lg p-2" style={{ background: "var(--bg-elevated)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--border-subtle)" }}>
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <AIcon className={`w-3 h-3 ${actionColors[a.action] || "text-slate-400"}`} />
+                                    <span className="font-medium capitalize" style={{ color: "var(--text-primary)" }}>{a.action.replace(/_/g, " ")}</span>
+                                    {a.user_name && <span style={{ color: "var(--text-muted)" }}>by {a.user_name}</span>}
+                                    <span className="ml-auto text-[10px]" style={{ color: "var(--text-muted)" }}>{new Date(a.date).toLocaleString()}</span>
+                                  </div>
+                                  {a.details && <p className="text-[11px] mt-1 break-words" style={{ color: "var(--text-secondary)" }}>{a.details}</p>}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
 
               {/* Recheck history */}
               {history.length > 0 && (
@@ -363,10 +598,16 @@ export default function VulnerabilityManagement() {
   const [loading, setLoading] = useState(true);
   const [filterSeverity, setFilterSeverity] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterSla, setFilterSla] = useState<string>("");
+  const [searchText, setSearchText] = useState<string>("");
+  const [sortBy, setSortBy] = useState<string>("severity");
   const [showFilters, setShowFilters] = useState(false);
+  const [showSlaConfig, setShowSlaConfig] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCreating, setBulkCreating] = useState(false);
+  const [slaPolicy, setSlaPolicy] = useState<Record<string, number>>({ critical: 1, high: 3, medium: 7, low: 30, info: 90 });
+  const [slaSaving, setSlaSaving] = useState(false);
 
   useEffect(() => { hydrate(); }, [hydrate]);
   useEffect(() => { if (!user && !loading) router.replace("/login"); }, [user, router, loading]);
@@ -381,6 +622,13 @@ export default function VulnerabilityManagement() {
       setProject(proj);
       setFindings(findingsRes?.items ?? (Array.isArray(findingsRes) ? findingsRes : []));
       setSummary(summ);
+      // Load SLA policy if user is admin
+      if (proj?.organization_id && user && (user.role === "admin" || user.role === "super_admin")) {
+        try {
+          const slaRes = await api.getSlaPolicyForOrg(proj.organization_id);
+          if (slaRes?.sla_policy) setSlaPolicy(slaRes.sla_policy);
+        } catch { /* ignore */ }
+      }
     } catch {
       toast.error("Failed to load vulnerability data");
     } finally {
@@ -390,15 +638,48 @@ export default function VulnerabilityManagement() {
 
   useEffect(() => { loadData(); }, [id]);
 
-  const filteredFindings = findings.filter(f => {
-    if (filterSeverity && f.severity !== filterSeverity) return false;
-    if (filterStatus && (f.recheck_status || "pending") !== filterStatus) return false;
-    return true;
-  }).sort((a, b) => {
-    const ai = SEVERITY_ORDER.indexOf(a.severity);
-    const bi = SEVERITY_ORDER.indexOf(b.severity);
-    return ai - bi;
-  });
+  const filteredFindings = useMemo(() => {
+    return findings.filter(f => {
+      if (filterSeverity && f.severity !== filterSeverity) return false;
+      if (filterStatus && (f.recheck_status || "pending") !== filterStatus) return false;
+      if (filterSla && f.sla_status !== filterSla) return false;
+      if (searchText) {
+        const q = searchText.toLowerCase();
+        const searchable = `${f.title} ${f.description || ""} ${f.affected_url || ""} ${f.cwe_id || ""} ${f.owasp_category || ""} ${(f.cve_ids || []).join(" ")}`.toLowerCase();
+        if (!searchable.includes(q)) return false;
+      }
+      return true;
+    }).sort((a, b) => {
+      if (sortBy === "severity") {
+        return SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
+      }
+      if (sortBy === "age") {
+        return (b.age_days || 0) - (a.age_days || 0);
+      }
+      if (sortBy === "sla") {
+        const order = ["breached", "at_risk", "on_track", "no_sla", "resolved"];
+        return order.indexOf(a.sla_status || "no_sla") - order.indexOf(b.sla_status || "no_sla");
+      }
+      if (sortBy === "recent") {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+      return 0;
+    });
+  }, [findings, filterSeverity, filterStatus, filterSla, searchText, sortBy]);
+
+  const handleSaveSla = async () => {
+    if (!project?.organization_id) return;
+    setSlaSaving(true);
+    try {
+      await api.updateSlaPolicyForOrg(project.organization_id, slaPolicy);
+      toast.success("SLA policy updated");
+      setShowSlaConfig(false);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save SLA policy");
+    } finally {
+      setSlaSaving(false);
+    }
+  };
 
   if (loading) return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
@@ -406,6 +687,8 @@ export default function VulnerabilityManagement() {
       <div className="flex items-center justify-center py-32" style={{ color: "var(--text-secondary)" }}>Loading vulnerability data...</div>
     </div>
   );
+
+  const isAdmin = user && (user.role === "admin" || user.role === "super_admin");
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
@@ -439,6 +722,14 @@ export default function VulnerabilityManagement() {
             >
               <ArrowLeft className="w-3 h-3" /> Back to Testing
             </Link>
+            {isAdmin && (
+              <button
+                onClick={() => setShowSlaConfig(!showSlaConfig)}
+                className={`text-xs flex items-center gap-1.5 px-3 py-1.5 rounded border transition-colors ${showSlaConfig ? "border-purple-500/50 text-purple-400 bg-purple-500/10" : "border-purple-500/30 text-purple-400 hover:bg-purple-500/10"}`}
+              >
+                <Settings className="w-3 h-3" /> SLA Policy
+              </button>
+            )}
             <button
               onClick={() => {
                 setBulkMode(!bulkMode);
@@ -495,9 +786,52 @@ export default function VulnerabilityManagement() {
           </div>
         </div>
 
-        {/* Summary cards */}
+        {/* SLA Configuration */}
+        <AnimatePresence>
+          {showSlaConfig && isAdmin && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden mb-6"
+            >
+              <div className="card p-4">
+                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                  <Settings className="w-4 h-4 text-purple-400" />
+                  SLA Policy (Days to Remediate by Severity)
+                </h3>
+                <div className="grid grid-cols-5 gap-3 mb-3">
+                  {SEVERITY_ORDER.map(sev => (
+                    <div key={sev}>
+                      <label className="text-[10px] uppercase tracking-wider mb-1 block capitalize" style={{ color: "var(--text-muted)" }}>{sev}</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="365"
+                        className="input-field text-xs w-full"
+                        value={slaPolicy[sev] || ""}
+                        onChange={e => setSlaPolicy({ ...slaPolicy, [sev]: parseInt(e.target.value) || 0 })}
+                      />
+                      <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>days</span>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={handleSaveSla}
+                  disabled={slaSaving}
+                  className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {slaSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                  Save SLA Policy
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Summary cards — top row: status counts */}
         {summary && (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
             {[
               { label: "Total", value: summary.total, color: "text-white", bg: "from-slate-500/10 to-slate-500/5" },
               { label: "Pending", value: summary.pending, color: "text-yellow-400", bg: "from-yellow-500/10 to-yellow-500/5" },
@@ -518,6 +852,32 @@ export default function VulnerabilityManagement() {
                 <div className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: "var(--text-muted)" }}>{s.label}</div>
               </motion.div>
             ))}
+          </div>
+        )}
+
+        {/* SLA & Metrics row */}
+        {summary && summary.total > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-gradient-to-br from-red-500/10 to-red-500/5 rounded-xl p-3 border border-red-500/20 text-center">
+              <div className="text-xl font-bold text-red-400">{summary.sla_breached || 0}</div>
+              <div className="text-[10px] uppercase tracking-wider mt-0.5 text-red-400/70">SLA Breached</div>
+            </motion.div>
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-gradient-to-br from-amber-500/10 to-amber-500/5 rounded-xl p-3 border border-amber-500/20 text-center">
+              <div className="text-xl font-bold text-amber-400">{summary.sla_at_risk || 0}</div>
+              <div className="text-[10px] uppercase tracking-wider mt-0.5 text-amber-400/70">At Risk</div>
+            </motion.div>
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 rounded-xl p-3 border border-emerald-500/20 text-center">
+              <div className="text-xl font-bold text-emerald-400">{summary.sla_on_track || 0}</div>
+              <div className="text-[10px] uppercase tracking-wider mt-0.5 text-emerald-400/70">On Track</div>
+            </motion.div>
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 rounded-xl p-3 border border-indigo-500/20 text-center">
+              <div className="text-xl font-bold text-indigo-400">{summary.avg_age_days ?? 0}d</div>
+              <div className="text-[10px] uppercase tracking-wider mt-0.5 text-indigo-400/70">Avg Age</div>
+            </motion.div>
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-gradient-to-br from-cyan-500/10 to-cyan-500/5 rounded-xl p-3 border border-cyan-500/20 text-center">
+              <div className="text-xl font-bold text-cyan-400">{summary.mttr_days != null ? `${summary.mttr_days}d` : "N/A"}</div>
+              <div className="text-[10px] uppercase tracking-wider mt-0.5 text-cyan-400/70">MTTR</div>
+            </motion.div>
           </div>
         )}
 
@@ -576,6 +936,25 @@ export default function VulnerabilityManagement() {
           </div>
         )}
 
+        {/* Overdue findings alert */}
+        {summary?.overdue_findings?.length > 0 && (
+          <div className="card p-4 mb-6 border-red-500/30">
+            <h3 className="text-sm font-semibold mb-2 flex items-center gap-2 text-red-400">
+              <AlertCircle className="w-4 h-4" />
+              SLA Breached ({summary.overdue_findings.length})
+            </h3>
+            <div className="space-y-1">
+              {summary.overdue_findings.slice(0, 5).map((f: any) => (
+                <div key={f.id} className="flex items-center gap-2 text-xs">
+                  <span className={`px-1.5 py-0.5 rounded border font-medium ${SEVERITY_BADGE[f.severity] || ""}`}>{f.severity}</span>
+                  <span className="truncate" style={{ color: "var(--text-secondary)" }}>{f.title}</span>
+                  <span className="ml-auto text-red-400 font-medium shrink-0">{f.age_days}d overdue</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Severity breakdown */}
         {summary && summary.by_severity && Object.keys(summary.by_severity).length > 0 && (
           <div className="card p-4 mb-6">
@@ -609,18 +988,30 @@ export default function VulnerabilityManagement() {
           </div>
         )}
 
-        {/* Filters */}
+        {/* Filters & Search */}
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
             <AlertTriangle className="w-5 h-5 text-indigo-400" />
             Findings ({filteredFindings.length})
           </h2>
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={`btn-secondary text-xs flex items-center gap-1.5 ${showFilters ? "border-indigo-500/50" : ""}`}
-          >
-            <Filter className="w-3 h-3" /> Filters
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "var(--text-muted)" }} />
+              <input
+                type="text"
+                className="input-field text-xs pl-7 w-48"
+                placeholder="Search findings..."
+                value={searchText}
+                onChange={e => setSearchText(e.target.value)}
+              />
+            </div>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`btn-secondary text-xs flex items-center gap-1.5 ${showFilters ? "border-indigo-500/50" : ""}`}
+            >
+              <Filter className="w-3 h-3" /> Filters
+            </button>
+          </div>
         </div>
 
         <AnimatePresence>
@@ -658,9 +1049,37 @@ export default function VulnerabilityManagement() {
                     ))}
                   </select>
                 </div>
-                {(filterSeverity || filterStatus) && (
+                <div>
+                  <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>SLA Status</label>
+                  <select
+                    className="input-field text-xs w-36"
+                    value={filterSla}
+                    onChange={e => setFilterSla(e.target.value)}
+                  >
+                    <option value="">All SLA</option>
+                    <option value="breached">SLA Breached</option>
+                    <option value="at_risk">At Risk</option>
+                    <option value="on_track">On Track</option>
+                    <option value="resolved">Resolved</option>
+                    <option value="no_sla">No SLA</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>Sort By</label>
+                  <select
+                    className="input-field text-xs w-36"
+                    value={sortBy}
+                    onChange={e => setSortBy(e.target.value)}
+                  >
+                    <option value="severity">Severity</option>
+                    <option value="sla">SLA Priority</option>
+                    <option value="age">Oldest First</option>
+                    <option value="recent">Newest First</option>
+                  </select>
+                </div>
+                {(filterSeverity || filterStatus || filterSla || searchText) && (
                   <button
-                    onClick={() => { setFilterSeverity(""); setFilterStatus(""); }}
+                    onClick={() => { setFilterSeverity(""); setFilterStatus(""); setFilterSla(""); setSearchText(""); }}
                     className="self-end text-xs text-indigo-400 hover:text-indigo-300 pb-2"
                   >
                     Clear filters

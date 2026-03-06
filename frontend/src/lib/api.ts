@@ -172,6 +172,11 @@ export const api = {
   getVulnSummary: (projectId: string) => request(`/findings/project/${projectId}/summary`),
   updateRecheckStatus: (findingId: string, data: object) =>
     request(`/findings/${findingId}/recheck`, { method: "PATCH", body: JSON.stringify(data) }),
+  addFindingComment: (findingId: string, comment: string) =>
+    request(`/findings/${findingId}/comment`, { method: "POST", body: JSON.stringify({ comment }) }),
+  getSlaPolicyForOrg: (orgId: string) => request(`/organizations/${orgId}/sla-policy`),
+  updateSlaPolicyForOrg: (orgId: string, slaPolicy: Record<string, number>) =>
+    request(`/organizations/${orgId}/sla-policy`, { method: "PUT", body: JSON.stringify({ sla_policy: slaPolicy }) }),
 
   // Badges
   badges: () => request("/badges"),
@@ -484,4 +489,70 @@ export const api = {
     request(`/dast/claude/admin/settings/${orgId}`, { method: "GET" }),
   claudeDastAdminSettingsOrgUpdate: (orgId: string, data: Record<string, unknown>) =>
     request(`/dast/claude/admin/settings/${orgId}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  // Project Admin (delete, transfer)
+  deleteProject: (projectId: string) =>
+    request(`/projects/${projectId}`, { method: "DELETE" }),
+  transferProject: (projectId: string, targetOrgId: string) =>
+    request(`/projects/${projectId}/transfer`, { method: "POST", body: JSON.stringify({ target_organization_id: targetOrgId }) }),
+
+  // DAST Export
+  dastExportBurpXml: async (projectId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/dast/export/${projectId}/burp-xml`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `dast-findings-${projectId.slice(0, 8)}.xml`; a.click();
+    URL.revokeObjectURL(url);
+  },
+  dastExportJson: async (projectId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/dast/export/${projectId}/json`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `dast-findings-${projectId.slice(0, 8)}.json`; a.click();
+    URL.revokeObjectURL(url);
+  },
+  dastExportCsv: async (projectId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/dast/export/${projectId}/csv`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `dast-findings-${projectId.slice(0, 8)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  },
+  dastExportHar: async (projectId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/dast/export/${projectId}/har`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `dast-crawl-${projectId.slice(0, 8)}.har`; a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  // DAST Learnings
+  dastLearnings: (projectId: string) =>
+    request(`/dast/learnings/${projectId}`, { method: "GET" }),
+  dastDeleteLearnings: (projectId: string) =>
+    request(`/dast/learnings/${projectId}`, { method: "DELETE" }),
+
+  // Claude DAST with auth config
+  claudeDastScanWithAuth: (data: { project_id: string; target_url?: string; scan_mode?: string; include_subdomains?: boolean; max_cost_usd?: number; auth_config?: any; proxy_url?: string }) =>
+    request("/dast/claude/scan", { method: "POST", body: JSON.stringify(data) }),
 };
