@@ -1722,7 +1722,7 @@ async def claude_scan(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
 
     # ── Org-level budget enforcement ──
@@ -1749,7 +1749,7 @@ async def claude_scan(
                     raise HTTPException(429, f"Daily scan limit reached ({org.claude_max_scans_per_day} scans/day)")
             # Check deep scan approval
             if req.scan_mode == "deep" and org.claude_deep_scan_approval_required:
-                if not getattr(user, "is_superadmin", False) and not getattr(user, "role", "") == "admin":
+                if user.role not in ("super_admin", "admin"):
                     raise HTTPException(403, "Deep scan mode requires admin approval for this organization")
             # Check monthly budget
             if org.claude_monthly_budget_usd:
@@ -1885,7 +1885,7 @@ async def claude_retest(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
 
     # Load findings to retest
@@ -2029,7 +2029,7 @@ async def claude_crawl_only(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
 
     target_url = req.target_url or project.application_url
@@ -2118,7 +2118,7 @@ async def claude_crawl_results(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, project_id):
         raise HTTPException(403, "Access denied")
 
     results = (await db.execute(
@@ -2169,7 +2169,7 @@ async def claude_generate_checks(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, req.project_id):
         raise HTTPException(403, "Access denied")
 
     target_url = req.target_url or project.application_url
@@ -2239,7 +2239,7 @@ async def claude_session_info(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, project_id):
         raise HTTPException(403, "Access denied")
 
     # Redis session context
@@ -2298,7 +2298,7 @@ async def claude_session_clear(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, project_id):
         raise HTTPException(403, "Access denied")
 
     try:
@@ -2319,11 +2319,7 @@ async def claude_cost_estimate(
 ):
     """Estimate cost before running a Claude scan."""
     from app.services.dast.claude_cost import estimate_scan_cost
-    estimate = estimate_scan_cost(
-        scan_mode=req.scan_mode,
-        target_url=req.target_url,
-        include_subdomains=req.include_subdomains,
-    )
+    estimate = estimate_scan_cost(scan_mode=req.scan_mode)
     return estimate
 
 
@@ -2341,7 +2337,7 @@ async def claude_scan_history(
     )).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
-    if not await user_can_read_project(db, user, project):
+    if not await user_can_read_project(db, user, project_id):
         raise HTTPException(403, "Access denied")
 
     sessions = (await db.execute(
@@ -2385,7 +2381,7 @@ async def claude_admin_usage(
     from app.models.claude_usage import ClaudeUsageTracking
     from sqlalchemy import func
 
-    if not getattr(user, "is_superadmin", False):
+    if user.role != "super_admin":
         raise HTTPException(403, "Super admin access required")
 
     # Aggregate usage by organization
@@ -2456,7 +2452,7 @@ async def claude_admin_settings_global(
     user=Depends(get_current_user),
 ):
     """Get global Claude DAST settings from app config."""
-    if not getattr(user, "is_superadmin", False):
+    if user.role != "super_admin":
         raise HTTPException(403, "Super admin access required")
     from app.core.config import get_settings
     s = get_settings()
@@ -2478,7 +2474,7 @@ async def claude_admin_settings_org(
     user=Depends(get_current_user),
 ):
     """Get per-org Claude DAST settings."""
-    if not getattr(user, "is_superadmin", False):
+    if user.role != "super_admin":
         raise HTTPException(403, "Super admin access required")
     from app.models.organization import Organization
     result = await db.execute(select(Organization).where(Organization.id == org_id))
@@ -2507,7 +2503,7 @@ async def claude_admin_settings_org_update(
     user=Depends(get_current_user),
 ):
     """Update per-org Claude DAST settings."""
-    if not getattr(user, "is_superadmin", False):
+    if user.role != "super_admin":
         raise HTTPException(403, "Super admin access required")
     from app.models.organization import Organization
     result = await db.execute(select(Organization).where(Organization.id == org_id))
