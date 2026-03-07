@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
+from app.core.storage import get_storage, org_logo_key
 from app.api.auth import get_current_user
 from app.services.project_permissions import user_can_download_report
 from app.services.report_service import (
@@ -25,7 +26,6 @@ from app.models.category import Category
 from app.models.organization import Organization
 
 router = APIRouter(prefix="/projects", tags=["reports"])
-LOGO_UPLOAD_DIR = Path("/opt/navigator/data/uploads/org_logos")
 ALLOWED_IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
@@ -39,14 +39,17 @@ async def _load_org_branding(db, project) -> dict:
     if not org:
         return {"name": "AppSecD", "logo_base64": None, "brand_color": "#2563eb"}
     logo_b64 = None
-    if org.logo_url and LOGO_UPLOAD_DIR.exists():
+    if org.logo_url:
+        storage = get_storage()
         for ext in ALLOWED_IMAGE_EXT:
-            fpath = LOGO_UPLOAD_DIR / f"{org.id}{ext}"
-            if fpath.exists():
-                try:
-                    logo_b64 = f"data:image/{ext[1:]};base64," + base64.b64encode(fpath.read_bytes()).decode()
-                except Exception:
-                    pass
+            key = org_logo_key(str(org.id), ext)
+            if storage.exists(key):
+                raw = storage.get(key)
+                if raw:
+                    try:
+                        logo_b64 = f"data:image/{ext[1:]};base64," + base64.b64encode(raw).decode()
+                    except Exception:
+                        pass
                 break
     return {
         "name": org.name or "AppSecD",

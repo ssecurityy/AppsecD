@@ -42,6 +42,60 @@ async def generic_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
+@app.on_event("startup")
+async def startup_cve_auto_sync():
+    """Start background CVE auto-sync and WebSocket Redis listener on app startup."""
+    import asyncio
+    from app.api.websocket import start_redis_ws_listener
+    try:
+        start_redis_ws_listener()
+        logger.info("WebSocket Redis pub/sub listener started")
+    except Exception as e:
+        logger.warning("WebSocket Redis listener not started: %s", e)
+
+    async def _cve_sync_loop():
+        """Periodically sync CVEs from NVD, GitHub, CIRCL every 6 hours."""
+        await asyncio.sleep(30)  # Wait 30s for DB to be ready
+        while True:
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.api.security_intel import _sync_from_nvd, _sync_from_github, _sync_from_circl
+                async with AsyncSessionLocal() as db:
+                    total = 0
+                    # NVD — last 30 days
+                    try:
+                        count = await _sync_from_nvd(db, "", 30)
+                        total += count
+                        logger.info("CVE auto-sync NVD: %d new/updated", count)
+                    except Exception as e:
+                        logger.warning("CVE auto-sync NVD failed: %s", e)
+
+                    # GitHub Advisories
+                    try:
+                        count = await _sync_from_github(db, "", 30)
+                        total += count
+                        logger.info("CVE auto-sync GitHub: %d new/updated", count)
+                    except Exception as e:
+                        logger.warning("CVE auto-sync GitHub failed: %s", e)
+
+                    # CIRCL
+                    try:
+                        count = await _sync_from_circl(db, "", 30)
+                        total += count
+                        logger.info("CVE auto-sync CIRCL: %d new/updated", count)
+                    except Exception as e:
+                        logger.warning("CVE auto-sync CIRCL failed: %s", e)
+
+                    if total > 0:
+                        logger.info("CVE auto-sync complete: %d total CVEs synced", total)
+            except Exception as e:
+                logger.warning("CVE auto-sync cycle failed: %s", e)
+
+            await asyncio.sleep(6 * 3600)  # Run every 6 hours
+
+    asyncio.create_task(_cve_sync_loop())
+
+
 @app.get("/")
 async def root():
     return {"app": "AppSecD", "version": "2.0.0"}

@@ -12,6 +12,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from app.services.compliance_mapping import get_compliance_mapping
 from app.core.config import get_settings
+from app.core.storage import get_storage, evidence_key
 
 try:
     from fpdf import FPDF
@@ -49,29 +50,29 @@ def _risk_level(score: float) -> str:
     return "Low"
 
 
-def _get_evidence_file_path(project_id: str, evidence_item: dict) -> Path | None:
-    """Resolve evidence item to file path. evidence_item: {filename, url}."""
-    settings = get_settings()
-    base = Path(settings.uploads_path) / str(project_id)
+def _get_evidence_bytes(project_id: str, evidence_item: dict) -> bytes | None:
+    """Resolve evidence item to bytes from storage. evidence_item: {filename, url}."""
     url = evidence_item.get("url") or ""
     match = re.search(r"/evidence/([^/]+)$", url)
-    if match:
-        fpath = base / match.group(1)
-        if fpath.exists():
-            return fpath
-    return None
+    if not match:
+        return None
+    filename = match.group(1)
+    key = evidence_key(str(project_id), filename)
+    storage = get_storage()
+    return storage.get(key)
 
 
 def _evidence_to_base64(project_id: str, evidence_item: dict) -> str | None:
-    """Read evidence file and return base64 data URL for images."""
-    fpath = _get_evidence_file_path(project_id, evidence_item)
-    if not fpath or not fpath.exists():
+    """Read evidence from storage and return base64 data URL for images."""
+    data = _get_evidence_bytes(project_id, evidence_item)
+    if not data:
         return None
-    ext = fpath.suffix.lower()
+    url = evidence_item.get("url") or ""
+    match = re.search(r"/evidence/([^/]+)$", url)
+    ext = Path(match.group(1)).suffix.lower() if match else ""
     if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
         return None
     try:
-        data = fpath.read_bytes()
         b64 = base64.b64encode(data).decode()
         mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}.get(ext[1:], "image/png")
         return f"data:{mime};base64,{b64}"
@@ -2275,8 +2276,10 @@ def generate_docx(data: dict) -> bytes:
         evidence_list = f.get("evidence") or []
         for ev_idx, ev in enumerate(evidence_list):
             if isinstance(ev, dict):
-                fpath = _get_evidence_file_path(project_id, ev)
-                if fpath and fpath.exists() and fpath.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                data = _get_evidence_bytes(project_id, ev)
+                url = ev.get("url") or ""
+                ext = Path(url.split("/")[-1]).suffix.lower() if "/" in url else ""
+                if data and ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                     try:
                         fn = ev.get("filename", "Screenshot")
                         ev_para = doc.add_paragraph()
@@ -2285,7 +2288,7 @@ def generate_docx(data: dict) -> bytes:
                         run.font.size = Pt(9)
                         run.font.color.rgb = RGBColor.from_string(primary_color)
                         run.font.name = "Calibri"
-                        doc.add_picture(str(fpath), width=Inches(5.5))
+                        doc.add_picture(BytesIO(data), width=Inches(5.5))
                         doc.add_paragraph()
                     except Exception:
                         pass
@@ -2907,8 +2910,10 @@ def generate_pdf(data: dict) -> bytes:
         evidence_list = f.get("evidence") or []
         for ev_idx, ev in enumerate(evidence_list):
             if isinstance(ev, dict):
-                fpath = _get_evidence_file_path(project_id, ev)
-                if fpath and fpath.exists() and fpath.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                data = _get_evidence_bytes(project_id, ev)
+                url = ev.get("url") or ""
+                ext = Path(url.split("/")[-1]).suffix.lower() if "/" in url else ""
+                if data and ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                     try:
                         pdf.set_fill_color(*primary_color)
                         pdf.set_text_color(255, 255, 255)
@@ -2917,7 +2922,7 @@ def generate_pdf(data: dict) -> bytes:
                         pdf.cell(0, 6, f"  Evidence {ev_idx + 1}: {fn}", fill=True, ln=True)
                         pdf.set_text_color(0, 0, 0)
                         pdf.ln(1)
-                        pdf.image(str(fpath), x=10, w=180)
+                        pdf.image(BytesIO(data), x=10, w=180)
                         pdf.ln(3)
                     except Exception:
                         pass

@@ -7,10 +7,10 @@ class Settings(BaseSettings):
     """App settings from environment."""
 
     # Database
-    database_url: str = "postgresql+asyncpg://navigator:navigator_secure_password@127.0.0.1:5433/navigator"
+    database_url: str = "postgresql+asyncpg://navigator:navigator_secure_password@31.97.236.44:5432/navigator"
 
-    # Redis
-    redis_url: str = "redis://127.0.0.1:6379/1"
+    # Redis (shared on DB server for multi-app-server)
+    redis_url: str = "redis://31.97.236.44:6379/1"
 
     # App
     app_name: str = "AppSecD"
@@ -18,10 +18,18 @@ class Settings(BaseSettings):
     docs_enabled: bool = False  # Set True to expose /docs, /redoc, /openapi.json
     allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://appsecd.com,https://www.appsecd.com,http://appsecd.com,http://www.appsecd.com"
 
-    # Paths
+    # Paths (used when storage_backend=local)
     payloads_path: str = "/opt/navigator/data/PayloadsAllTheThings"
     seclists_path: str = "/opt/navigator/data/SecLists"
     uploads_path: str = "/opt/navigator/data/uploads"
+
+    # R2 / S3-compatible storage (when storage_backend=r2)
+    storage_backend: str = "local"
+    r2_endpoint_url: str = ""
+    r2_bucket: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_region: str = "auto"
 
     # JIRA integration (optional)
     jira_base_url: str = ""

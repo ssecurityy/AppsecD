@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.sanitize import sanitize_filename
+from app.core.storage import get_storage, evidence_key
 from app.api.auth import get_current_user
 from app.services.project_permissions import user_can_read_project, user_can_write_project
 from app.models.user import User
@@ -46,12 +47,6 @@ def _validate_file_content(content: bytes, ext: str) -> bool:
     return True
 
 
-def _upload_dir(project_id: str) -> Path:
-    d = Path(settings.uploads_path) / str(project_id)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
 @router.post("/{project_id}/evidence")
 async def upload_evidence(
     project_id: str,
@@ -82,10 +77,12 @@ async def upload_evidence(
 
     file_id = str(uuid.uuid4())
     safe_name = f"{file_id}{ext}"
-    upload_path = _upload_dir(project_id) / safe_name
-
-    async with aiofiles.open(upload_path, "wb") as f:
-        await f.write(content)
+    key = evidence_key(project_id, safe_name)
+    storage = get_storage()
+    if hasattr(storage, "upload_async"):
+        await storage.upload_async(key, content)
+    else:
+        storage.upload(key, content)
 
     url = f"/projects/{project_id}/evidence/{safe_name}"
     return {"url": url, "filename": safe_name}
@@ -113,8 +110,13 @@ async def get_evidence(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, "Invalid file type")
 
-    file_path = _upload_dir(project_id) / filename
-    if not file_path.exists():
+    key = evidence_key(project_id, filename)
+    storage = get_storage()
+    if hasattr(storage, "get_async"):
+        raw = await storage.get_async(key)
+    else:
+        raw = storage.get(key)
+    if not raw:
         raise HTTPException(404, "File not found")
 
     media_types = {
@@ -127,9 +129,7 @@ async def get_evidence(
     headers = {"X-Content-Type-Options": "nosniff"}
 
     # M-6: Sanitize text evidence to prevent stored XSS when served
-    if ext in (".txt", ".json") and file_path.stat().st_size <= 1024 * 1024:
-        async with aiofiles.open(file_path, "rb") as f:
-            raw = await f.read()
+    if ext in (".txt", ".json") and len(raw) <= 1024 * 1024:
         try:
             text = raw.decode("utf-8", errors="replace")
             if "<script" in text.lower() or "<iframe" in text.lower() or "javascript:" in text.lower():
@@ -141,9 +141,8 @@ async def get_evidence(
             )
         except Exception:
             pass
-    return FileResponse(
-        file_path,
+    return Response(
+        content=raw,
         media_type=media_type,
-        filename=filename,
-        headers=headers,
+        headers={**headers, "Content-Disposition": f'inline; filename="{filename}"'},
     )
