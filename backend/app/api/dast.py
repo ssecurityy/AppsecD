@@ -23,6 +23,18 @@ from app.models.crawl_session import CrawlSession
 logger = logging.getLogger(__name__)
 
 
+def _strip_null_bytes(obj):
+    """Recursively strip null bytes (\\x00) from strings in dicts/lists.
+    PostgreSQL cannot store \\x00 in text/jsonb columns."""
+    if isinstance(obj, str):
+        return obj.replace("\x00", "")
+    if isinstance(obj, dict):
+        return {k: _strip_null_bytes(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_strip_null_bytes(v) for v in obj]
+    return obj
+
+
 def _finding_fingerprint(cwe_id: str, affected_url: str, parameter: str, title: str) -> str:
     """Generate a dedup fingerprint from normalized attributes."""
     # Strip prefix [DAST] / [Claude DAST], lowercase, strip whitespace
@@ -176,9 +188,9 @@ async def _run_scan_background(
                         existing_row.scan_count = (existing_row.scan_count or 1) + 1
                         existing_row.dedup_fingerprint = fp
                         if check.get("request_raw"):
-                            existing_row.request = check["request_raw"]
+                            existing_row.request = _strip_null_bytes(check["request_raw"])
                         if check.get("response_raw"):
-                            existing_row.response = check["response_raw"]
+                            existing_row.response = _strip_null_bytes(check["response_raw"])
                         if check.get("evidence"):
                             existing_row.description = check["description"] + f"\n\nEvidence:\n{check['evidence']}"
                         continue
@@ -201,9 +213,9 @@ async def _run_scan_background(
                     if check.get("evidence"):
                         finding.description += f"\n\nEvidence:\n{check['evidence']}"
                     if check.get("request_raw"):
-                        finding.request = check["request_raw"]
+                        finding.request = _strip_null_bytes(check["request_raw"])
                     if check.get("response_raw"):
-                        finding.response = check["response_raw"]
+                        finding.response = _strip_null_bytes(check["response_raw"])
 
                     # AI-enrich finding with Gemini interpretation
                     try:
@@ -393,18 +405,21 @@ async def _run_scan_background(
 
         # Persist scan result to DB (survives tab close, refresh, offline)
         try:
+            # Sanitize null bytes that PostgreSQL can't store in jsonb
+            safe_results = _strip_null_bytes(result["results"])
+            safe_titles = _strip_null_bytes(findings_created)
             scan_record = DastScanResult(
                 project_id=project_uuid,
                 scan_id=scan_id,
                 target_url=target_url,
                 status="completed",
-                results=result["results"],
+                results=safe_results,
                 passed=result["passed"],
                 failed=result["failed"],
                 errors_count=result["errors"],
                 duration_seconds=int(result.get("duration_seconds", 0) or 0),
                 findings_created=len(findings_created),
-                finding_titles=findings_created,
+                finding_titles=safe_titles,
                 created_by=user_id,
             )
             db.add(scan_record)
@@ -572,17 +587,24 @@ async def get_latest_scan(
 
 
 @router.get("/scans")
-async def list_scans(current_user=Depends(get_current_user)):
+async def list_scans(current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """List active and recent DAST scans for dashboard visibility."""
     from app.services.dast_service import list_dast_progress
+    from app.services.project_permissions import get_visible_project_ids
 
-    return {"scans": list_dast_progress()}
+    scans = list_dast_progress()
+    visible_ids = await get_visible_project_ids(db, current_user)
+    if visible_ids is None:
+        return {"scans": scans}
+    visible = {str(v) for v in visible_ids}
+    return {"scans": [s for s in scans if not s.get("project_id") or str(s.get("project_id")) in visible]}
 
 
 @router.get("/scan/{scan_id}")
 async def get_scan_progress(
     scan_id: str,
     current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return scan progress or completed result. Poll every 1.5-2s while running."""
     from app.services.dast_service import get_dast_progress
@@ -590,6 +612,9 @@ async def get_scan_progress(
     prog = get_dast_progress(scan_id)
     if not prog:
         raise HTTPException(404, "Scan not found or expired")
+    project_id = prog.get("project_id")
+    if project_id and not await user_can_read_project(db, current_user, str(project_id)):
+        raise HTTPException(403, "Access denied")
     return prog
 
 
@@ -1755,32 +1780,34 @@ async def _run_claude_scan_background(
                     existing_row.scan_count = (existing_row.scan_count or 1) + 1
                     existing_row.dedup_fingerprint = fp
                     if finding_data.get("request_raw"):
-                        existing_row.request = finding_data["request_raw"]
+                        existing_row.request = _strip_null_bytes(finding_data["request_raw"])
                     if finding_data.get("response_raw"):
-                        existing_row.response = finding_data["response_raw"]
+                        existing_row.response = _strip_null_bytes(finding_data["response_raw"])
                     if finding_data.get("description"):
-                        existing_row.description = finding_data["description"]
+                        existing_row.description = _strip_null_bytes(finding_data["description"])
                     if finding_data.get("reproduction_steps"):
-                        existing_row.reproduction_steps = finding_data["reproduction_steps"]
+                        existing_row.reproduction_steps = _strip_null_bytes(finding_data["reproduction_steps"])
                     continue
 
+                # Sanitize all text fields — PostgreSQL cannot store \x00 in text/jsonb
+                safe_fd = _strip_null_bytes(finding_data)
                 finding = Finding(
                     project_id=project_uuid,
                     title=title,
                     dedup_fingerprint=fp,
                     last_seen_at=datetime.utcnow(),
-                    description=finding_data.get("description", ""),
-                    severity=finding_data.get("severity", "medium"),
-                    cvss_score=finding_data.get("cvss_score", ""),
-                    cwe_id=finding_data.get("cwe_id", ""),
-                    owasp_category=finding_data.get("owasp_category", ""),
+                    description=safe_fd.get("description", ""),
+                    severity=safe_fd.get("severity", "medium"),
+                    cvss_score=safe_fd.get("cvss_score", ""),
+                    cwe_id=safe_fd.get("cwe_id", ""),
+                    owasp_category=safe_fd.get("owasp_category", ""),
                     affected_url=affected,
-                    affected_parameter=finding_data.get("affected_parameter", ""),
-                    request=finding_data.get("request_raw", ""),
-                    response=finding_data.get("response_raw", ""),
-                    reproduction_steps=finding_data.get("reproduction_steps", ""),
-                    impact=finding_data.get("impact", ""),
-                    recommendation=finding_data.get("recommendation", ""),
+                    affected_parameter=safe_fd.get("affected_parameter", ""),
+                    request=safe_fd.get("request_raw", ""),
+                    response=safe_fd.get("response_raw", ""),
+                    reproduction_steps=safe_fd.get("reproduction_steps", ""),
+                    impact=safe_fd.get("impact", ""),
+                    recommendation=safe_fd.get("recommendation", ""),
                     status="open",
                     created_by=user_id,
                 )
@@ -2199,6 +2226,9 @@ async def claude_scan_progress(
     progress = _dast_progress_get(scan_id)
     if not progress:
         raise HTTPException(404, "Scan not found or expired")
+    project_id = progress.get("project_id")
+    if project_id and not await user_can_read_project(db, user, str(project_id)):
+        raise HTTPException(403, "Access denied")
     return progress
 
 
@@ -2214,6 +2244,9 @@ async def claude_scan_stop(
     progress = _dast_progress_get(scan_id)
     if not progress:
         raise HTTPException(404, "Scan not found")
+    project_id = progress.get("project_id")
+    if project_id and not await user_can_write_project(db, user, str(project_id)):
+        raise HTTPException(403, "Access denied")
     progress["status"] = "stopped"
     progress["current_activity"] = "Scan stopped by user"
     progress["last_updated"] = time.time()

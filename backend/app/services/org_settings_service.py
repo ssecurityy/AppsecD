@@ -11,13 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.org_setting import OrgSetting
 from app.models.admin_setting import AdminSetting
 from app.core.config import get_settings
-from app.core.security import SECRET_KEY
+from app.core.security import get_fernet_key
 from app.core.llm_models import get_provider_for_model
 
 
 def _fernet_key() -> bytes:
-    digest = hashlib.sha256(SECRET_KEY.encode()).digest()
-    return base64.urlsafe_b64encode(digest)
+    return get_fernet_key()
 
 
 def _encrypt(plain: str) -> str:
@@ -182,6 +181,87 @@ async def update_jira_config(
         await _upsert_org_setting(db, organization_id, "jira_project_key", project_key)
     else:
         raise ValueError("JIRA must be configured per organization")
+
+
+async def get_github_config(db: AsyncSession, organization_id: Optional[UUID] = None) -> dict:
+    """Return org-scoped GitHub integration config and decrypted credentials."""
+    if not organization_id:
+        return {
+            "pat_token": None,
+            "pat_account_login": "",
+            "oauth_token": None,
+            "oauth_account_login": "",
+            "app_installation": None,
+        }
+
+    pat_token = None
+    oauth_token = None
+    pat_account_login = await _get_org_setting(db, organization_id, "github_pat_account_login") or ""
+    oauth_account_login = await _get_org_setting(db, organization_id, "github_oauth_account_login") or ""
+
+    pat_enc = await _get_org_setting(db, organization_id, "github_pat_token")
+    if pat_enc:
+        try:
+            pat_token = _decrypt(pat_enc)
+        except Exception:
+            pat_token = None
+
+    oauth_enc = await _get_org_setting(db, organization_id, "github_oauth_token")
+    if oauth_enc:
+        try:
+            oauth_token = _decrypt(oauth_enc)
+        except Exception:
+            oauth_token = None
+
+    installation = None
+    installation_raw = await _get_org_setting(db, organization_id, "github_app_installation")
+    if installation_raw:
+        try:
+            installation = json.loads(installation_raw)
+        except Exception:
+            installation = None
+
+    return {
+        "pat_token": pat_token,
+        "pat_account_login": pat_account_login,
+        "oauth_token": oauth_token,
+        "oauth_account_login": oauth_account_login,
+        "app_installation": installation,
+    }
+
+
+async def update_github_pat_config(
+    db: AsyncSession,
+    organization_id: UUID,
+    access_token: str,
+    account_login: str = "",
+) -> None:
+    """Store an org-owned GitHub PAT."""
+    await _upsert_org_setting(db, organization_id, "github_pat_token", _encrypt(access_token) if access_token else "")
+    await _upsert_org_setting(db, organization_id, "github_pat_account_login", account_login or "")
+
+
+async def update_github_oauth_config(
+    db: AsyncSession,
+    organization_id: UUID,
+    access_token: str,
+    account_login: str = "",
+) -> None:
+    """Store an org-owned GitHub OAuth token."""
+    await _upsert_org_setting(db, organization_id, "github_oauth_token", _encrypt(access_token) if access_token else "")
+    await _upsert_org_setting(db, organization_id, "github_oauth_account_login", account_login or "")
+
+
+async def update_github_app_installation(
+    db: AsyncSession,
+    organization_id: UUID,
+    installation: dict | None,
+) -> None:
+    """Store GitHub App installation metadata for an organization."""
+    if installation:
+        await _upsert_org_setting(db, organization_id, "github_app_installation", json.dumps(installation))
+    else:
+        await _delete_org_setting(db, organization_id, "github_app_installation")
 
 
 async def get_custom_models(db: AsyncSession, organization_id: Optional[UUID] = None) -> list[tuple[str, str, str]]:

@@ -1,4 +1,7 @@
 """JWT and password security utilities."""
+import base64
+import hashlib
+import logging
 import uuid as uuid_mod
 from datetime import datetime, timedelta
 from typing import Optional
@@ -8,10 +11,37 @@ from .config import get_settings
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+logger = logging.getLogger(__name__)
 
-SECRET_KEY = "vapt-navigator-secret-key-change-in-production-2026"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8  # 8 hours
+
+
+def get_secret_key() -> str:
+    """Return the application secret key with compatibility-safe fallback behavior."""
+    if settings.secret_key:
+        return settings.secret_key
+
+    # Stable fallback to avoid breaking existing deployments that have not
+    # configured SECRET_KEY yet. This should be treated as transitional only.
+    if settings.database_url:
+        logger.warning("SECRET_KEY is not configured; deriving a compatibility fallback from DATABASE_URL.")
+        return hashlib.sha256(f"navigator:{settings.database_url}".encode()).hexdigest()
+
+    if settings.environment.lower() in ("production", "prod", "staging"):
+        raise RuntimeError("SECRET_KEY must be configured in production or staging environments.")
+
+    logger.warning("SECRET_KEY is not configured; using an insecure development-only fallback.")
+    return "navigator-dev-only-secret-key"
+
+
+def get_fernet_key() -> bytes:
+    """Derive a stable Fernet-compatible key from the application secret."""
+    digest = hashlib.sha256(get_secret_key().encode()).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+SECRET_KEY = get_secret_key()
 
 
 def hash_password(password: str) -> str:

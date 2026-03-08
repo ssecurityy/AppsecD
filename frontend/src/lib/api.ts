@@ -36,6 +36,15 @@ async function request(path: string, opts: RequestInit = {}): Promise<any> {
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${API}${path}`, { ...opts, headers });
   if (!res.ok) {
+    // Auto-redirect to login on 401 (token expired/invalid)
+    if (res.status === 401 && typeof window !== "undefined") {
+      localStorage.removeItem("appsecdtoken");
+      // Only redirect if not already on login page
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
+      throw new Error("Session expired. Redirecting to login...");
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     const msg = Array.isArray(err.detail)
       ? err.detail.map((e: { msg?: string }) => e.msg).filter(Boolean).join("; ") || "Validation failed"
@@ -54,6 +63,8 @@ export const api = {
   register: (data: object) =>
     request("/auth/register", { method: "POST", body: JSON.stringify(data) }),
   me: () => request("/auth/me"),
+  changeMyPassword: (currentPassword: string, newPassword: string) =>
+    request("/auth/me/password", { method: "PUT", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
   users: (orgId?: string) => request(`/auth/users${orgId ? `?org_id=${orgId}` : ""}`),
   assignableUsers: () => request("/auth/users/assignable"),
   createUser: (data: { email: string; username: string; full_name: string; password: string; role?: string; organization_id?: string }) =>
@@ -191,6 +202,26 @@ export const api = {
     request(`/admin/settings/llm${orgId ? `?org_id=${orgId}` : ""}`, { method: "PUT", body: JSON.stringify(data) }),
   updateJiraSettings: (data: { base_url: string; email: string; api_token: string; project_key: string }, orgId?: string) =>
     request(`/admin/settings/jira${orgId ? `?org_id=${orgId}` : ""}`, { method: "PUT", body: JSON.stringify(data) }),
+  adminGithubAppConnectStart: (orgId?: string, projectId?: string) =>
+    request(`/admin/settings/github/connect/app?${new URLSearchParams({
+      ...(orgId ? { org_id: orgId } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+    }).toString()}`),
+  adminGithubOAuthConnectStart: (orgId?: string, projectId?: string) =>
+    request(`/admin/settings/github/connect/oauth?${new URLSearchParams({
+      ...(orgId ? { org_id: orgId } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+    }).toString()}`),
+  adminGithubBootstrapAppStart: (orgId?: string, projectId?: string, autoInstall?: boolean) =>
+    request(`/admin/settings/github/bootstrap/app?${new URLSearchParams({
+      ...(orgId ? { org_id: orgId } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(autoInstall ? { auto_install: "1" } : {}),
+    }).toString()}`),
+  updateGithubPlatformSettings: (data: { github_app_name?: string; github_app_slug?: string; github_oauth_client_id?: string; github_oauth_client_secret?: string; github_oauth_redirect_uri?: string }) =>
+    request("/admin/settings/github/platform", { method: "PUT", body: JSON.stringify(data) }),
+  adminDisconnectGithubConnection: (mode: "github_app" | "oauth" | "pat" | "all", orgId?: string) =>
+    request(`/admin/settings/github/connection?mode=${mode}${orgId ? `&org_id=${orgId}` : ""}`, { method: "DELETE" }),
 
   // Organizations
   listOrganizations: () => request("/organizations"),
@@ -555,4 +586,160 @@ export const api = {
   // Claude DAST with auth config
   claudeDastScanWithAuth: (data: { project_id: string; target_url?: string; scan_mode?: string; include_subdomains?: boolean; max_cost_usd?: number; auth_config?: any; proxy_url?: string }) =>
     request("/dast/claude/scan", { method: "POST", body: JSON.stringify(data) }),
+
+  // ── SAST ──────────────────────────────────────────────────────
+  // Scanning
+  sastUploadScan: async (projectId: string, file: File, aiAnalysis: boolean = false) => {
+    const token = getToken();
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("project_id", projectId);
+    formData.append("ai_analysis", String(aiAnalysis));
+    const res = await fetch(`${API}/sast/scan/upload`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || "Upload failed"); }
+    return res.json();
+  },
+  sastRepoScan: (data: { project_id: string; repository_id: string; branch?: string; ai_analysis?: boolean }) =>
+    request("/sast/scan/repository", { method: "POST", body: JSON.stringify(data) }),
+  sastBulkRepoScan: (data: { project_id: string; repository_ids?: string[]; ai_analysis?: boolean }) =>
+    request("/sast/scan/repositories/bulk", { method: "POST", body: JSON.stringify(data) }),
+  sastScanProgress: (scanId: string) =>
+    request(`/sast/scan/${scanId}/progress`),
+  sastScanResults: (scanId: string, filters?: { severity?: string; status?: string; file_path?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.severity) params.set("severity", filters.severity);
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.file_path) params.set("file_path", filters.file_path);
+    const qs = params.toString();
+    return request(`/sast/scan/${scanId}/results${qs ? `?${qs}` : ""}`);
+  },
+  sastScanHistory: (projectId: string) =>
+    request(`/sast/scans/${projectId}`),
+  sastStopScan: (scanId: string) =>
+    request(`/sast/scan/${scanId}/stop`, { method: "POST" }),
+  sastAiAnalyze: (scanId: string) =>
+    request(`/sast/scan/${scanId}/ai-analyze`, { method: "POST" }),
+
+  // Repositories
+  sastListRepos: (projectId: string) =>
+    request(`/sast/repositories/${projectId}`),
+  sastConnectRepo: (data: { project_id: string; provider: string; repo_url: string; repo_name: string; repo_owner?: string; default_branch?: string; auth_mode?: "pat" | "oauth" | "github_app"; access_token?: string; installation_id?: number; account_login?: string }) =>
+    request("/sast/repositories", { method: "POST", body: JSON.stringify(data) }),
+  sastDisconnectRepo: (repoId: string) =>
+    request(`/sast/repositories/${repoId}`, { method: "DELETE" }),
+
+  // GitHub
+  sastGithubStatus: (projectId: string) =>
+    request(`/sast/github/status?project_id=${projectId}`),
+  sastGithubListRepos: (projectId: string, accessToken: string, page?: number) =>
+    request("/sast/github/repos", { method: "POST", body: JSON.stringify({ project_id: projectId, access_token: accessToken, page: page || 1 }) }),
+  sastGithubAppStart: (projectId: string) =>
+    request(`/sast/github/app/install?project_id=${projectId}`),
+  sastGithubAppRepos: (projectId: string) =>
+    request(`/sast/github/app/repos?project_id=${projectId}`),
+  sastGithubPatRepos: (projectId: string) =>
+    request(`/sast/github/pat/repos?project_id=${projectId}`),
+  sastGithubBranches: (projectId: string, repoOwner: string, repoName: string, authMode: "pat" | "oauth" | "github_app") =>
+    request(`/sast/github/branches?project_id=${projectId}&repo_owner=${encodeURIComponent(repoOwner)}&repo_name=${encodeURIComponent(repoName)}&auth_mode=${authMode}`),
+
+  // GitHub OAuth
+  sastGithubOAuthStart: (projectId: string) =>
+    request(`/sast/github/oauth/authorize?project_id=${projectId}`),
+  sastGithubOAuthRepos: (projectId: string) =>
+    request(`/sast/github/oauth/repos?project_id=${projectId}`),
+
+  // Findings
+  sastListFindings: (scanId: string, filters?: { severity?: string; status?: string; confidence?: string; file_path?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.severity) params.set("severity", filters.severity);
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.confidence) params.set("confidence", filters.confidence);
+    if (filters?.file_path) params.set("file_path", filters.file_path);
+    const qs = params.toString();
+    return request(`/sast/findings/${scanId}${qs ? `?${qs}` : ""}`);
+  },
+  sastUpdateFindingStatus: (findingId: string, status: string) =>
+    request(`/sast/findings/${findingId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  sastAiExplain: (findingId: string) =>
+    request(`/sast/findings/${findingId}/ai-explain`),
+  sastFindingSource: (findingId: string, params?: { repository_id?: string; branch?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.repository_id) qs.set("repository_id", params.repository_id);
+    if (params?.branch) qs.set("branch", params.branch);
+    return request(`/sast/findings/${findingId}/source${qs.toString() ? `?${qs.toString()}` : ""}`);
+  },
+  sastCreateFixPr: (findingId: string, data?: { repository_id?: string; base_branch?: string; branch_name?: string; title?: string; body?: string }) =>
+    request(`/sast/findings/${findingId}/create-pr`, { method: "POST", body: JSON.stringify(data || {}) }),
+
+  // CI/CD
+  sastGetWebhookConfig: (projectId: string) =>
+    request(`/sast/webhook/config/${projectId}`),
+
+  // Policies
+  sastListPolicies: (orgId: string) =>
+    request(`/sast/policies/${orgId}`),
+  sastCreatePolicy: (data: any) =>
+    request("/sast/policies", { method: "POST", body: JSON.stringify(data) }),
+  sastUpdatePolicy: (policyId: string, data: any) =>
+    request(`/sast/policies/${policyId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  sastDeletePolicy: (policyId: string) =>
+    request(`/sast/policies/${policyId}`, { method: "DELETE" }),
+
+  // Export
+  sastExportSarif: (scanId: string) =>
+    request(`/sast/scan/${scanId}/export/sarif`),
+  sastExportJson: (scanId: string) =>
+    request(`/sast/scan/${scanId}/export/json`),
+  sastExportCsv: async (scanId: string) => {
+    const token = getToken();
+    const res = await fetch(`${API}/sast/scan/${scanId}/export/csv`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `sast-${scanId.slice(0, 8)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  // ── SAST Code Security Platform ──────────────────────────────
+  sastReport: (scanId: string) =>
+    request(`/sast/scan/${scanId}/report`),
+  sastDependencies: (scanId: string) =>
+    request(`/sast/scan/${scanId}/dependencies`),
+  sastLicenses: (scanId: string) =>
+    request(`/sast/scan/${scanId}/licenses`),
+  sastSbomCyclonedx: (scanId: string) =>
+    request(`/sast/scan/${scanId}/sbom/cyclonedx`),
+  sastSbomSpdx: (scanId: string) =>
+    request(`/sast/scan/${scanId}/sbom/spdx`),
+  sastSbomDiff: (projectId: string) =>
+    request(`/sast/project/${projectId}/sbom/diff`),
+  sastCveSummary: (scanId: string) =>
+    request(`/sast/scan/${scanId}/cve-summary`),
+  sastTriggerClaudeReview: (scanId: string) =>
+    request(`/sast/scan/${scanId}/claude-review`, { method: "POST" }),
+  sastDiffScan: (data: { project_id: string; repository_id: string; base_ref?: string; head_ref?: string }) =>
+    request("/sast/scan/diff", { method: "POST", body: JSON.stringify(data) }),
+
+  // ── DAST Schedule & Baselines ──────────────────────────────
+  dastCreateSchedule: (data: { project_id: string; cron_expression: string; scan_config?: any; enabled?: boolean }) =>
+    request("/dast/schedule", { method: "POST", body: JSON.stringify(data) }),
+  dastGetSchedule: (projectId: string) =>
+    request(`/dast/schedule/${projectId}`),
+  dastDeleteSchedule: (projectId: string) =>
+    request(`/dast/schedule/${projectId}`, { method: "DELETE" }),
+  dastBaselines: (projectId: string) =>
+    request(`/dast/baselines/${projectId}`),
+
+  // Admin
+  sastAdminUsage: () =>
+    request("/sast/admin/usage"),
+  sastAdminUpdateOrgSettings: (orgId: string, data: any) =>
+    request(`/sast/admin/settings/${orgId}`, { method: "PATCH", body: JSON.stringify(data) }),
 };

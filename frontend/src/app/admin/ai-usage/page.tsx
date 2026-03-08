@@ -20,7 +20,9 @@ export default function AdminAIUsagePage() {
   const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
   const [orgSettings, setOrgSettings] = useState<any>(null);
   const [savingOrg, setSavingOrg] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "organizations" | "settings">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "organizations" | "settings" | "sast">("overview");
+  const [sastUsage, setSastUsage] = useState<any>(null);
+  const [sastOrgSettings, setSastOrgSettings] = useState<any>({});
 
   // Org settings form
   const [orgForm, setOrgForm] = useState({
@@ -41,7 +43,7 @@ export default function AdminAIUsagePage() {
 
   useEffect(() => {
     if (user && !isSuperAdmin(user.role)) {
-      router.push("/dashboard");
+      setLoading(false);
       return;
     }
     if (user) {
@@ -132,6 +134,26 @@ export default function AdminAIUsagePage() {
     );
   }
 
+  if (!user || !isSuperAdmin(user.role)) {
+    return (
+      <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
+        <Navbar />
+        <div className="max-w-2xl mx-auto p-6 mt-20">
+          <div className="card p-8 text-center">
+            <Cpu className="w-12 h-12 mx-auto mb-4" style={{ color: "var(--text-muted)" }} />
+            <h2 className="text-lg font-semibold mb-2" style={{ color: "var(--text-primary)" }}>AI Usage & Configuration — Super Admin Only</h2>
+            <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
+              AI usage monitoring, cost tracking, and per-organization Claude DAST configuration is restricted to Super Administrators. This feature allows managing API keys, scan budgets, and model settings across all organizations.
+            </p>
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Contact your platform administrator or email <strong>support@appsec.dev</strong> to request Super Admin access or to configure AI features for your organization.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
@@ -154,17 +176,22 @@ export default function AdminAIUsagePage() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-6 p-1 rounded-xl w-fit" style={{ background: "var(--bg-elevated)" }}>
-          {(["overview", "organizations", "settings"] as const).map((tab) => (
+          {(["overview", "organizations", "settings", "sast"] as const).map((tab) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => {
+                setActiveTab(tab);
+                if (tab === "sast" && !sastUsage) {
+                  api.sastAdminUsage().then(setSastUsage).catch(() => {});
+                }
+              }}
               className="px-4 py-2 rounded-lg text-sm font-medium transition-all capitalize"
               style={{
                 background: activeTab === tab ? "linear-gradient(135deg, #d97706, #ea580c)" : "transparent",
                 color: activeTab === tab ? "white" : "var(--text-secondary)",
               }}
             >
-              {tab === "overview" ? "Overview" : tab === "organizations" ? "Per-Organization" : "Global Settings"}
+              {tab === "overview" ? "DAST Overview" : tab === "organizations" ? "Per-Organization" : tab === "sast" ? "SAST Settings" : "Global Settings"}
             </button>
           ))}
         </div>
@@ -483,6 +510,102 @@ export default function AdminAIUsagePage() {
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* SAST Tab */}
+        {activeTab === "sast" && (
+          <div className="space-y-6">
+            {/* SAST Usage Summary */}
+            {sastUsage && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {[
+                  { label: "Total Scans", value: sastUsage.total_scans || 0, color: "#3b82f6", icon: <BarChart3 size={18} /> },
+                  { label: "Completed", value: sastUsage.completed_scans || 0, color: "#16a34a", icon: <CheckCircle size={18} /> },
+                  { label: "Issues Found", value: sastUsage.total_issues_found || 0, color: "#ea580c", icon: <AlertTriangle size={18} /> },
+                  { label: "AI Cost", value: `$${(sastUsage.total_ai_cost_usd || 0).toFixed(2)}`, color: "#8b5cf6", icon: <DollarSign size={18} /> },
+                ].map((stat) => (
+                  <div key={stat.label} className="rounded-xl p-5" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span style={{ color: stat.color }}>{stat.icon}</span>
+                      <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>{stat.label}</span>
+                    </div>
+                    <div className="text-2xl font-bold" style={{ color: stat.color }}>{stat.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Per-Org SAST Settings */}
+            <div className="rounded-xl p-6" style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)" }}>
+              <h3 className="text-base font-semibold mb-4" style={{ color: "var(--text-primary)" }}>SAST Settings Per Organization</h3>
+              <div className="space-y-3">
+                {(sastUsage?.organizations || orgs || []).map((org: any) => (
+                  <div key={org.name} className="flex items-center justify-between p-4 rounded-lg" style={{ background: "var(--bg-primary)", border: "1px solid var(--border-subtle)" }}>
+                    <div>
+                      <span className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{org.name}</span>
+                      <div className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                        {org.total_scans || 0} scans &middot; {org.total_issues || 0} issues found
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>SAST Enabled</span>
+                        <input
+                          type="checkbox"
+                          checked={sastOrgSettings[org.name]?.enabled ?? org.sast_enabled ?? false}
+                          onChange={async (e) => {
+                            const enabled = e.target.checked;
+                            setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], enabled } }));
+                            try {
+                              // Find org id from the org list
+                              const orgList = orgs || [];
+                              const found = orgList.find((o: any) => o.name === org.name);
+                              if (found?.id) {
+                                await api.sastAdminUpdateOrgSettings(found.id, { sast_enabled: enabled });
+                                toast.success(`SAST ${enabled ? "enabled" : "disabled"} for ${org.name}`);
+                              }
+                            } catch {
+                              toast.error("Failed to update");
+                            }
+                          }}
+                          className="w-4 h-4 accent-orange-500"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>AI Analysis</span>
+                        <input
+                          type="checkbox"
+                          checked={sastOrgSettings[org.name]?.ai ?? true}
+                          onChange={async (e) => {
+                            const ai = e.target.checked;
+                            setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], ai } }));
+                            try {
+                              const orgList = orgs || [];
+                              const found = orgList.find((o: any) => o.name === org.name);
+                              if (found?.id) {
+                                await api.sastAdminUpdateOrgSettings(found.id, { sast_ai_analysis_enabled: ai });
+                                toast.success("Updated");
+                              }
+                            } catch {
+                              toast.error("Failed to update");
+                            }
+                          }}
+                          className="w-4 h-4 accent-purple-500"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {!sastUsage && (
+              <div className="text-center py-12" style={{ color: "var(--text-secondary)" }}>
+                <Activity size={40} className="mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Loading SAST usage data...</p>
+              </div>
+            )}
           </div>
         )}
       </div>

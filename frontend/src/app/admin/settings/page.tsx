@@ -8,7 +8,7 @@ import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
   Settings, Key, CheckCircle, XCircle, Info, Save, Cpu, Building2,
-  RefreshCw, ExternalLink, Shield, Bell, Mail, MessageSquare, Globe, Send, Webhook, Zap
+  RefreshCw, ExternalLink, Shield, Bell, Mail, MessageSquare, Globe, Send, Webhook, Zap, Github
 } from "lucide-react";
 
 export default function AdminSettingsPage() {
@@ -19,9 +19,11 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [savingJira, setSavingJira] = useState(false);
   const [savingNotif, setSavingNotif] = useState(false);
+  const [savingGithub, setSavingGithub] = useState(false);
   const [orgs, setOrgs] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [selectedOrg, setSelectedOrg] = useState("");
-  const [activeTab, setActiveTab] = useState<"ai" | "jira" | "notifications">("ai");
+  const [activeTab, setActiveTab] = useState<"ai" | "jira" | "github" | "notifications">("ai");
 
   // LLM form
   const [llmProvider, setLlmProvider] = useState("openai");
@@ -54,6 +56,12 @@ export default function AdminSettingsPage() {
   const [llmTestResult, setLlmTestResult] = useState<any>(null);
   const [testingJira, setTestingJira] = useState(false);
   const [jiraTestResult, setJiraTestResult] = useState<any>(null);
+  const [githubAppName, setGithubAppName] = useState("Navigator AppSec");
+  const [githubAppSlug, setGithubAppSlug] = useState("");
+  const [githubOauthClientId, setGithubOauthClientId] = useState("");
+  const [githubOauthClientSecret, setGithubOauthClientSecret] = useState("");
+  const [githubOauthRedirectUri, setGithubOauthRedirectUri] = useState("");
+  const [selectedGithubProjectId, setSelectedGithubProjectId] = useState("");
 
   const refreshStatus = (orgId?: string) => {
     setLoading(true);
@@ -66,6 +74,10 @@ export default function AdminSettingsPage() {
         if (s?.jira?.base_url) setJiraUrl(s.jira.base_url);
         if (s?.jira?.email) setJiraEmail(s.jira.email);
         if (s?.jira?.project_key) setJiraKey(s.jira.project_key);
+        if (s?.github?.github_app_name) setGithubAppName(s.github.github_app_name);
+        if (s?.github?.github_app_slug !== undefined) setGithubAppSlug(s.github.github_app_slug || "");
+        if (s?.github?.github_oauth_client_id !== undefined) setGithubOauthClientId(s.github.github_oauth_client_id || "");
+        if (s?.github?.github_oauth_redirect_uri !== undefined) setGithubOauthRedirectUri(s.github.github_oauth_redirect_uri || "");
       })
       .catch(() => toast.error("Failed to load settings"))
       .finally(() => setLoading(false));
@@ -110,14 +122,63 @@ export default function AdminSettingsPage() {
       } else {
         loadNotificationSettings();
       }
+      api.listProjects({ limit: 200, offset: 0 }).then((res: any) => {
+        setProjects(res?.items || []);
+      }).catch(() => {});
     }
   }, [user]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    if (tab === "github") setActiveTab("github");
+    const urlOrgId = params.get("org_id");
+    if (urlOrgId && urlOrgId !== selectedOrg) {
+      setSelectedOrg(urlOrgId);
+      refreshStatus(urlOrgId);
+      loadNotificationSettings(urlOrgId);
+    }
+    const githubApp = params.get("github_app");
+    const githubAppBootstrap = params.get("github_app_bootstrap");
+    const githubOauth = params.get("github_oauth");
+    const githubUsername = params.get("github_username");
+    if (githubAppBootstrap === "success") {
+      toast.success("Platform GitHub App created");
+      refreshStatus(urlOrgId || selectedOrg || undefined);
+      router.replace(`/admin/settings?tab=github${urlOrgId ? `&org_id=${urlOrgId}` : ""}`);
+    }
+    if (githubApp === "success") {
+      toast.success("GitHub App connected");
+      refreshStatus(urlOrgId || selectedOrg || undefined);
+      router.replace(`/admin/settings?tab=github${urlOrgId ? `&org_id=${urlOrgId}` : ""}`);
+    }
+    if (githubOauth === "success") {
+      toast.success(githubUsername ? `GitHub OAuth connected as ${githubUsername}` : "GitHub OAuth connected");
+      refreshStatus(urlOrgId || selectedOrg || undefined);
+      router.replace(`/admin/settings?tab=github${urlOrgId ? `&org_id=${urlOrgId}` : ""}`);
+    }
+  }, [router, selectedOrg]);
 
   const handleOrgChange = (orgId: string) => {
     setSelectedOrg(orgId);
     refreshStatus(orgId);
     loadNotificationSettings(orgId);
   };
+
+  const visibleGithubProjects = projects.filter((project: any) => {
+    if (!selectedOrg) return true;
+    return project.organization_id === selectedOrg;
+  });
+
+  useEffect(() => {
+    if (!visibleGithubProjects.length) {
+      setSelectedGithubProjectId("");
+      return;
+    }
+    if (!selectedGithubProjectId || !visibleGithubProjects.some((project: any) => project.id === selectedGithubProjectId)) {
+      setSelectedGithubProjectId(visibleGithubProjects[0].id);
+    }
+  }, [selectedGithubProjectId, visibleGithubProjects]);
 
   const handleSaveLlm = async () => {
     setSaving(true);
@@ -193,11 +254,103 @@ export default function AdminSettingsPage() {
     }
   };
 
+  const selectedOrgId = selectedOrg || undefined;
+
+  const handleGithubPopup = (url: string, successType: "github_app_success" | "github_oauth_success" | "github_app_bootstrap_success") => {
+    const popup = window.open(url, successType, "width=760,height=820,scrollbars=yes");
+    if (!popup) {
+      toast.error("Popup blocked. Please allow popups and try again.");
+      return;
+    }
+    const checkClosed = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(checkClosed);
+        window.removeEventListener("message", handler);
+      }
+    }, 500);
+    const handler = async (e: MessageEvent) => {
+      if (e.data?.type !== successType) return;
+      clearInterval(checkClosed);
+      window.removeEventListener("message", handler);
+      if (successType === "github_app_bootstrap_success") {
+        toast.success(`Platform GitHub App created${e.data?.app_slug ? `: ${e.data.app_slug}` : ""}`);
+      } else if (successType === "github_app_success") {
+        toast.success(`GitHub App connected${e.data?.account_login ? ` for ${e.data.account_login}` : ""}`);
+      } else {
+        toast.success(`GitHub OAuth connected${e.data?.github_username ? ` as ${e.data.github_username}` : ""}`);
+      }
+      refreshStatus(selectedOrgId);
+      if ((successType === "github_app_success" || successType === "github_oauth_success") && selectedGithubProjectId) {
+        const authMode = successType === "github_app_success" ? "github_app" : "oauth";
+        router.push(`/projects/${selectedGithubProjectId}/sast?open_connect=1&github_auth_mode=${authMode}`);
+      }
+    };
+    window.addEventListener("message", handler);
+  };
+
+  const startGithubAppConnect = async () => {
+    try {
+      const res = await api.adminGithubAppConnectStart(selectedOrgId, selectedGithubProjectId || undefined);
+      if (res?.install_url) handleGithubPopup(res.install_url, "github_app_success");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to start GitHub App connection");
+    }
+  };
+
+  const startGithubAppBootstrap = async () => {
+    try {
+      const res = await api.adminGithubBootstrapAppStart(selectedOrgId, selectedGithubProjectId || undefined, false);
+      if (res?.launch_url) handleGithubPopup(res.launch_url, "github_app_bootstrap_success");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to start GitHub App bootstrap");
+    }
+  };
+
+  const startGithubOAuthConnect = async () => {
+    try {
+      const res = await api.adminGithubOAuthConnectStart(selectedOrgId, selectedGithubProjectId || undefined);
+      if (res?.authorize_url) handleGithubPopup(res.authorize_url, "github_oauth_success");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to start GitHub OAuth connection");
+    }
+  };
+
+  const saveGithubPlatformSettings = async () => {
+    setSavingGithub(true);
+    try {
+      await api.updateGithubPlatformSettings({
+        github_app_name: githubAppName,
+        github_app_slug: githubAppSlug,
+        github_oauth_client_id: githubOauthClientId,
+        github_oauth_client_secret: githubOauthClientSecret || undefined,
+        github_oauth_redirect_uri: githubOauthRedirectUri,
+      });
+      toast.success("GitHub platform settings saved");
+      setGithubOauthClientSecret("");
+      refreshStatus(selectedOrgId);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to save GitHub platform settings");
+    } finally {
+      setSavingGithub(false);
+    }
+  };
+
+  const disconnectGithubConnection = async (mode: "github_app" | "oauth" | "pat" | "all") => {
+    try {
+      await api.adminDisconnectGithubConnection(mode, selectedOrgId);
+      toast.success("GitHub connection updated");
+      refreshStatus(selectedOrgId);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to update GitHub connection");
+    }
+  };
+
   const filteredModels = llmModels.filter((m: any) => m.provider === llmProvider);
 
   const settingsTabs = [
     { key: "ai" as const, label: "AI / LLM", icon: Cpu },
     { key: "jira" as const, label: "JIRA", icon: ExternalLink },
+    { key: "github" as const, label: "GitHub", icon: Github },
     { key: "notifications" as const, label: "Notifications", icon: Bell },
   ];
 
@@ -389,6 +542,211 @@ export default function AdminSettingsPage() {
                   )}
                 </div>
               )}
+            </div>
+          </motion.div>
+        )}
+
+        {/* GitHub Configuration */}
+        {activeTab === "github" && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                <Github className="w-4 h-4 text-slate-300" /> GitHub Repository Integration
+              </h2>
+            </div>
+            <div className="space-y-4">
+              <div className="rounded-lg border p-4" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>Platform GitHub setup</h3>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
+                    Enables org auth
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>Project to continue into after connect</label>
+                    <select
+                      className="input-field py-2 text-sm w-full"
+                      value={selectedGithubProjectId}
+                      onChange={e => setSelectedGithubProjectId(e.target.value)}
+                    >
+                      {visibleGithubProjects.length === 0 ? (
+                        <option value="">No visible projects available</option>
+                      ) : (
+                        visibleGithubProjects.map((project: any) => (
+                          <option key={project.id} value={project.id}>
+                            {project.name}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>GitHub App Name</label>
+                    <input className="input-field py-2 text-sm w-full" value={githubAppName} onChange={e => setGithubAppName(e.target.value)} placeholder="Navigator AppSec" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>GitHub App Slug</label>
+                    <input className="input-field py-2 text-sm w-full" value={githubAppSlug} onChange={e => setGithubAppSlug(e.target.value)} placeholder="navigator-appsec" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>OAuth Client ID</label>
+                    <input className="input-field py-2 text-sm w-full" value={githubOauthClientId} onChange={e => setGithubOauthClientId(e.target.value)} placeholder="Iv1..." />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>OAuth Client Secret</label>
+                    <input className="input-field py-2 text-sm w-full" type="password" value={githubOauthClientSecret} onChange={e => setGithubOauthClientSecret(e.target.value)} placeholder="Leave blank to keep current" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>OAuth Redirect URI</label>
+                    <input className="input-field py-2 text-sm w-full" value={githubOauthRedirectUri} onChange={e => setGithubOauthRedirectUri(e.target.value)} placeholder="https://your-domain/api/sast/github/oauth/callback" />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-4">
+                  <button onClick={saveGithubPlatformSettings} disabled={savingGithub} className="btn-primary flex items-center gap-2 text-sm py-2 px-4 disabled:opacity-50">
+                    <Save className="w-3.5 h-3.5" /> {savingGithub ? "Saving..." : "Save Platform GitHub Settings"}
+                  </button>
+                  <button onClick={startGithubAppBootstrap} className="btn-secondary flex items-center gap-2 text-sm py-2 px-4">
+                    <Github className="w-3.5 h-3.5" /> Create GitHub App on GitHub
+                  </button>
+                </div>
+                <p className="text-[11px] mt-3" style={{ color: "var(--text-muted)" }}>
+                  Use the bootstrap button to create the platform GitHub App from a GitHub popup, or manually save an existing app slug / OAuth app configuration here.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-lg border p-4" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>GitHub App</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      status?.github?.github_app_connected
+                        ? "text-emerald-400 bg-emerald-500/10"
+                        : status?.github?.github_app_configured
+                          ? "text-amber-400 bg-amber-500/10"
+                          : "text-red-400 bg-red-500/10"
+                    }`}>
+                      {status?.github?.github_app_connected ? "Connected" : status?.github?.github_app_configured ? "Configured" : "Not configured"}
+                    </span>
+                  </div>
+                  <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+                    Recommended for enterprise SaaS. Repositories are listed from app installations and scoped to what the customer allows.
+                  </p>
+                  {status?.github?.github_app_name && (
+                    <p className="text-xs mt-2" style={{ color: "var(--text-secondary)" }}>
+                      App name: <span style={{ color: "var(--text-primary)" }}>{status.github.github_app_name}</span>
+                    </p>
+                  )}
+                  {status?.github?.github_app_installation?.account_login && (
+                    <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                      Connected account: <span style={{ color: "var(--text-primary)" }}>{status.github.github_app_installation.account_login}</span>
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      onClick={startGithubAppConnect}
+                      className="btn-primary text-xs py-2 px-3"
+                    >
+                      {status?.github?.github_app_connected
+                        ? "Reconnect GitHub App"
+                        : status?.github?.github_app_configured
+                          ? "Connect GitHub App"
+                          : "Create and Connect GitHub App"}
+                    </button>
+                    {status?.github?.github_app_connected && (
+                      <button
+                        onClick={() => disconnectGithubConnection("github_app")}
+                        className="btn-secondary text-xs py-2 px-3"
+                      >
+                        Disconnect
+                      </button>
+                    )}
+                  </div>
+                  {!status?.github?.github_app_configured && (
+                    <p className="text-[11px] mt-3" style={{ color: "var(--text-muted)" }}>
+                      No platform app exists yet. Clicking the button above will create the GitHub App first, then open GitHub&apos;s repository authorization flow.
+                    </p>
+                  )}
+                </div>
+                <div className="rounded-lg border p-4" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>GitHub OAuth</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      status?.github?.oauth_connected
+                        ? "text-emerald-400 bg-emerald-500/10"
+                        : status?.github?.oauth_configured
+                          ? "text-amber-400 bg-amber-500/10"
+                          : "text-red-400 bg-red-500/10"
+                    }`}>
+                      {status?.github?.oauth_connected ? "Connected" : status?.github?.oauth_configured ? "Configured" : "Not configured"}
+                    </span>
+                  </div>
+                  <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+                    Good fallback for smaller teams. PAT remains available for edge cases and migration.
+                  </p>
+                  {status?.github?.oauth_account_login && (
+                    <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                      Connected account: <span style={{ color: "var(--text-primary)" }}>{status.github.oauth_account_login}</span>
+                    </p>
+                  )}
+                  {status?.github?.pat_connected && (
+                    <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                      PAT connected for org: <span style={{ color: "var(--text-primary)" }}>{status?.github?.pat_account_login || "configured"}</span>
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      onClick={startGithubOAuthConnect}
+                      disabled={!status?.github?.oauth_configured}
+                      className="btn-primary text-xs py-2 px-3 disabled:opacity-50"
+                    >
+                      {status?.github?.oauth_connected ? "Reconnect GitHub OAuth" : "Connect GitHub OAuth"}
+                    </button>
+                    {status?.github?.oauth_connected && (
+                      <button
+                        onClick={() => disconnectGithubConnection("oauth")}
+                        className="btn-secondary text-xs py-2 px-3"
+                      >
+                        Disconnect OAuth
+                      </button>
+                    )}
+                    {status?.github?.pat_connected && (
+                      <button
+                        onClick={() => disconnectGithubConnection("pat")}
+                        className="btn-secondary text-xs py-2 px-3"
+                      >
+                        Disconnect PAT
+                      </button>
+                    )}
+                  </div>
+                  {!status?.github?.oauth_configured && (
+                    <p className="text-[11px] mt-3" style={{ color: "var(--text-muted)" }}>
+                      Missing platform setup: {(status?.github?.oauth_missing_env || []).join(", ") || "OAuth client ID and client secret"}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
+                <h3 className="text-sm font-medium mb-2" style={{ color: "var(--text-primary)" }}>How org GitHub auth works</h3>
+                <div className="space-y-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+                  <p>1. A platform admin configures the one-time GitHub App or OAuth credentials on the backend server.</p>
+                  <p>2. An organization admin clicks Connect here, signs in on GitHub, and approves all repositories or selected repositories.</p>
+                  <p>3. Navigator stores that connection for the tenant, so other admins in the same organization can reuse it.</p>
+                  <p>4. Only the repositories approved in GitHub are available for SAST scans and AI fix PR creation.</p>
+                  <p>5. For enterprise rollout, prefer GitHub App. Use OAuth or PAT only as fallback and migration paths.</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-elevated)" }}>
+                <h3 className="text-sm font-medium mb-2" style={{ color: "var(--text-primary)" }}>Backend setup checklist</h3>
+                <div className="space-y-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+                  <p>GitHub App requires `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, and `GITHUB_APP_PRIVATE_KEY` on the backend server.</p>
+                  <p>GitHub OAuth requires `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` on the backend server.</p>
+                  <p>The GitHub App install URL uses the app slug, not the display name. Configure the slug exactly as shown in GitHub.</p>
+                  <p>After connection, go to a project&apos;s `SAST` tab to import the allowed repositories and start repo-wise or all-repo scans.</p>
+                </div>
+              </div>
             </div>
           </motion.div>
         )}

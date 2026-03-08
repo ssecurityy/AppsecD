@@ -21,7 +21,7 @@ const BADGE_MAP: Record<string, { label: string; color: string }> = {
 };
 
 export default function Navbar() {
-  const { user, clearAuth } = useAuthStore();
+  const { user, clearAuth, setOrgSettings } = useAuthStore();
   const { theme, toggleTheme } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
@@ -29,9 +29,14 @@ export default function Navbar() {
 
   useEffect(() => {
     if (user) {
-      api.getMyBranding().then(setBranding).catch(() => {});
+      api.getMyBranding().then((data: any) => {
+        setBranding(data);
+        if (data?.sast_enabled !== undefined) {
+          setOrgSettings({ sast_enabled: !!data.sast_enabled });
+        }
+      }).catch(() => {});
     }
-  }, [user]);
+  }, [user, setOrgSettings]);
 
   const logout = () => {
     clearAuth();
@@ -42,9 +47,10 @@ export default function Navbar() {
   const nav = [
     { href: "/dashboard", icon: Home, label: "Dashboard" },
     { href: "/projects", icon: FolderOpen, label: "Projects" },
+    { href: "/settings/security", icon: Shield, label: "Security" },
     { href: "/payloads", icon: BookOpen, label: "Wordlists" },
     ...(isAdmin(user?.role) ? [
-      { href: "/dashboard/security-intel", icon: Shield, label: "Intel" },
+      { href: "/dashboard/security-intel", icon: Cpu, label: "Intel" },
       { href: "/admin/users", icon: Users, label: "Users" },
       { href: "/admin/organizations", icon: Building2, label: "Orgs" },
       { href: "/admin/audit", icon: FileText, label: "Audit" },

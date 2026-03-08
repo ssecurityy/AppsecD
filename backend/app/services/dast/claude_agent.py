@@ -73,6 +73,11 @@ class ClaudeDastAgent:
         self.pentest_options: list[dict] = []
         self.activity_log: list[dict] = []
 
+        # Phase tracking for active scan enforcement
+        self.completed_phases: set[str] = set()
+        self._active_reprompt_count: int = 0
+        _MAX_ACTIVE_REPROMPTS = 2
+
         # Progress callback
         self._progress_callback: Callable | None = None
         self._executor = None  # Set by caller
@@ -385,12 +390,56 @@ class ClaudeDastAgent:
             # Add assistant message
             messages.append({"role": "assistant", "content": assistant_content})
 
-            # If no tool use, Claude is done
-            if not has_tool_use or response.stop_reason == "end_turn":
-                break
+            # If tool_use blocks exist, always process them first
+            if has_tool_use and tool_results:
+                messages.append({"role": "user", "content": tool_results})
+                # Only break on end_turn when NO tool calls were made
+                if response.stop_reason == "end_turn":
+                    continue  # Process tool results, let Claude continue
+                continue
 
-            # Add tool results
-            messages.append({"role": "user", "content": tool_results})
+            # No tool use — Claude wants to stop. Check if active testing was done.
+            if not has_tool_use or response.stop_reason == "end_turn":
+                # Enforce active testing phase before allowing scan to end
+                if (
+                    "dynamic_testing" not in self.completed_phases
+                    and self._active_reprompt_count < 2
+                    and self.cost.calls_remaining() > 10
+                    and not self.cost.is_budget_exceeded()
+                ):
+                    self._active_reprompt_count += 1
+                    # Build targeted reprompt with discovered endpoints
+                    crawled_urls = [c.get("url") for c in self.crawl_results[:30] if c.get("url")]
+                    crawled_forms = [
+                        {"url": c.get("url"), "forms": c.get("forms", []), "category": c.get("category")}
+                        for c in self.crawl_results if c.get("forms")
+                    ][:10]
+                    reprompt = (
+                        "MANDATORY PHASE NOT COMPLETED: You have NOT executed Phase 4 (DYNAMIC TESTING). "
+                        "The scan is INCOMPLETE without active injection testing. "
+                        "You MUST now perform the following active tests:\n\n"
+                        "1. Use test_injection on discovered parameters with injection_type='auto' for SQLi, XSS, command injection\n"
+                        "2. Use test_authentication on any login endpoints found\n"
+                        "3. Use http_request to send custom payloads to interesting endpoints\n\n"
+                    )
+                    if crawled_urls:
+                        reprompt += f"DISCOVERED ENDPOINTS TO TEST:\n{json.dumps(crawled_urls[:20], indent=1)}\n\n"
+                    if crawled_forms:
+                        reprompt += f"FORMS WITH PARAMETERS:\n{json.dumps(crawled_forms[:5], indent=1)}\n\n"
+                    reprompt += (
+                        f"Budget remaining: {self.cost.calls_remaining()} API calls, "
+                        f"${self.cost.budget_remaining_usd():.2f} USD. "
+                        "Proceed with active testing NOW. Call update_progress with phase='dynamic_testing' first."
+                    )
+                    messages.append({"role": "user", "content": reprompt})
+                    self._emit_progress(
+                        "dynamic_testing",
+                        f"Enforcing active testing phase (attempt {self._active_reprompt_count})",
+                        log_type="phase_enforcement",
+                    )
+                    self.cost.set_phase("dynamic_testing")
+                    continue  # Re-enter loop for active testing
+                break
 
         return messages
 
@@ -438,8 +487,16 @@ class ClaudeDastAgent:
                 self.pentest_options.append(tool_input)
             elif tool_name == "update_progress":
                 phase = tool_input.get("phase", self.cost.current_phase)
+                # Track completed phases for enforcement logic
+                if self.cost.current_phase and self.cost.current_phase != phase:
+                    self.completed_phases.add(self.cost.current_phase)
+                self.completed_phases.add(phase)
                 self.cost.set_phase(phase)
                 self._emit_progress(phase, tool_input.get("message", ""))
+            # Track active testing tools as evidence of dynamic testing phase
+            if tool_name in ("test_injection", "test_authentication", "test_race_condition",
+                             "test_websocket", "test_graphql", "test_llm_chatbot"):
+                self.completed_phases.add("dynamic_testing")
 
             return json.dumps(result, default=str) if isinstance(result, dict) else str(result)
         except Exception as e:

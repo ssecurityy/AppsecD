@@ -8,10 +8,11 @@ import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
 import {
   CheckCircle, XCircle, Circle, MinusCircle, ChevronDown, ChevronUp,
-  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy, TrendingUp, Trash2, ArrowRightLeft
+  Terminal, BookOpen, AlertTriangle, Zap, Target, Flag, Users, X, FileDown, FileText, ShieldCheck, Upload, Wand2, Copy, TrendingUp, Trash2, ArrowRightLeft, Code2
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import Link from "next/link";
+import ProjectSubNav from "@/components/ProjectSubNav";
 
 const PHASE_INFO: Record<string, { label: string; color: string }> = {
   recon: { label: "Recon", color: "blue" },
@@ -612,7 +613,7 @@ function TestCaseCard({ tc, projectId, applicationUrl, onUpdate, craftingPayload
 
 export default function ProjectDetail() {
   const { id } = useParams() as { id: string };
-  const { hydrate, user } = useAuthStore();
+  const { hydrate, user, orgSettings } = useAuthStore();
   const router = useRouter();
   const [project, setProject] = useState<any>(null);
   const [progress, setProgress] = useState<any>(null);
@@ -796,6 +797,16 @@ export default function ProjectDetail() {
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
+
+      {/* Project Sub-Navigation */}
+      <div className="max-w-6xl mx-auto px-4 pt-4">
+        <ProjectSubNav
+          projectId={id}
+          projectName={project?.application_name}
+          projectUrl={project?.application_url}
+          sastEnabled={orgSettings.sast_enabled}
+        />
+      </div>
 
       {/* Global progress bar */}
       <div className="sticky top-14 z-40 px-4 py-2" style={{ background: "var(--bg-primary)", borderBottom: "1px solid var(--border-subtle)" }}>
@@ -1018,6 +1029,16 @@ export default function ProjectDetail() {
                 >
                   <Zap className="w-3.5 h-3.5" /> DAST Scan
                 </Link>
+                {orgSettings.sast_enabled && (
+                  <Link
+                    href={`/projects/${id}/sast`}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0"
+                    style={{ background: "rgba(139, 92, 246, 0.15)", color: "#a78bfa", border: "1px solid rgba(139, 92, 246, 0.3)" }}
+                    title="Run SAST code analysis scan"
+                  >
+                    <Code2 className="w-3.5 h-3.5" /> SAST Scan
+                  </Link>
+                )}
                 <button
                   onClick={openFindingsPanel}
                   className="flex items-center gap-2 px-3 py-1.5 rounded border hover:text-white hover:border-indigo-500 transition-colors text-sm shrink-0"

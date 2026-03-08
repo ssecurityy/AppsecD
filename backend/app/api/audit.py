@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, and_
 from datetime import datetime, date
 from app.core.database import get_db
-from app.api.auth import require_super_admin, get_current_user
+from app.api.auth import require_super_admin, require_admin, get_current_user
 from app.models.audit_log import AuditLog
 from app.models.user import User
 
@@ -22,14 +22,18 @@ async def list_audit_logs(
     search: str | None = Query(None, description="Search in action/resource"),
     date_from: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: str | None = Query(None, description="End date (YYYY-MM-DD)"),
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List audit logs. Super_admin only (sensitive PII and IPs)."""
+    """List audit logs. Admin sees own org, super_admin sees all."""
     conditions = []
 
-    # Super_admin only; optional org filter
-    if org_id:
+    # Org admin: scope to their own organization's users only
+    if current_user.role == "admin":
+        org_user_ids = select(User.id).where(User.organization_id == current_user.organization_id)
+        conditions.append(AuditLog.user_id.in_(org_user_ids))
+    elif org_id:
+        # Super admin can filter by any org
         from uuid import UUID
         try:
             oid = UUID(org_id)
@@ -125,14 +129,19 @@ async def list_audit_logs(
 @router.get("/stats")
 async def audit_stats(
     days: int = Query(30, le=365),
-    current_user: User = Depends(require_super_admin),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get audit statistics for dashboard. Super_admin only."""
+    """Get audit statistics. Admin sees own org, super_admin sees all."""
     from datetime import timedelta
     cutoff = datetime.utcnow() - timedelta(days=days)
 
     conditions = [AuditLog.created_at >= cutoff]
+
+    # Org admin: scope to own org
+    if current_user.role == "admin":
+        org_user_ids = select(User.id).where(User.organization_id == current_user.organization_id)
+        conditions.append(AuditLog.user_id.in_(org_user_ids))
 
     # Total events
     total_q = select(func.count(AuditLog.id)).where(and_(*conditions))

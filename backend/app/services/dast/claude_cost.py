@@ -140,8 +140,28 @@ class CostTracker:
 
     def should_downgrade_model(self) -> bool:
         """Return True if we should switch to a cheaper model to stay in budget."""
-        # Downgrade when >70% of budget is spent
-        return self.total_cost_usd > self.max_cost_usd * 0.7
+        # Downgrade when >85% of budget is spent (was 70% — too aggressive, killed active testing)
+        return self.total_cost_usd > self.max_cost_usd * 0.85
+
+    def budget_pct_used(self) -> float:
+        """Return percentage of budget used (0.0-1.0)."""
+        if self.max_cost_usd <= 0:
+            return 1.0
+        return min(self.total_cost_usd / self.max_cost_usd, 1.0)
+
+    def calls_pct_used(self) -> float:
+        """Return percentage of API calls used (0.0-1.0)."""
+        if self.max_api_calls <= 0:
+            return 1.0
+        return min(self.total_api_calls / self.max_api_calls, 1.0)
+
+    def should_move_to_active_testing(self) -> bool:
+        """Return True if early phases have used too much budget and should transition to active testing."""
+        # If >50% budget used and still in crawling/recon/automated_checks, signal to move on
+        passive_phases = {"crawling", "recon", "automated_checks"}
+        if self.current_phase in passive_phases and self.calls_pct_used() > 0.50:
+            return True
+        return False
 
     def get_downgraded_model(self, current_model: str) -> str:
         """Return a cheaper model alternative."""

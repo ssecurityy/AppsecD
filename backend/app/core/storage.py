@@ -189,6 +189,7 @@ def _content_type_for_key(key: str) -> str:
 # Key layout constants
 KEY_PREFIX_UPLOADS = "uploads"
 KEY_PREFIX_ORG_LOGOS = "org_logos"
+KEY_PREFIX_WORDLISTS = "wordlists"
 
 
 def evidence_key(project_id: str, filename: str) -> str:

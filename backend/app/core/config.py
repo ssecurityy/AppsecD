@@ -6,11 +6,16 @@ from functools import lru_cache
 class Settings(BaseSettings):
     """App settings from environment."""
 
-    # Database
-    database_url: str = "postgresql+asyncpg://navigator:navigator_secure_password@31.97.236.44:5432/navigator"
+    environment: str = "development"
 
-    # Redis (shared on DB server for multi-app-server)
-    redis_url: str = "redis://31.97.236.44:6379/1"
+    # Database (set via DATABASE_URL env var or .env file)
+    database_url: str = ""
+
+    # Redis (set via REDIS_URL env var or .env file)
+    redis_url: str = ""
+
+    # App secret. In production/staging this should always be set.
+    secret_key: str = ""
 
     # App
     app_name: str = "AppSecD"
@@ -58,10 +63,24 @@ class Settings(BaseSettings):
     claude_dast_enabled: bool = True
     claude_dast_default_model: str = "claude-sonnet-4-6"
     claude_dast_max_cost_per_scan: float = 20.0
-    claude_dast_max_api_calls: int = 200
+    claude_dast_max_api_calls: int = 300
     claude_dast_max_daily_scans: int = 50
     claude_dast_session_ttl_days: int = 30
     claude_dast_allowed_models: str = "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-6"
+
+    # GitHub OAuth for SAST repo integration
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_redirect_uri: str = ""
+
+    # GitHub App for enterprise SaaS repo integration
+    github_app_id: str = ""
+    github_app_slug: str = ""
+    github_app_client_id: str = ""
+    github_app_client_secret: str = ""
+    github_app_private_key: str = ""
+    github_app_webhook_secret: str = ""
+    github_app_name: str = "Navigator AppSec"
 
     # Enterprise: connection pool
     db_pool_size: int = 20

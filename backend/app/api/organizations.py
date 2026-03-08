@@ -37,6 +37,7 @@ def _org_to_dict(o: Organization) -> dict:
         "logo_url": o.logo_url,
         "brand_color": o.brand_color,
         "description": o.description,
+        "sast_enabled": getattr(o, "sast_enabled", False),
     }
 
 
@@ -102,6 +103,7 @@ async def get_my_branding(
         "logo_url": org.logo_url,
         "brand_color": org.brand_color,
         "description": org.description,
+        "sast_enabled": getattr(org, "sast_enabled", False),
     }
 
 

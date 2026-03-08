@@ -15,6 +15,7 @@ from .organizations import router as organizations_router
 from .settings import router as settings_router
 from .security_intel import router as security_intel_router
 from .dast import router as dast_router
+from .sast import router as sast_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -33,3 +34,4 @@ api_router.include_router(findings_router)
 api_router.include_router(payloads_router)
 api_router.include_router(security_intel_router)
 api_router.include_router(dast_router)
+api_router.include_router(sast_router)

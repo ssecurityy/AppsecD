@@ -1,4 +1,4 @@
-"""Admin settings service — LLM config storage with encrypted API key."""
+"""Admin settings service — global platform settings with encrypted secrets."""
 import base64
 import hashlib
 import json
@@ -9,13 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.admin_setting import AdminSetting
 from app.core.config import get_settings
-from app.core.security import SECRET_KEY
+from app.core.security import get_fernet_key
 from app.core.llm_models import get_provider_for_model
 
 # Fernet-compatible key from SECRET_KEY (32 bytes, base64url)
 def _fernet_key() -> bytes:
-    digest = hashlib.sha256(SECRET_KEY.encode()).digest()
-    return base64.urlsafe_b64encode(digest)
+    return get_fernet_key()
 
 
 def _encrypt(plain: str) -> str:
@@ -38,6 +37,28 @@ def _get_env_key(provider: str, s) -> Optional[str]:
     if provider == "google":
         return s.google_api_key or None
     return None
+
+
+async def _get_admin_setting(db: AsyncSession, key: str) -> Optional[str]:
+    row = await db.execute(select(AdminSetting).where(AdminSetting.key == key))
+    setting = row.scalar_one_or_none()
+    return setting.value if setting else None
+
+
+async def _upsert_admin_setting(db: AsyncSession, key: str, value: str) -> None:
+    row = await db.execute(select(AdminSetting).where(AdminSetting.key == key))
+    setting = row.scalar_one_or_none()
+    if setting:
+        setting.value = value
+    else:
+        db.add(AdminSetting(key=key, value=value))
+
+
+async def _delete_admin_setting(db: AsyncSession, key: str) -> None:
+    row = await db.execute(select(AdminSetting).where(AdminSetting.key == key))
+    setting = row.scalar_one_or_none()
+    if setting:
+        await db.delete(setting)
 
 
 async def get_llm_config(db: AsyncSession) -> tuple[str, str, Optional[str]]:
@@ -157,3 +178,112 @@ async def remove_custom_model(db: AsyncSession, provider: str, model: str) -> No
         r.value = json.dumps(data)
     elif data:
         db.add(AdminSetting(key="llm_custom_models", value=json.dumps(data)))
+
+
+async def get_github_platform_config(db: AsyncSession) -> dict:
+    """Return platform-wide GitHub App/OAuth config with DB values overriding env."""
+    s = get_settings()
+
+    def _dec(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        try:
+            return _decrypt(value)
+        except Exception:
+            return ""
+
+    app_id = (await _get_admin_setting(db, "github_app_id")) or s.github_app_id or ""
+    app_slug = (await _get_admin_setting(db, "github_app_slug")) or s.github_app_slug or ""
+    app_name = (await _get_admin_setting(db, "github_app_name")) or s.github_app_name or ""
+    app_client_id = (await _get_admin_setting(db, "github_app_client_id")) or s.github_app_client_id or ""
+    app_client_secret = _dec(await _get_admin_setting(db, "github_app_client_secret")) or s.github_app_client_secret or ""
+    app_private_key = _dec(await _get_admin_setting(db, "github_app_private_key")) or s.github_app_private_key or ""
+    app_webhook_secret = _dec(await _get_admin_setting(db, "github_app_webhook_secret")) or s.github_app_webhook_secret or ""
+    oauth_client_id = (await _get_admin_setting(db, "github_oauth_client_id")) or s.github_oauth_client_id or ""
+    oauth_client_secret = _dec(await _get_admin_setting(db, "github_oauth_client_secret")) or s.github_oauth_client_secret or ""
+    oauth_redirect_uri = (await _get_admin_setting(db, "github_oauth_redirect_uri")) or s.github_oauth_redirect_uri or ""
+
+    return {
+        "github_app_id": app_id,
+        "github_app_slug": app_slug,
+        "github_app_name": app_name,
+        "github_app_client_id": app_client_id,
+        "github_app_client_secret": app_client_secret,
+        "github_app_private_key": app_private_key,
+        "github_app_webhook_secret": app_webhook_secret,
+        "github_oauth_client_id": oauth_client_id,
+        "github_oauth_client_secret": oauth_client_secret,
+        "github_oauth_redirect_uri": oauth_redirect_uri,
+    }
+
+
+async def update_github_platform_app_config(
+    db: AsyncSession,
+    *,
+    app_id: Optional[str] = None,
+    app_slug: Optional[str] = None,
+    app_name: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    private_key: Optional[str] = None,
+    webhook_secret: Optional[str] = None,
+) -> None:
+    """Upsert platform-wide GitHub App config. `None` keeps existing, empty string clears."""
+    plain_values = {
+        "github_app_id": app_id,
+        "github_app_slug": app_slug,
+        "github_app_name": app_name,
+        "github_app_client_id": client_id,
+    }
+    secret_values = {
+        "github_app_client_secret": client_secret,
+        "github_app_private_key": private_key,
+        "github_app_webhook_secret": webhook_secret,
+    }
+
+    for key, value in plain_values.items():
+        if value is None:
+            continue
+        if value == "":
+            await _delete_admin_setting(db, key)
+        else:
+            await _upsert_admin_setting(db, key, value)
+
+    for key, value in secret_values.items():
+        if value is None:
+            continue
+        if value == "":
+            await _delete_admin_setting(db, key)
+        else:
+            await _upsert_admin_setting(db, key, _encrypt(value))
+
+
+async def update_github_oauth_platform_config(
+    db: AsyncSession,
+    *,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    redirect_uri: Optional[str] = None,
+) -> None:
+    """Upsert platform-wide GitHub OAuth config. `None` keeps existing, empty string clears."""
+    plain_values = {
+        "github_oauth_client_id": client_id,
+        "github_oauth_redirect_uri": redirect_uri,
+    }
+    secret_values = {
+        "github_oauth_client_secret": client_secret,
+    }
+    for key, value in plain_values.items():
+        if value is None:
+            continue
+        if value == "":
+            await _delete_admin_setting(db, key)
+        else:
+            await _upsert_admin_setting(db, key, value)
+    for key, value in secret_values.items():
+        if value is None:
+            continue
+        if value == "":
+            await _delete_admin_setting(db, key)
+        else:
+            await _upsert_admin_setting(db, key, _encrypt(value))

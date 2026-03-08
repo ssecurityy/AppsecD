@@ -113,7 +113,23 @@ export default function AuditPage() {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
   };
 
-  if (!user || !isAdmin(user.role)) return null;
+  if (!user || !isAdmin(user.role)) return (
+    <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
+      <Navbar />
+      <div className="max-w-2xl mx-auto p-6 mt-20">
+        <div className="card p-8 text-center">
+          <Activity className="w-12 h-12 mx-auto mb-4" style={{ color: "var(--text-muted)" }} />
+          <h2 className="text-lg font-semibold mb-2" style={{ color: "var(--text-primary)" }}>Audit Trail — Restricted Access</h2>
+          <p className="text-sm mb-4" style={{ color: "var(--text-secondary)" }}>
+            Audit trail access requires Admin or Super Admin privileges. This feature provides complete activity logging across your organization for compliance and security monitoring.
+          </p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Contact your organization administrator or email <strong>support@appsec.dev</strong> to request access.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>

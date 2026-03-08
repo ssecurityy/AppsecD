@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import Cookie
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from app.core.database import get_db
@@ -185,6 +186,39 @@ async def logout(
 @router.get("/me", response_model=UserOut)
 async def me(current_user: User = Depends(get_current_user)):
     return UserOut.model_validate(current_user)
+
+
+class SelfPasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.put("/me/password")
+async def update_my_password(
+    request: Request,
+    payload: SelfPasswordUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Self-service password change for the current user."""
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(400, "Current password is incorrect")
+    if len(payload.new_password or "") < 10:
+        raise HTTPException(400, "New password must be at least 10 characters long")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(400, "New password must be different from the current password")
+
+    current_user.hashed_password = hash_password(payload.new_password)
+    await db.commit()
+    await log_audit(
+        db,
+        "self_password_change",
+        user_id=str(current_user.id),
+        resource_type="user",
+        resource_id=str(current_user.id),
+        ip_address=get_client_ip(request),
+    )
+    return {"ok": True, "message": "Password updated"}
 
 
 @router.get("/users", response_model=list[UserAdminOut])

@@ -152,7 +152,7 @@ export default function LoginPage() {
         </div>
 
         {/* Login card */}
-        <div className="card-glass p-7 rounded-2xl" style={{ borderColor: "var(--border-primary)" }}>
+        <div className="card-glass p-7 rounded-2xl" style={{ borderColor: "var(--border-subtle)" }}>
 
           {/* === LOGIN FORM === */}
           {mfaStep === "login" && (

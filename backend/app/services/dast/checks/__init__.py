@@ -68,6 +68,36 @@ from .advanced import (
     check_cors_deep,
     check_http_smuggling,
 )
+from .modern import (
+    check_insecure_deserialization,
+    check_ssrf_advanced,
+    check_broken_access_control,
+    check_mass_assignment,
+    check_api_security_misconfiguration,
+    check_server_side_template_injection,
+    check_prototype_pollution,
+    check_dns_rebinding,
+    check_cache_poisoning,
+    check_cors_null_origin,
+)
+from .exposure import (
+    check_cloud_metadata_exposure,
+    check_git_exposure,
+    check_env_file_exposure,
+    check_docker_exposure,
+    check_ci_cd_exposure,
+    check_secret_in_response,
+    check_graphql_introspection,
+    check_source_map_exposure,
+)
+from .network import (
+    check_admin_panel_exposure,
+    check_database_exposure,
+    check_websocket_security,
+    check_service_worker_security,
+    check_csp_bypass_vectors,
+    check_subdomain_takeover,
+)
 
 __all__ = [
     "check_security_headers",
@@ -131,4 +161,39 @@ __all__ = [
     "check_command_injection",
     "check_cors_deep",
     "check_http_smuggling",
+    # Modern OWASP 2021-2025
+    "check_insecure_deserialization",
+    "check_ssrf_advanced",
+    "check_broken_access_control",
+    "check_mass_assignment",
+    "check_api_security_misconfiguration",
+    "check_server_side_template_injection",
+    "check_prototype_pollution",
+    "check_dns_rebinding",
+    "check_cache_poisoning",
+    "check_cors_null_origin",
+    # Exposure
+    "check_cloud_metadata_exposure",
+    "check_git_exposure",
+    "check_env_file_exposure",
+    "check_docker_exposure",
+    "check_ci_cd_exposure",
+    "check_secret_in_response",
+    "check_graphql_introspection",
+    "check_source_map_exposure",
+    # Network & Infrastructure
+    "check_admin_panel_exposure",
+    "check_database_exposure",
+    "check_websocket_security",
+    "check_service_worker_security",
+    "check_csp_bypass_vectors",
+    "check_subdomain_takeover",
+    # Deep protocol checks (Phase 11)
+    "check_graphql_deep",
+    "check_websocket_deep",
+    "check_api_schema",
 ]
+
+from .graphql import check_graphql_deep
+from .websocket import check_websocket_deep
+from .api_schema import check_api_schema

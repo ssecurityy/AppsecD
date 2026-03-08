@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
 import Navbar from "@/components/Navbar";
@@ -15,6 +15,7 @@ import {
   Sparkles, Square, DollarSign, RotateCcw, Brain, FileDown
 } from "lucide-react";
 import Link from "next/link";
+import ProjectSubNav from "@/components/ProjectSubNav";
 
 const STUCK_THRESHOLD_SEC = 30;
 const POLL_INTERVAL_MS = 1500;
@@ -45,7 +46,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 export default function DastScanPage() {
   const { id } = useParams();
-  const { user, hydrate } = useAuthStore();
+  const { user, hydrate, orgSettings } = useAuthStore();
   const [project, setProject] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -133,6 +134,15 @@ export default function DastScanPage() {
   const [claudeAuthHeaderName, setClaudeAuthHeaderName] = useState("");
   const [claudeAuthHeaderValue, setClaudeAuthHeaderValue] = useState("");
   const [claudeProxyUrl, setClaudeProxyUrl] = useState("");
+
+  // Scheduling & Baselines state
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [schedule, setSchedule] = useState<any>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [cronExpression, setCronExpression] = useState("0 2 * * 1");
+  const [baselines, setBaselines] = useState<any[]>([]);
+  const [showBaselines, setShowBaselines] = useState(false);
+  const [baselinesLoading, setBaselinesLoading] = useState(false);
 
   type PathItem = { path: string; status: number };
   const buildPathTree = (items: PathItem[]): { name: string; fullPath: string; status?: number; children: any[]; isFile: boolean } => {
@@ -775,6 +785,26 @@ export default function DastScanPage() {
       )
     : statusFiltered;
 
+  const loadSchedule = useCallback(async () => {
+    if (!id) return;
+    setScheduleLoading(true);
+    try {
+      const data = await api.dastGetSchedule(id as string);
+      setSchedule(data);
+      if (data?.cron_expression) setCronExpression(data.cron_expression);
+    } catch { setSchedule(null); }
+    finally { setScheduleLoading(false); }
+  }, [id]);
+
+  const loadBaselines = useCallback(async () => {
+    if (!id) return;
+    setBaselinesLoading(true);
+    try {
+      const data = await api.dastBaselines(id as string);
+      setBaselines(data?.baselines || []);
+    } catch { setBaselines([]); }
+    finally { setBaselinesLoading(false); }
+  }, [id]);
 
   if (!user) return null;
 
@@ -782,22 +812,42 @@ export default function DastScanPage() {
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
       <div className="max-w-5xl mx-auto p-6 space-y-6">
-        {/* Header */}
+        {/* Project Sub-Navigation */}
+        <ProjectSubNav
+          projectId={id as string}
+          projectName={project?.application_name}
+          projectUrl={project?.application_url}
+          sastEnabled={orgSettings.sast_enabled}
+        />
+        {/* DAST Controls */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href={`/projects/${id}`} className="p-2 rounded-lg hover:bg-white/5">
-              <ArrowLeft className="w-5 h-5" style={{ color: "var(--text-secondary)" }} />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>
-                DAST Automated Scan
-              </h1>
-              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-                {project?.application_name} — {project?.application_url}
-              </p>
+          <div>
+            <h2 className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>
+              DAST Automated Scan
+            </h2>
+            <div className="flex items-center gap-3 mt-1 flex-wrap">
+              {project?.app_owner_name && <span className="text-xs" style={{ color: "var(--text-muted)" }}>Owner: {project.app_owner_name}</span>}
+              {project?.testing_type && <><span className="text-[#374151]">|</span><span className="text-xs" style={{ color: "var(--text-muted)" }}>Type: {project.testing_type.replace("_", " ")}</span></>}
+              {project?.environment && <><span className="text-[#374151]">|</span><span className="text-xs" style={{ color: "var(--text-muted)" }}>Env: {project.environment}</span></>}
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setShowSchedule(!showSchedule); if (!schedule) loadSchedule(); }}
+              className="p-2 rounded-lg border hover:bg-white/5 transition-colors"
+              style={{ borderColor: showSchedule ? "#8b5cf633" : "var(--border-subtle)", color: showSchedule ? "#8b5cf6" : "var(--text-secondary)" }}
+              title="Scan Schedule"
+            >
+              <Calendar size={16} />
+            </button>
+            <button
+              onClick={() => { setShowBaselines(!showBaselines); if (baselines.length === 0) loadBaselines(); }}
+              className="p-2 rounded-lg border hover:bg-white/5 transition-colors"
+              style={{ borderColor: showBaselines ? "#06b6d433" : "var(--border-subtle)", color: showBaselines ? "#06b6d4" : "var(--text-secondary)" }}
+              title="Baselines & Trends"
+            >
+              <Activity size={16} />
+            </button>
             <button
               onClick={async () => {
                 setAiSuggestLoading(true);
@@ -3149,6 +3199,231 @@ export default function DastScanPage() {
             <p className="text-sm mt-1" style={{ color: "var(--text-secondary)" }}>
               Select checks and click &quot;Run Scan&quot; to start automated security testing
             </p>
+          </div>
+        )}
+
+        {/* ====== SCHEDULING SECTION ====== */}
+        {showSchedule && (
+          <div className="mt-6 rounded-xl border p-6" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Calendar size={20} style={{ color: "#8b5cf6" }} />
+                <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Scan Schedule</h3>
+              </div>
+              <button onClick={() => setShowSchedule(false)} className="p-1 rounded hover:bg-white/10" style={{ color: "var(--text-secondary)" }}>
+                <span className="text-xs">Close</span>
+              </button>
+            </div>
+
+            {schedule ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Schedule</p>
+                    <p className="text-sm font-mono font-semibold" style={{ color: "var(--text-primary)" }}>{schedule.cron_expression}</p>
+                  </div>
+                  <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Status</p>
+                    <p className="text-sm font-semibold" style={{ color: schedule.is_active ? "#16a34a" : "#6b7280" }}>
+                      {schedule.is_active ? "Active" : "Paused"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Last Run</p>
+                    <p className="text-sm" style={{ color: "var(--text-primary)" }}>
+                      {schedule.last_run_at ? new Date(schedule.last_run_at).toLocaleString() : "Never"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Next Run</p>
+                    <p className="text-sm" style={{ color: "var(--text-primary)" }}>
+                      {schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString() : "—"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.dastDeleteSchedule(id as string);
+                        setSchedule(null);
+                        toast.success("Schedule removed");
+                      } catch { toast.error("Failed to remove schedule"); }
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium border hover:bg-red-500/10 transition-colors"
+                    style={{ color: "#dc2626", borderColor: "#dc262633" }}
+                  >
+                    Remove Schedule
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                  Set up automated recurring scans. Scans will run on the configured schedule automatically.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium mb-1.5 block" style={{ color: "var(--text-secondary)" }}>
+                      Cron Expression
+                    </label>
+                    <input
+                      type="text"
+                      value={cronExpression}
+                      onChange={(e) => setCronExpression(e.target.value)}
+                      placeholder="0 2 * * 1"
+                      className="w-full px-3 py-2 rounded-lg text-sm font-mono border"
+                      style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium mb-1.5 block" style={{ color: "var(--text-secondary)" }}>
+                      Quick Presets
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { label: "Daily 2AM", cron: "0 2 * * *" },
+                        { label: "Weekly Mon", cron: "0 2 * * 1" },
+                        { label: "Monthly 1st", cron: "0 2 1 * *" },
+                        { label: "Every 6h", cron: "0 */6 * * *" },
+                      ].map((p) => (
+                        <button
+                          key={p.cron}
+                          onClick={() => setCronExpression(p.cron)}
+                          className="px-2.5 py-1 rounded text-xs border hover:bg-white/5 transition-colors"
+                          style={{
+                            color: cronExpression === p.cron ? "#8b5cf6" : "var(--text-secondary)",
+                            borderColor: cronExpression === p.cron ? "#8b5cf633" : "var(--border-subtle)",
+                            backgroundColor: cronExpression === p.cron ? "#8b5cf611" : "transparent",
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    setScheduleLoading(true);
+                    try {
+                      const data = await api.dastCreateSchedule({
+                        project_id: id as string,
+                        cron_expression: cronExpression,
+                        enabled: true,
+                      });
+                      setSchedule(data);
+                      toast.success("Scan schedule created");
+                    } catch (e: any) {
+                      toast.error(e?.message || "Failed to create schedule");
+                    } finally { setScheduleLoading(false); }
+                  }}
+                  disabled={scheduleLoading || !cronExpression}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 transition-all disabled:opacity-50"
+                >
+                  {scheduleLoading ? <Loader2 size={14} className="animate-spin" /> : <Calendar size={14} />}
+                  Create Schedule
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ====== BASELINES SECTION ====== */}
+        {showBaselines && (
+          <div className="mt-6 rounded-xl border p-6" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Activity size={20} style={{ color: "#06b6d4" }} />
+                <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Scan Baselines & Trends</h3>
+              </div>
+              <button onClick={() => setShowBaselines(false)} className="p-1 rounded hover:bg-white/10" style={{ color: "var(--text-secondary)" }}>
+                <span className="text-xs">Close</span>
+              </button>
+            </div>
+
+            {baselinesLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 size={24} className="animate-spin text-cyan-400" />
+              </div>
+            ) : baselines.length === 0 ? (
+              <div className="text-center py-10">
+                <Activity size={32} className="mx-auto mb-3" style={{ color: "var(--text-secondary)" }} />
+                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                  No baseline data available. Baselines are created automatically from scheduled scans.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                  {baselines.length > 0 && (() => {
+                    const latest = baselines[0];
+                    return (
+                      <>
+                        <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "#16a34a33" }}>
+                          <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Fixed Since Last</p>
+                          <p className="text-2xl font-bold" style={{ color: "#16a34a" }}>{latest.fixed_findings || 0}</p>
+                        </div>
+                        <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "#dc262633" }}>
+                          <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>New Issues</p>
+                          <p className="text-2xl font-bold" style={{ color: "#dc2626" }}>{latest.new_findings || 0}</p>
+                        </div>
+                        <div className="rounded-lg border p-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+                          <p className="text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Unchanged</p>
+                          <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>{latest.unchanged_findings || 0}</p>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                <div className="rounded-xl border overflow-hidden" style={{ borderColor: "var(--border-subtle)" }}>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr style={{ backgroundColor: "var(--bg-primary)", borderBottom: "1px solid var(--border-subtle)" }}>
+                        <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "var(--text-secondary)" }}>Date</th>
+                        <th className="text-center px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "var(--text-secondary)" }}>Total</th>
+                        <th className="text-center px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "#dc2626" }}>Critical</th>
+                        <th className="text-center px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "#ea580c" }}>High</th>
+                        <th className="text-center px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "#ca8a04" }}>Medium</th>
+                        <th className="text-center px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "#16a34a" }}>New</th>
+                        <th className="text-center px-4 py-2.5 text-xs font-semibold uppercase" style={{ color: "#3b82f6" }}>Fixed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {baselines.map((b: any, idx: number) => {
+                        const sev = b.findings_by_severity || {};
+                        return (
+                          <tr key={b.id || idx} className="hover:bg-white/[0.02]" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                            <td className="px-4 py-2.5 text-xs" style={{ color: "var(--text-primary)" }}>
+                              {b.created_at ? new Date(b.created_at).toLocaleString() : "—"}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
+                              {b.total_findings || 0}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-xs font-semibold" style={{ color: "#dc2626" }}>
+                              {sev.critical || 0}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-xs font-semibold" style={{ color: "#ea580c" }}>
+                              {sev.high || 0}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-xs font-semibold" style={{ color: "#ca8a04" }}>
+                              {sev.medium || 0}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-xs font-semibold" style={{ color: "#16a34a" }}>
+                              {b.new_findings || 0}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-xs font-semibold" style={{ color: "#3b82f6" }}>
+                              {b.fixed_findings || 0}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

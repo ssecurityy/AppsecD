@@ -377,6 +377,66 @@ def build_all_tools(available_checks: list[str]) -> list[dict]:
                 "required": ["chatbot_url", "test_type"],
             },
         },
+        # ── WORDLIST & PAYLOAD DATABASE ──────────────────────────────
+        {
+            "name": "get_wordlists",
+            "description": (
+                "Get available wordlists and payloads from the internal database. "
+                "Returns wordlist names and their line counts. Use 'load_wordlist' to get the actual payloads. "
+                "Categories: directory (for dir brute force), sqli, xss, lfi, auth_bypass, command_exec, traversal, passwords, usernames, fuzzing. "
+                "Auto-select the best wordlist based on the detected technology and what you're testing."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["directory", "sqli", "xss", "lfi", "auth_bypass", "command_exec", "traversal", "passwords", "usernames", "fuzzing", "all"],
+                        "description": "Category of wordlists to retrieve",
+                    },
+                },
+                "required": ["category"],
+            },
+        },
+        {
+            "name": "load_wordlist",
+            "description": (
+                "Load the contents of a specific wordlist file for use in testing. "
+                "Returns the payloads/words as a list. Use this after get_wordlists to load specific lists for brute forcing, fuzzing, or payload injection."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "wordlist_name": {"type": "string", "description": "Name of the wordlist file (e.g., 'dirbuster-top1000.txt', 'sqli-error-based.txt')"},
+                    "max_lines": {"type": "integer", "default": 500, "description": "Maximum number of lines to return (default 500)"},
+                },
+                "required": ["wordlist_name"],
+            },
+        },
+        # ── RAG & LEARNING ────────────────────────────────────────────
+        {
+            "name": "retrieve_past_learnings",
+            "description": (
+                "Retrieve past test results and learnings for a domain or technology stack. "
+                "Returns known vulnerabilities, WAF bypass techniques, and previous scan intelligence. "
+                "Use this to inform your testing strategy — known-working payloads should be tried first, "
+                "and areas confirmed as not vulnerable can be deprioritized."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Target domain to query learnings for"},
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by vulnerability categories (sqli, xss, auth, ssrf, waf_bypass, etc.)",
+                    },
+                    "technology": {"type": "string", "description": "Filter by technology (e.g., 'nginx', 'laravel', 'cloudflare')"},
+                    "include_similar": {"type": "boolean", "default": False, "description": "Also include learnings from similar tech stacks on other domains"},
+                },
+                "required": ["domain"],
+            },
+        },
         # ── ANALYSIS & REPORTING ──────────────────────────────────────
         {
             "name": "create_finding",

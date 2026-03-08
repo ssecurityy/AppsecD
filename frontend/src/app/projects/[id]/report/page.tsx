@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+import ProjectSubNav from "@/components/ProjectSubNav";
 import { api, getApiBase } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import { motion, AnimatePresence } from "framer-motion";
@@ -32,7 +33,7 @@ export default function LiveReportPage() {
   const params = useParams();
   const id = params?.id as string;
   const router = useRouter();
-  const { user, hydrate } = useAuthStore();
+  const { user, hydrate, orgSettings } = useAuthStore();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -152,22 +153,22 @@ export default function LiveReportPage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
+      <div className="max-w-6xl mx-auto px-6 pt-4">
+        <ProjectSubNav
+          projectId={id as string}
+          projectName={p.application_name}
+          projectUrl={p.application_url}
+          sastEnabled={orgSettings.sast_enabled}
+        />
+      </div>
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
           className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-4">
-            <Link href={`/projects/${id}`}
-              className="p-2 rounded-lg transition-all"
-              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}>
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-                <FileText className="w-5 h-5 text-indigo-400" /> Live Report Preview
-              </h1>
-              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{p.application_name}</p>
-            </div>
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+              <FileText className="w-5 h-5 text-indigo-400" /> Live Report Preview
+            </h1>
           </div>
           <button onClick={refresh}
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all"

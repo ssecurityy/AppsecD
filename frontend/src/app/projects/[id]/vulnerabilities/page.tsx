@@ -6,9 +6,9 @@ import Navbar from "@/components/Navbar";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import toast from "react-hot-toast";
-import Link from "next/link";
+import ProjectSubNav from "@/components/ProjectSubNav";
 import {
-  ArrowLeft, Shield, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle,
+  Shield, ShieldCheck, ShieldAlert, ShieldX, Clock, AlertTriangle,
   ChevronDown, ChevronUp, FileDown, Filter, RefreshCw, CheckCircle2, XCircle,
   Calendar, User, MessageSquare, History, ExternalLink, Square, CheckSquare, Loader2,
   FileText, FileX, Search, Send, Timer, Activity, TrendingUp, BarChart3,
@@ -590,7 +590,7 @@ function FindingCard({ finding, onUpdate, selectable, selected, onToggleSelect }
 
 export default function VulnerabilityManagement() {
   const { id } = useParams() as { id: string };
-  const { hydrate, user } = useAuthStore();
+  const { hydrate, user, orgSettings } = useAuthStore();
   const router = useRouter();
   const [project, setProject] = useState<any>(null);
   const [findings, setFindings] = useState<any[]>([]);
@@ -693,16 +693,16 @@ export default function VulnerabilityManagement() {
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-primary)" }}>
       <Navbar />
+      <div className="max-w-6xl mx-auto px-4 md:px-6 pt-4">
+        <ProjectSubNav
+          projectId={id as string}
+          projectName={project?.application_name}
+          projectUrl={project?.application_url}
+          sastEnabled={orgSettings.sast_enabled}
+        />
+      </div>
 
       <div className="max-w-6xl mx-auto p-4 md:p-6">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-sm mb-6" style={{ color: "var(--text-muted)" }}>
-          <Link href="/projects" className="hover:text-white transition-colors">Projects</Link>
-          <span>/</span>
-          <Link href={`/projects/${id}`} className="hover:text-white transition-colors">{project?.application_name || "Project"}</Link>
-          <span>/</span>
-          <span style={{ color: "var(--text-primary)" }}>Vulnerability Management</span>
-        </div>
 
         {/* Page header */}
         <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
@@ -716,12 +716,6 @@ export default function VulnerabilityManagement() {
             <p className="text-sm mt-1 truncate" style={{ color: "var(--text-muted)" }}>{project?.application_name} &mdash; Track, recheck, and resolve security findings</p>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            <Link
-              href={`/projects/${id}`}
-              className="btn-secondary text-xs flex items-center gap-1.5"
-            >
-              <ArrowLeft className="w-3 h-3" /> Back to Testing
-            </Link>
             {isAdmin && (
               <button
                 onClick={() => setShowSlaConfig(!showSlaConfig)}

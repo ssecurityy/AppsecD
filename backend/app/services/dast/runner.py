@@ -68,6 +68,33 @@ from .checks import (
     check_command_injection,
     check_cors_deep,
     check_http_smuggling,
+    # Modern OWASP 2021-2025 checks
+    check_insecure_deserialization,
+    check_ssrf_advanced,
+    check_broken_access_control,
+    check_mass_assignment,
+    check_api_security_misconfiguration,
+    check_server_side_template_injection,
+    check_prototype_pollution,
+    check_dns_rebinding,
+    check_cache_poisoning,
+    check_cors_null_origin,
+    # Exposure checks
+    check_cloud_metadata_exposure,
+    check_git_exposure,
+    check_env_file_exposure,
+    check_docker_exposure,
+    check_ci_cd_exposure,
+    check_secret_in_response,
+    check_graphql_introspection,
+    check_source_map_exposure,
+    # Network & infrastructure checks
+    check_admin_panel_exposure,
+    check_database_exposure,
+    check_websocket_security,
+    check_service_worker_security,
+    check_csp_bypass_vectors,
+    check_subdomain_takeover,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,6 +163,33 @@ ALL_CHECKS = [
     ("command_injection", check_command_injection),
     ("cors_deep", check_cors_deep),
     ("http_smuggling", check_http_smuggling),
+    # Modern OWASP 2021-2025 checks
+    ("insecure_deserialization", check_insecure_deserialization),
+    ("ssrf_advanced", check_ssrf_advanced),
+    ("broken_access_control", check_broken_access_control),
+    ("mass_assignment", check_mass_assignment),
+    ("api_security_misconfiguration", check_api_security_misconfiguration),
+    ("server_side_template_injection", check_server_side_template_injection),
+    ("prototype_pollution", check_prototype_pollution),
+    ("dns_rebinding", check_dns_rebinding),
+    ("cache_poisoning", check_cache_poisoning),
+    ("cors_null_origin", check_cors_null_origin),
+    # Exposure checks
+    ("cloud_metadata_exposure", check_cloud_metadata_exposure),
+    ("git_exposure", check_git_exposure),
+    ("env_file_exposure", check_env_file_exposure),
+    ("docker_exposure", check_docker_exposure),
+    ("ci_cd_exposure", check_ci_cd_exposure),
+    ("secret_in_response", check_secret_in_response),
+    ("graphql_introspection", check_graphql_introspection),
+    ("source_map_exposure", check_source_map_exposure),
+    # Network & infrastructure checks
+    ("admin_panel_exposure", check_admin_panel_exposure),
+    ("database_exposure", check_database_exposure),
+    ("websocket_security", check_websocket_security),
+    ("service_worker_security", check_service_worker_security),
+    ("csp_bypass_vectors", check_csp_bypass_vectors),
+    ("subdomain_takeover", check_subdomain_takeover),
 ]
 
 _redis_sync = None
@@ -184,6 +238,7 @@ def run_dast_scan(
     results = []
     selected = ALL_CHECKS if not checks else [(n, f) for n, f in ALL_CHECKS if n in checks]
     total = len(selected)
+    was_stopped = False
 
     def _emit(index: int, check_name: str, result_dict: dict | None) -> None:
         if on_progress:
@@ -212,6 +267,9 @@ def run_dast_scan(
             if progress_scan_id:
                 cur = _dast_progress_get(progress_scan_id)
                 if cur:
+                    if cur.get("status") in {"stopped", "cancelled"}:
+                        was_stopped = True
+                        break
                     cur["current_check"] = name
                     cur["last_updated"] = time.time()
                     _dast_progress_set(progress_scan_id, cur)
@@ -247,9 +305,9 @@ def run_dast_scan(
     }
     if progress_scan_id:
         _dast_progress_set(progress_scan_id, {
-            "status": "completed",
+            "status": "stopped" if was_stopped else "completed",
             "current_check": None,
-            "completed_count": total,
+            "completed_count": len(results),
             "total": total,
             "results": results,
             "last_updated": time.time(),
@@ -258,6 +316,7 @@ def run_dast_scan(
             "failed": failed,
             "errors": errors,
             "duration_seconds": duration,
+            "message": "Scan stopped by user" if was_stopped else None,
         })
     return final
 

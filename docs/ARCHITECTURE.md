@@ -1,8 +1,10 @@
 # VAPT Navigator — System Architecture
 
-**Last updated:** 2026-02-27
+**Last updated:** 2026-03-07
 
 This document describes how the Navigator platform works end-to-end: frontend, backend, database, Redis, and data flow.
+
+**Production deployment:** PostgreSQL and Redis run on a dedicated DB server (remote). User uploads and org logos are stored in Cloudflare R2 (S3-compatible). For load-balancing readiness and microservices audit, see [LOAD_BALANCING_AND_MICROSERVICES_AUDIT.md](LOAD_BALANCING_AND_MICROSERVICES_AUDIT.md).
 
 ---
 
@@ -25,10 +27,9 @@ This document describes how the Navigator platform works end-to-end: frontend, b
                     ▼                              ▼
          ┌──────────────────┐           ┌──────────────────┐
          │   PostgreSQL     │           │      Redis        │
-         │   (Navigator DB) │           │ Celery broker +   │
-         │   Port: 5433     │           │ result backend    │
-         └──────────────────┘           │ Port: 6379/1     │
-                                        └──────────────────┘
+         │   (remote / DB   │           │ (remote / DB      │
+         │   server :5432)  │           │  server :6379)    │
+         └──────────────────┘           └──────────────────┘
 ```
 
 ---
@@ -78,8 +79,8 @@ This document describes how the Navigator platform works end-to-end: frontend, b
 
 ## 3. Database (PostgreSQL)
 
-**Connection:** `postgresql+asyncpg://...` (async SQLAlchemy)  
-**Default DB:** `navigator` on port `5433`
+**Connection:** `postgresql+asyncpg://...` (async SQLAlchemy). In production, PostgreSQL runs on a dedicated DB server (port 5432).  
+**Default DB:** `navigator`
 
 ### 3.1 Core Tables
 
@@ -117,13 +118,13 @@ Finding ── ProjectTestResult (optional, for evidence linkage)
 - **Projects:** Application metadata, scope, dates, stack profile, applicable categories, counts (total/tested/passed/failed/na)
 - **Test results:** Status (not_started, passed, failed, na, blocked), evidence `[{filename, url}]`, payload, notes
 - **Findings:** Title, severity, OWASP, CWE, CVSS, status, remediation, evidence URLs, compliance mapping
-- **Evidence:** Files stored in `uploads_path/{project_id}/`, URLs in `ProjectTestResult.evidence` and `Finding.evidence_urls`
+- **Evidence:** In production, files are stored in Cloudflare R2 (keys `uploads/{project_id}/{filename}`). URLs in `ProjectTestResult.evidence` and `Finding.evidence_urls`. See [LOAD_BALANCING_AND_MICROSERVICES_AUDIT.md](LOAD_BALANCING_AND_MICROSERVICES_AUDIT.md).
 
 ---
 
 ## 4. Redis
 
-**URL:** `redis://127.0.0.1:6379/1` (configurable via `REDIS_URL`)
+**URL:** `redis://31.97.236.44:6379/1` in production (configurable via `REDIS_URL`). Runs on the same DB server as PostgreSQL.
 
 ### 4.1 Usage
 

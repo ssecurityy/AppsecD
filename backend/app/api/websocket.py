@@ -3,6 +3,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import asyncio
 import json
 import logging
+from sqlalchemy import select
+
+from app.core.database import AsyncSessionLocal
+from app.core.security import decode_token, is_token_revoked
+from app.models.user import User
+from app.services.project_permissions import user_can_read_project
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 logger = logging.getLogger(__name__)
@@ -86,12 +92,37 @@ def start_redis_ws_listener():
 
 @router.websocket("/project/{project_id}")
 async def project_websocket(websocket: WebSocket, project_id: str):
-    """Connect to project room for real-time updates. Auth via query token."""
+    """Connect to project room for real-time updates with full JWT and project auth."""
     token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=4001)
         return
-    # Simplified: accept and add to room. Full auth would decode JWT.
+
+    payload = decode_token(token)
+    if not payload:
+        await websocket.close(code=4001)
+        return
+
+    jti = payload.get("jti")
+    if jti and await is_token_revoked(jti):
+        await websocket.close(code=4001)
+        return
+
+    user_id = payload.get("sub")
+    if not user_id:
+        await websocket.close(code=4001)
+        return
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user or not user.is_active:
+            await websocket.close(code=4001)
+            return
+        if not await user_can_read_project(db, user, project_id):
+            await websocket.close(code=4003)
+            return
+
     await manager.connect(websocket, project_id)
     try:
         while True:
