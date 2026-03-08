@@ -327,7 +327,7 @@ export default function SASTPage() {
   /* ---- results sub-tabs ---- */
   const [resultsSubTab, setResultsSubTab] = useState<ResultsSubTab>("findings");
   const [dependencies, setDependencies] = useState<any[]>([]);
-  const [depPagination, setDepPagination] = useState<{ total: number; page: number; per_page: number; total_pages: number }>({ total: 0, page: 1, per_page: 20, total_pages: 1 });
+  const [depPagination, setDepPagination] = useState<{ total: number; page: number; per_page: number; total_pages: number; total_vulnerable?: number; total_outdated?: number; total_secure?: number }>({ total: 0, page: 1, per_page: 20, total_pages: 1 });
   const [depFilters, setDepFilters] = useState<{ name: string; ecosystem: string; vulnerable: string }>({ name: "", ecosystem: "", vulnerable: "" });
   const [licenses, setLicenses] = useState<any>(null);
   const [cveSummary, setCveSummary] = useState<any>(null);
@@ -446,12 +446,12 @@ export default function SASTPage() {
   }, [filterSeverity, filterStatus, filterConfidence, filterFilePath]);
 
   /* load security sub-tab data on demand */
-  const loadSecurityData = useCallback(async (tab: ResultsSubTab, sid: string) => {
+  const loadSecurityData = useCallback(async (tab: ResultsSubTab, sid: string, opts?: { page?: number }) => {
     if (!sid) return;
     setSecDataLoading(true);
     try {
       if (tab === "dependencies") {
-        const page = depPagination.page;
+        const page = opts?.page ?? depPagination.page;
         const perPage = depPagination.per_page;
         const name = depFilters.name.trim() || undefined;
         const ecosystem = depFilters.ecosystem.trim() || undefined;
@@ -459,10 +459,14 @@ export default function SASTPage() {
         const res = await api.sastDependencies(sid, { page, per_page: perPage, name, ecosystem, vulnerable });
         setDependencies(res?.dependencies || []);
         setDepPagination(prev => ({
+          ...prev,
           total: res?.total ?? 0,
           page: res?.page ?? 1,
           per_page: res?.per_page ?? 20,
           total_pages: res?.total_pages ?? 1,
+          total_vulnerable: res?.total_vulnerable,
+          total_outdated: res?.total_outdated,
+          total_secure: res?.total_secure,
         }));
       } else if (tab === "sbom") {
         const res = await api.sastLicenses(sid);
@@ -480,12 +484,15 @@ export default function SASTPage() {
 
   useEffect(() => {
     if (selectedScanId && resultsSubTab !== "findings" && resultsSubTab !== "secrets" && resultsSubTab !== "breakdown") {
-      if (resultsSubTab === "dependencies") {
-        setDepPagination((p) => ({ ...p, page: 1 }));
-      }
       loadSecurityData(resultsSubTab, selectedScanId);
     }
   }, [resultsSubTab, selectedScanId, loadSecurityData]);
+
+  useEffect(() => {
+    if (resultsSubTab === "dependencies") {
+      setDepPagination((p) => ({ ...p, page: 1 }));
+    }
+  }, [resultsSubTab, selectedScanId]);
 
   /* ---- upload scan ---- */
   const handleFileDrop = (e: React.DragEvent) => {
@@ -855,12 +862,7 @@ export default function SASTPage() {
     });
   };
 
-  const fileTree = useMemo(() => {
-    if (!findingsForDisplay.length) return null;
-    return buildFileTree(findingsForDisplay);
-  }, [findingsForDisplay]);
-
-  /* ---- breakdown filter: filter findings by scanner/source (must be before displayedFindings) ---- */
+  /* ---- breakdown filter: filter findings by scanner/source (must be first: others depend on it) ---- */
   const findingsForDisplay = useMemo(() => {
     if (!breakdownFilterSource) return findings;
     const secretSources = ["secret_scan", "trufflehog", "gitleaks"];
@@ -869,7 +871,7 @@ export default function SASTPage() {
     return findings.filter((f: any) => (f.rule_source || "") === breakdownFilterSource);
   }, [findings, breakdownFilterSource]);
 
-  /* ---- filtered findings for tree selection (uses findingsForDisplay so breakdown filter applies) ---- */
+  /* ---- filtered findings for tree selection (uses findingsForDisplay) ---- */
   const displayedFindings = useMemo(() => {
     if (!selectedTreePath || selectedTreePath === "/") return findingsForDisplay;
     return findingsForDisplay.filter((f: any) => {
@@ -877,6 +879,11 @@ export default function SASTPage() {
       return fp === selectedTreePath || fp.startsWith(selectedTreePath + "/");
     });
   }, [findingsForDisplay, selectedTreePath]);
+
+  const fileTree = useMemo(() => {
+    if (!findingsForDisplay.length) return null;
+    return buildFileTree(findingsForDisplay);
+  }, [findingsForDisplay]);
 
   /* ---- summary counts ---- */
   const severityCounts = useMemo(() => {
@@ -2440,19 +2447,19 @@ export default function SASTPage() {
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#dc262633" }}>
                             <p className="text-xs font-medium mb-1" style={{ color: "#dc2626" }}>Vulnerable</p>
                             <p className="text-2xl font-bold" style={{ color: "#dc2626" }}>
-                              {depFilters.vulnerable === "yes" ? depPagination.total : dependencies.filter((d: any) => d.is_vulnerable).length}
+                              {typeof depPagination.total_vulnerable === "number" ? depPagination.total_vulnerable : (depFilters.vulnerable === "yes" ? depPagination.total : dependencies.filter((d: any) => d.is_vulnerable).length)}
                             </p>
                           </div>
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#ca8a0433" }}>
                             <p className="text-xs font-medium mb-1" style={{ color: "#ca8a04" }}>Outdated</p>
                             <p className="text-2xl font-bold" style={{ color: "#ca8a04" }}>
-                              {dependencies.filter((d: any) => d.latest_version && d.latest_version !== d.version).length}
+                              {typeof depPagination.total_outdated === "number" ? depPagination.total_outdated : dependencies.filter((d: any) => d.latest_version && d.latest_version !== d.version).length}
                             </p>
                           </div>
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#16a34a33" }}>
                             <p className="text-xs font-medium mb-1" style={{ color: "#16a34a" }}>Secure</p>
                             <p className="text-2xl font-bold" style={{ color: "#16a34a" }}>
-                              {depFilters.vulnerable === "no" ? depPagination.total : dependencies.filter((d: any) => !d.is_vulnerable).length}
+                              {typeof depPagination.total_secure === "number" ? depPagination.total_secure : (depFilters.vulnerable === "no" ? depPagination.total : dependencies.filter((d: any) => !d.is_vulnerable).length)}
                             </p>
                           </div>
                         </div>
@@ -2495,7 +2502,10 @@ export default function SASTPage() {
                           </select>
                           <button
                             type="button"
-                            onClick={() => selectedScanId && loadSecurityData("dependencies", selectedScanId)}
+                            onClick={() => {
+                              setDepPagination((p) => ({ ...p, page: 1 }));
+                              selectedScanId && loadSecurityData("dependencies", selectedScanId, { page: 1 });
+                            }}
                             className="px-3 py-1.5 rounded-lg text-sm font-medium"
                             style={{ backgroundColor: "var(--orange)", color: "#fff" }}
                           >

@@ -2428,6 +2428,9 @@ async def get_scan_dependencies(
         dep_list = [x for x in dep_list if x.get("is_vulnerable") is vulnerable]
 
     total = len(dep_list)
+    total_vulnerable = sum(1 for x in dep_list if x.get("is_vulnerable"))
+    total_outdated = sum(1 for x in dep_list if x.get("latest_version") and x.get("latest_version") != x.get("version"))
+    total_secure = sum(1 for x in dep_list if not x.get("is_vulnerable"))
     total_pages = (total + per_page - 1) // per_page if total else 1
     page = min(page, max(1, total_pages))
     start = (page - 1) * per_page
@@ -2437,6 +2440,9 @@ async def get_scan_dependencies(
     return {
         "scan_id": scan_id,
         "total": total,
+        "total_vulnerable": total_vulnerable,
+        "total_outdated": total_outdated,
+        "total_secure": total_secure,
         "page": page,
         "per_page": per_page,
         "total_pages": total_pages,
@@ -2488,9 +2494,13 @@ async def get_scan_licenses(
         pass
 
     for d in deps:
-        lid = d.license_id or "Unknown"
+        raw_id = (d.license_id or "").strip()
+        if not raw_id or raw_id.upper() == "NOASSERTION":
+            lid = "Unknown"
+        else:
+            lid = raw_id
         license_breakdown[lid] = license_breakdown.get(lid, 0) + 1
-        if lid == "Unknown" or not d.license_id:
+        if lid == "Unknown":
             unknown_count += 1
         elif lid in blocked_list:
             blocked_count += 1
@@ -2641,28 +2651,44 @@ async def get_cve_summary(
     """CVE intelligence summary with exploitability scores."""
     from app.models.sast_scan import SastDependency
 
+    session = (await db.execute(
+        select(SastScanSession).where(SastScanSession.id == uuid.UUID(scan_id))
+    )).scalar_one_or_none()
+    if not session:
+        raise HTTPException(404, "Scan not found")
+    if not await user_can_read_project(db, current_user, str(session.project_id)):
+        raise HTTPException(403, "Access denied")
+
     deps = (await db.execute(
         select(SastDependency).where(SastDependency.scan_session_id == uuid.UUID(scan_id))
     )).scalars().all()
 
-    # Flatten all CVEs from dependencies
+    from app.services.sast.sca_scanner import _extract_cvss_score
     all_cves = []
     for d in deps:
         for v in (d.vulnerabilities or []):
+            v_dict = v if isinstance(v, dict) else {}
             cve_id = None
-            for alias in v.get("aliases", []):
-                if alias.startswith("CVE-"):
+            for alias in v_dict.get("aliases", []):
+                if isinstance(alias, str) and alias.startswith("CVE-"):
                     cve_id = alias
                     break
             if not cve_id:
-                cve_id = v.get("id", "UNKNOWN")
+                cve_id = v_dict.get("id", "UNKNOWN")
+            cvss = _extract_cvss_score(v_dict)
+            if cvss is None:
+                cvss = d.cvss_score or 0
+            else:
+                cvss = float(cvss)
+            epss = d.epss_score or 0
+            in_kev = bool(d.in_kev)
             all_cves.append({
                 "cve_id": cve_id,
                 "package": f"{d.name}@{d.version}",
-                "cvss": d.cvss_score or 0,
-                "epss": d.epss_score or 0,
-                "in_kev": bool(d.in_kev),
-                "priority": "critical" if d.in_kev else ("high" if (d.epss_score or 0) > 0.5 or (d.cvss_score or 0) >= 7 else "medium"),
+                "cvss": cvss,
+                "epss": epss,
+                "in_kev": in_kev,
+                "priority": "critical" if in_kev else ("high" if epss > 0.5 or cvss >= 7 else "medium"),
             })
 
     kev_count = sum(1 for c in all_cves if c["in_kev"])
