@@ -9,6 +9,20 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 10
 MAX_CODE_CONTEXT = 1500  # chars per finding
 
+def _normalize_analyses_list(parsed) -> list:
+    """Convert API response to list of analysis dicts. Handles array, or dict with analyses/findings/results key, or single object."""
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, dict):
+        for key in ("analyses", "findings", "results", "items", "data"):
+            if isinstance(parsed.get(key), list):
+                return parsed[key]
+        # Single object with "index" etc. — wrap in list
+        if parsed.get("index") is not None or "explanation" in parsed or "is_false_positive" in parsed:
+            return [parsed]
+    return []
+
+
 # Local copy of model pricing — avoids fragile cross-module import from DAST
 MODEL_PRICING = {
     "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0},
@@ -34,7 +48,11 @@ async def analyze_findings_with_ai(
 
     Returns findings with ai_analysis field populated.
     """
-    if not api_key or not findings:
+    if not api_key:
+        logger.info("SAST AI analysis skipped: no API key configured (set ANTHROPIC_API_KEY or org claude_dast_api_key)")
+        return findings
+    if not findings:
+        logger.info("SAST AI analysis skipped: no findings to analyze")
         return findings
 
     try:
@@ -44,6 +62,7 @@ async def analyze_findings_with_ai(
         logger.error("Failed to create Anthropic client: %s", e)
         return findings
 
+    logger.info("SAST AI analysis starting: %d findings, model=%s", len(findings), model)
     analyzed = []
     total_cost = 0.0
 
@@ -61,7 +80,8 @@ async def analyze_findings_with_ai(
                 f["ai_analysis"] = {"error": str(e)[:200]}
             analyzed.extend(batch)
 
-    logger.info("AI analysis complete: %d findings, cost: $%.4f", len(analyzed), total_cost)
+    with_ai = sum(1 for f in analyzed if isinstance(f.get("ai_analysis"), dict) and "error" not in (f.get("ai_analysis") or {}))
+    logger.info("AI analysis complete: %d findings, %d with AI output, cost: $%.4f", len(analyzed), with_ai, total_cost)
     return analyzed
 
 
@@ -116,38 +136,60 @@ Focus on actionable, specific advice — no generic boilerplate."""
 
         # Parse response
         text = response.content[0].text if response.content else ""
+        logger.debug("AI batch response length: %d chars", len(text))
 
         # Extract JSON from response — try raw text first, then code blocks
-        json_text = text
+        json_text = text.strip()
         analyses = None
 
         # Try parsing raw text directly first
         try:
-            analyses = json.loads(json_text)
+            parsed = json.loads(json_text)
+            analyses = _normalize_analyses_list(parsed)
         except json.JSONDecodeError:
             pass
 
         # Fallback: extract from markdown code blocks
-        if analyses is None:
+        if analyses is None and text:
             if "```json" in text:
-                json_text = text.split("```json")[1].split("```")[0]
+                json_text = text.split("```json")[1].split("```")[0].strip()
             elif "```" in text:
-                json_text = text.split("```")[1].split("```")[0]
-            analyses = json.loads(json_text)
+                json_text = text.split("```")[1].split("```")[0].strip()
+            try:
+                parsed = json.loads(json_text)
+                analyses = _normalize_analyses_list(parsed)
+            except json.JSONDecodeError:
+                pass
+
+        if not analyses:
+            logger.warning("AI response could not be parsed as JSON array (response length=%d)", len(text))
+            for f in findings:
+                f["ai_analysis"] = {"error": "Could not parse AI response as JSON"}
+            return findings, 0.0
 
         # Calculate cost
-        usage = response.usage
+        usage = getattr(response, "usage", None)
         pricing = MODEL_PRICING.get(model, MODEL_PRICING.get("claude-haiku-4-5-20251001", {}))
-        cost = (
-            usage.input_tokens * pricing.get("input", 1.0) / 1_000_000
-            + usage.output_tokens * pricing.get("output", 5.0) / 1_000_000
-        )
+        cost = 0.0
+        if usage:
+            cost = (
+                getattr(usage, "input_tokens", 0) * pricing.get("input", 1.0) / 1_000_000
+                + getattr(usage, "output_tokens", 0) * pricing.get("output", 5.0) / 1_000_000
+            )
 
-        # Map analyses back to findings
-        analysis_map = {a["index"]: a for a in analyses if isinstance(a, dict)}
+        # Map analyses back to findings (support 1-based and 0-based index)
+        analysis_map = {}
+        for a in analyses:
+            if not isinstance(a, dict):
+                continue
+            idx_val = a.get("index")
+            if idx_val is not None:
+                analysis_map[int(idx_val)] = a
+            # Also allow 0-based: if we have exactly len(findings) items, map by position
+        logger.debug("AI batch: parsed %d analysis entries, mapping to %d findings", len(analysis_map), len(findings))
 
         for idx, f in enumerate(findings):
-            ai = analysis_map.get(idx + 1, {})
+            ai = analysis_map.get(idx + 1) or analysis_map.get(idx) or {}
             f["ai_analysis"] = {
                 "is_false_positive": ai.get("is_false_positive", False),
                 "confidence": ai.get("confidence", "low"),

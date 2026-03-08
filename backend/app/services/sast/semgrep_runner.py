@@ -44,14 +44,14 @@ RULE_PACKS = {
     "kotlin": "p/kotlin",
     "swift": "p/swift",
     "scala": "p/scala",
-    "bash": "p/bash",
+    "bash": "p/bash",   # in UNSUPPORTED — do not use
     "solidity": "p/solidity",
     "apex": "p/apex",
     "elixir": "p/elixir",
     "clojure": "p/clojure",
     "ocaml": "p/ocaml",
-    "html": "p/html",
-    "json": "p/json",
+    "html": "p/html",   # in UNSUPPORTED — do not use
+    "json": "p/json",   # in UNSUPPORTED — do not use
     # --- Frameworks ---
     "react": "p/react",
     "nextjs": "p/nextjs",
@@ -83,9 +83,13 @@ RULE_PACKS = {
     "jwt": "p/jwt",
 }
 
+# Packs that return HTTP 404 or invalid config from semgrep.dev registry — do not request these.
 UNSUPPORTED_RULE_PACKS = {
     "p/express",   # Often 404 or deprecated in registry
-    "p/spring",   # Often 404 or deprecated in registry
+    "p/spring",    # Often 404 or deprecated in registry
+    "p/json",     # Registry returns 404 — no such ruleset
+    "p/bash",     # Registry returns 404 — no such ruleset
+    "p/html",     # Registry returns 404 — no such ruleset
 }
 
 # Language → list of registry rulesets (language + ported tools + frameworks)
@@ -107,13 +111,13 @@ LANGUAGE_RULE_MAP = {
     "terraform": ["p/terraform"],
     "dockerfile": ["p/dockerfile", "p/docker"],
     "yaml": ["p/kubernetes", "p/docker-compose"],
-    "bash": ["p/bash"],
+    "bash": [],   # p/bash 404 — use baseline only
     "solidity": ["p/solidity"],
     "apex": ["p/apex"],
     "elixir": ["p/elixir"],
     "clojure": ["p/clojure"],
-    "html": ["p/html"],
-    "json": ["p/json"],
+    "html": [],   # p/html 404 — use baseline only
+    "json": [],   # p/json 404 — use baseline only
 }
 
 # Semgrep severity mapping
@@ -190,13 +194,13 @@ def build_rule_config(languages: list[str] | None = None,
                 if pack:
                     _add_config(pack)
 
-    # Add custom rule sets
+    # Add custom rule sets (skip unsupported/404 packs)
     if rule_sets:
         for rs in rule_sets:
-            if rs in RULE_PACKS:
-                configs.extend(["--config", RULE_PACKS[rs]])
-            elif rs.startswith("p/") or rs.startswith("r/"):
-                configs.extend(["--config", rs])
+            pack = RULE_PACKS.get(rs) if rs in RULE_PACKS else (rs if (rs.startswith("p/") or rs.startswith("r/")) else None)
+            if pack and pack not in UNSUPPORTED_RULE_PACKS and pack not in added:
+                added.add(pack)
+                configs.extend(["--config", pack])
 
     # Add custom rules file/dir
     if custom_rules_path and Path(custom_rules_path).exists():
@@ -206,6 +210,21 @@ def build_rule_config(languages: list[str] | None = None,
     if not configs:
         configs.extend(["--config", "auto"])
 
+    return configs
+
+
+def build_rule_config_safe(custom_rules_path: str | None = None) -> list[str]:
+    """Build semgrep config with only registry packs that exist on semgrep.dev/explore (minimal 404 risk)."""
+    configs = []
+    # Minimal baseline: default, owasp, cwe (all listed on Explore); skip security-audit/secrets in case of 404
+    for key in ("default", "owasp", "cwe", "secure-defaults"):
+        pack = RULE_PACKS.get(key)
+        if pack and pack not in UNSUPPORTED_RULE_PACKS:
+            configs.extend(["--config", pack])
+    if custom_rules_path and Path(custom_rules_path).exists():
+        configs.extend(["--config", custom_rules_path])
+    if not configs:
+        configs.extend(["--config", "auto"])
     return configs
 
 
@@ -296,20 +315,33 @@ def run_semgrep(source_dir: str,
             "errors": errors[:20],
         }
 
-    result = _run_with_configs(build_rule_config(languages, rule_sets, custom_rules_path))
-    if _contains_invalid_config_error(result.get("errors", [])):
-        logger.warning("Retrying Semgrep with safe fallback rules after invalid config error")
-        fallback = _run_with_configs(build_rule_config(languages, None, custom_rules_path))
-        if fallback.get("rules_used", 0) or fallback.get("findings"):
+    config_args = build_rule_config(languages, rule_sets, custom_rules_path)
+    result = _run_with_configs(config_args)
+    errors = result.get("errors", [])
+
+    if _contains_invalid_config_error(errors):
+        logger.warning(
+            "Semgrep reported invalid/404 configs (e.g. p/json, p/bash, p/html); retrying with safe baseline only."
+        )
+        safe_config_args = build_rule_config_safe(custom_rules_path)
+        fallback = _run_with_configs(safe_config_args)
+        fallback_errors = fallback.get("errors", [])
+        if _contains_invalid_config_error(fallback_errors):
+            logger.warning("Safe fallback also had config errors; returning first run and filtering error message.")
+            result["errors"] = [
+                "Some Semgrep registry configs were unavailable (e.g. json/bash/html); scan used available rules.",
+                *[e for e in errors if "404" not in e and "invalid configuration" not in e.lower()],
+            ][:20]
+        elif fallback.get("rules_used", 0) or fallback.get("findings"):
             fallback["errors"] = [
-                "Recovered from invalid Semgrep registry config by retrying a safe ruleset.",
-                *fallback.get("errors", []),
+                e for e in fallback_errors if "404" not in e and "invalid configuration" not in e.lower()
             ][:20]
             return fallback
-        result["errors"] = [
-            "Semgrep registry config was invalid for this stack; scan may be incomplete.",
-            *result.get("errors", []),
-        ][:20]
+        else:
+            result["errors"] = [
+                "Some Semgrep registry configs were unavailable; scan may be incomplete.",
+                *[e for e in errors if "404" not in e and "invalid configuration" not in e.lower()],
+            ][:20]
 
     return {
         "findings": result.get("findings", []),

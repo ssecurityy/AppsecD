@@ -2254,13 +2254,17 @@ async def admin_sast_usage(
     total_issues = (await db.execute(select(func.sum(SastScanSession.total_issues)))).scalar() or 0
     total_ai_cost = (await db.execute(select(func.sum(SastScanSession.ai_cost_usd)))).scalar() or 0
 
-    # Per-org breakdown
+    # Per-org breakdown (include feature flags so super_admin can see/toggle full coverage)
     from sqlalchemy import text
     org_stats = (await db.execute(text("""
-        SELECT o.name, o.sast_enabled, COUNT(s.id) as scans, COALESCE(SUM(s.total_issues), 0) as issues
+        SELECT o.id, o.name, o.sast_enabled,
+               COALESCE(o.sast_sca_enabled, true), COALESCE(o.sast_iac_scanning_enabled, true),
+               COALESCE(o.sast_claude_review_enabled, true), COALESCE(o.sast_pr_review_enabled, true),
+               COUNT(s.id) as scans, COALESCE(SUM(s.total_issues), 0) as issues
         FROM organizations o
         LEFT JOIN sast_scan_sessions s ON s.organization_id = o.id
-        GROUP BY o.id, o.name, o.sast_enabled
+        GROUP BY o.id, o.name, o.sast_enabled, o.sast_sca_enabled, o.sast_iac_scanning_enabled,
+                 o.sast_claude_review_enabled, o.sast_pr_review_enabled
         ORDER BY scans DESC
     """))).fetchall()
 
@@ -2270,10 +2274,15 @@ async def admin_sast_usage(
         "total_issues_found": int(total_issues),
         "total_ai_cost_usd": float(total_ai_cost),
         "organizations": [{
-            "name": row[0],
-            "sast_enabled": row[1],
-            "total_scans": row[2],
-            "total_issues": row[3],
+            "id": str(row[0]),
+            "name": row[1],
+            "sast_enabled": row[2],
+            "sast_sca_enabled": row[3],
+            "sast_iac_scanning_enabled": row[4],
+            "sast_claude_review_enabled": row[5],
+            "sast_pr_review_enabled": row[6],
+            "total_scans": row[7],
+            "total_issues": row[8],
         } for row in org_stats],
     }
 
@@ -2283,6 +2292,11 @@ class AdminSastSettingsUpdate(BaseModel):
     sast_max_scans_per_day: int | None = None
     sast_ai_analysis_enabled: bool | None = None
     sast_monthly_budget_usd: float | None = None
+    # Feature toggles: only super_admin can change; once enabled stay enabled (persisted)
+    sast_sca_enabled: bool | None = None
+    sast_iac_scanning_enabled: bool | None = None
+    sast_claude_review_enabled: bool | None = None
+    sast_pr_review_enabled: bool | None = None
 
 
 @router.patch("/admin/settings/{org_id}")
@@ -2308,6 +2322,14 @@ async def admin_update_sast_settings(
         org.sast_ai_analysis_enabled = req.sast_ai_analysis_enabled
     if req.sast_monthly_budget_usd is not None:
         org.sast_monthly_budget_usd = req.sast_monthly_budget_usd
+    if req.sast_sca_enabled is not None:
+        org.sast_sca_enabled = req.sast_sca_enabled
+    if req.sast_iac_scanning_enabled is not None:
+        org.sast_iac_scanning_enabled = req.sast_iac_scanning_enabled
+    if req.sast_claude_review_enabled is not None:
+        org.sast_claude_review_enabled = req.sast_claude_review_enabled
+    if req.sast_pr_review_enabled is not None:
+        org.sast_pr_review_enabled = req.sast_pr_review_enabled
 
     await db.commit()
 
@@ -2709,33 +2731,38 @@ async def _run_claude_review_background(
                 scan_config=session.scan_config,
             )
 
-            # Store findings back in DB
+            # Store findings back in DB (sanitize to avoid varchar truncation)
+            from app.services.sast.finding_sanitizer import sanitize_finding_for_db
             findings = result if isinstance(result, list) else []
             for finding_dict in findings:
+                s = sanitize_finding_for_db({**finding_dict, "rule_source": "claude"})
+                ai = s.get("ai_analysis")
+                if ai is not None and not isinstance(ai, dict):
+                    ai = None
                 finding = SastFinding(
                     id=uuid.uuid4(),
                     scan_session_id=uuid.UUID(scan_session_id),
                     project_id=uuid.UUID(project_id),
-                    rule_id=finding_dict.get("rule_id", "claude-review"),
+                    rule_id=s.get("rule_id", "claude-review"),
                     rule_source="claude",
-                    severity=finding_dict.get("severity", "medium"),
-                    confidence=finding_dict.get("confidence", "medium"),
-                    title=finding_dict.get("title", ""),
-                    description=finding_dict.get("description", ""),
-                    message=finding_dict.get("message", ""),
-                    file_path=finding_dict.get("file_path", ""),
-                    line_start=finding_dict.get("line_start", 0),
-                    line_end=finding_dict.get("line_end", 0),
-                    column_start=finding_dict.get("column_start"),
-                    column_end=finding_dict.get("column_end"),
-                    code_snippet=finding_dict.get("code_snippet", ""),
-                    fix_suggestion=finding_dict.get("fix_suggestion", ""),
-                    fixed_code=finding_dict.get("fixed_code", ""),
-                    ai_analysis=finding_dict.get("ai_analysis", ""),
-                    cwe_id=finding_dict.get("cwe_id", ""),
-                    owasp_category=finding_dict.get("owasp_category", ""),
-                    references=finding_dict.get("references"),
-                    fingerprint=finding_dict.get("fingerprint", ""),
+                    severity=s.get("severity", "medium"),
+                    confidence=s.get("confidence", "medium"),
+                    title=s.get("title", ""),
+                    description=s.get("description") or "",
+                    message=s.get("message") or "",
+                    file_path=s.get("file_path", ""),
+                    line_start=s.get("line_start", 0),
+                    line_end=s.get("line_end", 0),
+                    column_start=s.get("column_start"),
+                    column_end=s.get("column_end"),
+                    code_snippet=(s.get("code_snippet") or "")[:5000],
+                    fix_suggestion=s.get("fix_suggestion"),
+                    fixed_code=s.get("fixed_code"),
+                    ai_analysis=ai,
+                    cwe_id=s.get("cwe_id"),
+                    owasp_category=s.get("owasp_category"),
+                    references=s.get("references"),
+                    fingerprint=s.get("fingerprint"),
                     status="open",
                 )
                 db.add(finding)

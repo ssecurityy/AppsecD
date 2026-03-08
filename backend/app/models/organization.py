@@ -38,9 +38,9 @@ class Organization(Base):
     sast_ai_analysis_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
     sast_github_app_installation_id = Column(String(100), nullable=True)
 
-    # Code Security Platform — extended controls (028 migration)
-    sast_claude_review_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
-    sast_pr_review_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Code Security Platform — extended controls (028 migration). Default True for full coverage; super_admin can disable.
+    sast_claude_review_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
+    sast_pr_review_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
     sast_pr_review_block_on_high = Column(Boolean, default=True, nullable=False, server_default="true")
     sast_sca_enabled = Column(Boolean, default=True, nullable=False, server_default="true")
     sast_blocked_licenses = Column(JSONB, nullable=True)

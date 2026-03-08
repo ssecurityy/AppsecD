@@ -430,6 +430,7 @@ async def run_sast_scan(
     ai_cost = 0.0
 
     if ai_analysis_enabled and api_key and all_findings:
+        logger.info("SAST AI analysis running for scan %s: %d findings", scan_id, len(all_findings))
         _progress_set(scan_id, {
             "status": "ai_analyzing",
             "phase": "ai_analysis",
@@ -453,6 +454,11 @@ async def run_sast_scan(
                     ai_cost += 0.01
         except Exception as e:
             logger.warning("AI analysis failed: %s", e)
+    else:
+        if ai_analysis_enabled and not api_key:
+            logger.info("SAST AI analysis skipped for scan %s: no API key (set ANTHROPIC_API_KEY or org claude_dast_api_key)", scan_id)
+        elif ai_analysis_enabled and not all_findings:
+            logger.info("SAST AI analysis skipped for scan %s: no findings", scan_id)
 
     if _progress_is_stopped(scan_id):
         return await _finalize_stopped_scan(
@@ -585,8 +591,14 @@ async def run_sast_scan(
                 session.scan_duration_seconds = duration
                 session.policy_result = policy_result
                 session.completed_at = datetime.utcnow()
-                if semgrep_errors:
-                    session.error_message = "; ".join(semgrep_errors[:5])
+                # Only persist errors that are not registry 404/invalid config (those are handled in semgrep_runner)
+                meaningful_errors = [
+                    e for e in semgrep_errors[:10]
+                    if e and "404" not in e and "invalid configuration" not in e.lower()
+                    and "failed to download configuration" not in e.lower()
+                ]
+                if meaningful_errors:
+                    session.error_message = "; ".join(meaningful_errors[:5])
 
                 # Extended tracking columns
                 session.iac_issues = len(iac_findings)
@@ -598,31 +610,36 @@ async def run_sast_scan(
                 session.claude_review_cost_usd = claude_review_cost
                 session.claude_review_findings_count = len(claude_review_findings)
 
-            # Create finding records
+            # Create finding records (sanitize to avoid varchar truncation)
+            from app.services.sast.finding_sanitizer import sanitize_finding_for_db
             for f in all_findings:
+                s = sanitize_finding_for_db(f)
+                code_snippet = s.get("code_snippet") or ""
+                if len(code_snippet) > 5000:
+                    code_snippet = code_snippet[:5000]
                 finding = SastFinding(
                     scan_session_id=uuid.UUID(scan_session_id),
                     project_id=uuid.UUID(project_id),
-                    rule_id=f.get("rule_id", "unknown"),
-                    rule_source=f.get("rule_source", "semgrep"),
-                    severity=f.get("severity", "medium"),
-                    confidence=f.get("confidence", "medium"),
-                    title=f.get("title", "Unknown Issue"),
-                    description=f.get("description", ""),
-                    message=f.get("message", ""),
-                    file_path=f.get("file_path", ""),
-                    line_start=f.get("line_start", 0),
-                    line_end=f.get("line_end"),
-                    column_start=f.get("column_start"),
-                    column_end=f.get("column_end"),
-                    code_snippet=f.get("code_snippet", "")[:5000],
-                    fix_suggestion=f.get("fix_suggestion"),
-                    fixed_code=f.get("fixed_code"),
-                    ai_analysis=f.get("ai_analysis"),
-                    cwe_id=f.get("cwe_id"),
-                    owasp_category=f.get("owasp_category"),
-                    references=f.get("references"),
-                    fingerprint=f.get("fingerprint"),
+                    rule_id=s.get("rule_id", "unknown"),
+                    rule_source=s.get("rule_source", "semgrep"),
+                    severity=s.get("severity", "medium"),
+                    confidence=s.get("confidence", "medium"),
+                    title=s.get("title", "Unknown Issue"),
+                    description=s.get("description", ""),
+                    message=s.get("message", ""),
+                    file_path=s.get("file_path", ""),
+                    line_start=s.get("line_start", 0),
+                    line_end=s.get("line_end"),
+                    column_start=s.get("column_start"),
+                    column_end=s.get("column_end"),
+                    code_snippet=code_snippet,
+                    fix_suggestion=s.get("fix_suggestion"),
+                    fixed_code=s.get("fixed_code"),
+                    ai_analysis=s.get("ai_analysis"),
+                    cwe_id=s.get("cwe_id"),
+                    owasp_category=s.get("owasp_category"),
+                    references=s.get("references"),
+                    fingerprint=s.get("fingerprint"),
                     status="open",
                 )
                 db.add(finding)

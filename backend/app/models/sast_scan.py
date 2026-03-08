@@ -109,7 +109,7 @@ class SastFinding(Base):
 
     # Standards mapping
     cwe_id = Column(String(20), nullable=True)
-    owasp_category = Column(String(50), nullable=True)
+    owasp_category = Column(String(255), nullable=True)
     references = Column(JSONB, nullable=True)  # [urls]
 
     # Dedup

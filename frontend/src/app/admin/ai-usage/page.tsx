@@ -558,11 +558,9 @@ export default function AdminAIUsagePage() {
                             const enabled = e.target.checked;
                             setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], enabled } }));
                             try {
-                              // Find org id from the org list
-                              const orgList = orgs || [];
-                              const found = orgList.find((o: any) => o.name === org.name);
-                              if (found?.id) {
-                                await api.sastAdminUpdateOrgSettings(found.id, { sast_enabled: enabled });
+                              const orgId = org.id || (orgs || []).find((o: any) => o.name === org.name)?.id;
+                              if (orgId) {
+                                await api.sastAdminUpdateOrgSettings(orgId, { sast_enabled: enabled });
                                 toast.success(`SAST ${enabled ? "enabled" : "disabled"} for ${org.name}`);
                               }
                             } catch {
@@ -581,10 +579,9 @@ export default function AdminAIUsagePage() {
                             const ai = e.target.checked;
                             setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], ai } }));
                             try {
-                              const orgList = orgs || [];
-                              const found = orgList.find((o: any) => o.name === org.name);
-                              if (found?.id) {
-                                await api.sastAdminUpdateOrgSettings(found.id, { sast_ai_analysis_enabled: ai });
+                              const orgId = org.id || (orgs || []).find((o: any) => o.name === org.name)?.id;
+                              if (orgId) {
+                                await api.sastAdminUpdateOrgSettings(orgId, { sast_ai_analysis_enabled: ai });
                                 toast.success("Updated");
                               }
                             } catch {
