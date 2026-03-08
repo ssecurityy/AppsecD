@@ -3,7 +3,7 @@ import uuid as _uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from app.core.database import get_db
 from app.api.auth import get_current_user
 from app.models.user import User
@@ -75,18 +75,15 @@ async def get_executive_dashboard(
     # Simple posture: 100 - (critical*20 + high*5), min 0
     security_posture_score = max(0, min(100, 100 - open_critical * 20 - open_high * 5))
 
-    # Findings trend: last 90 days by week (simplified: count by week)
-    trend_q = (
-        select(func.date_trunc("week", SastScanSession.completed_at).label("week"), func.count(SastFinding.id).label("cnt"))
-        .join(SastFinding, SastFinding.scan_session_id == SastScanSession.id)
-        .where(
-            SastScanSession.organization_id == org_id,
-            SastScanSession.status == "completed",
-            SastScanSession.completed_at >= ninety_days_ago,
-        )
-        .group_by(func.date_trunc("week", SastScanSession.completed_at))
-    )
-    trend_rows = (await db.execute(trend_q)).fetchall()
+    # Findings trend: last 90 days by week (raw SQL to avoid GROUP BY column ambiguity)
+    trend_q = text("""
+        SELECT date_trunc('week', s.completed_at) AS week, count(f.id) AS cnt
+        FROM sast_scan_sessions s
+        JOIN sast_findings f ON f.scan_session_id = s.id
+        WHERE s.organization_id = :org_id AND s.status = 'completed' AND s.completed_at >= :cutoff
+        GROUP BY date_trunc('week', s.completed_at)
+    """)
+    trend_rows = (await db.execute(trend_q, {"org_id": str(org_id), "cutoff": ninety_days_ago})).fetchall()
     findings_trend = [{"week": str(r[0]), "count": r[1]} for r in trend_rows]
 
     # Top vulnerable projects (by open critical+high)

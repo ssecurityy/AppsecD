@@ -860,6 +860,15 @@ export default function SASTPage() {
     return buildFileTree(findingsForDisplay);
   }, [findingsForDisplay]);
 
+  /* ---- breakdown filter: filter findings by scanner/source (must be before displayedFindings) ---- */
+  const findingsForDisplay = useMemo(() => {
+    if (!breakdownFilterSource) return findings;
+    const secretSources = ["secret_scan", "trufflehog", "gitleaks"];
+    if (breakdownFilterSource === "secrets") return findings.filter((f: any) => secretSources.includes(f.rule_source || ""));
+    if (breakdownFilterSource === "semgrep") return findings.filter((f: any) => !f.rule_source || f.rule_source === "semgrep");
+    return findings.filter((f: any) => (f.rule_source || "") === breakdownFilterSource);
+  }, [findings, breakdownFilterSource]);
+
   /* ---- filtered findings for tree selection (uses findingsForDisplay so breakdown filter applies) ---- */
   const displayedFindings = useMemo(() => {
     if (!selectedTreePath || selectedTreePath === "/") return findingsForDisplay;
@@ -868,15 +877,6 @@ export default function SASTPage() {
       return fp === selectedTreePath || fp.startsWith(selectedTreePath + "/");
     });
   }, [findingsForDisplay, selectedTreePath]);
-
-  /* ---- breakdown filter: filter findings by scanner/source ---- */
-  const findingsForDisplay = useMemo(() => {
-    if (!breakdownFilterSource) return findings;
-    const secretSources = ["secret_scan", "trufflehog", "gitleaks"];
-    if (breakdownFilterSource === "secrets") return findings.filter((f: any) => secretSources.includes(f.rule_source || ""));
-    if (breakdownFilterSource === "semgrep") return findings.filter((f: any) => !f.rule_source || f.rule_source === "semgrep");
-    return findings.filter((f: any) => (f.rule_source || "") === breakdownFilterSource);
-  }, [findings, breakdownFilterSource]);
 
   /* ---- summary counts ---- */
   const severityCounts = useMemo(() => {
