@@ -42,6 +42,9 @@ aiofiles==24.1.0
 python-docx==1.1.0
 fpdf2==2.8.2
 
+# SAST (required for code scanning)
+semgrep>=1.95.0
+
 # DAST (optional - improve crawl/secret coverage)
 # spider_rs>=0.0.50   # pip install spider_rs - high-perf crawler fallback
 # trufflehog: use Go binary - go install github.com/trufflesecurity/trufflehog/v3@latest

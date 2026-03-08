@@ -462,6 +462,8 @@ def _categorize_finding(finding: dict) -> set[str]:
         "sca": "sca",
         "iac": "iac",
         "secret_scan": "secrets",
+        "trufflehog": "secrets",
+        "gitleaks": "secrets",
         "claude_review": "code_review",
         "container": "container",
         "license": "license",

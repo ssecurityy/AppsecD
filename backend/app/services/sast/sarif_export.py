@@ -408,6 +408,8 @@ def _build_extensions(findings: list[dict]) -> list[dict]:
         "sca": ("SCA Scanner", "https://osv.dev"),
         "iac": ("IaC Scanner", "https://appsecd.com/docs/iac"),
         "secret_scan": ("Secret Scanner", "https://appsecd.com/docs/secrets"),
+        "trufflehog": ("TruffleHog", "https://github.com/trufflesecurity/trufflehog"),
+        "gitleaks": ("Gitleaks", "https://github.com/gitleaks/gitleaks"),
         "claude_review": ("Claude AI Review", "https://anthropic.com"),
         "js_deep": ("JS/TS Analyzer", "https://appsecd.com/docs/js"),
         "container": ("Container Scanner", "https://appsecd.com/docs/container"),

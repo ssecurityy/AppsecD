@@ -274,6 +274,11 @@ export default function SASTPage() {
   /* ---- upload scan ---- */
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState(true);
+  const [exhaustive, setExhaustive] = useState(false);
+  const [gitleaksEnabled, setGitleaksEnabled] = useState(false);
+  const [scanGitHistory, setScanGitHistory] = useState(false);
+  const [excludePatterns, setExcludePatterns] = useState("");
+  const [ruleSets, setRuleSets] = useState<string[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanId, setScanId] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<any>(null);
@@ -473,12 +478,23 @@ export default function SASTPage() {
     if (file) setSelectedFile(file);
   };
 
+  const buildScanConfig = () => {
+    const cfg: Record<string, unknown> = {};
+    if (exhaustive) cfg.exhaustive = true;
+    if (gitleaksEnabled) cfg.gitleaks_enabled = true;
+    if (scanGitHistory) cfg.scan_git_history = true;
+    if (ruleSets.length) cfg.rule_sets = ruleSets;
+    const patterns = excludePatterns.split(",").map((s) => s.trim()).filter(Boolean);
+    if (patterns.length) cfg.exclude_patterns = patterns;
+    return cfg;
+  };
+
   const startUploadScan = async () => {
     if (!selectedFile || !projectId) return;
     setScanning(true);
     setScanProgress(null);
     try {
-      const res = await api.sastUploadScan(projectId, selectedFile, aiAnalysis);
+      const res = await api.sastUploadScan(projectId, selectedFile, aiAnalysis, buildScanConfig());
       const sid = res?.scan_id;
       if (!sid) throw new Error("No scan ID returned");
       setScanId(sid);
@@ -533,6 +549,7 @@ export default function SASTPage() {
         repository_id: repoId,
         branch: branch || undefined,
         ai_analysis: aiAnalysis,
+        scan_config: Object.keys(buildScanConfig()).length ? buildScanConfig() : undefined,
       });
       toast.success("Repository scan started");
       const sid = res?.scan_id;
@@ -764,6 +781,7 @@ export default function SASTPage() {
         project_id: projectId,
         repository_ids: repos.map((repo) => repo.id),
         ai_analysis: aiAnalysis,
+        scan_config: Object.keys(buildScanConfig()).length ? buildScanConfig() : undefined,
       });
       toast.success(`Started ${res?.count || repos.length} repository scans`);
       loadHistory();
@@ -968,7 +986,7 @@ export default function SASTPage() {
                 </div>
               )}
 
-              {/* AI toggle + scan button */}
+              {/* AI toggle */}
               <div className="flex items-center justify-between mt-5 gap-4 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
@@ -1000,6 +1018,68 @@ export default function SASTPage() {
                     {scanning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                     {scanning ? "Scanning..." : "Start Scan"}
                   </button>
+                </div>
+              </div>
+
+              {/* Scan options: exhaustive, Gitleaks, extra rule sets */}
+              <div className="mt-4 p-4 rounded-lg border space-y-3" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Scan options</p>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={exhaustive}
+                      onChange={(e) => setExhaustive(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-orange-500 focus:ring-orange-500"
+                    />
+                    <span className="text-sm" style={{ color: "var(--text-primary)" }}>Max coverage / Exhaustive</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={gitleaksEnabled}
+                      onChange={(e) => setGitleaksEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-orange-500 focus:ring-orange-500"
+                    />
+                    <span className="text-sm" style={{ color: "var(--text-primary)" }}>Gitleaks (secret scan)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={scanGitHistory}
+                      onChange={(e) => setScanGitHistory(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-orange-500 focus:ring-orange-500"
+                    />
+                    <span className="text-sm" style={{ color: "var(--text-primary)" }}>Scan git history (secrets)</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Exclude paths (comma-separated, e.g. vendor, *.min.js)</label>
+                  <input
+                    type="text"
+                    value={excludePatterns}
+                    onChange={(e) => setExcludePatterns(e.target.value)}
+                    placeholder="optional"
+                    className="w-full max-w-md px-3 py-1.5 rounded border text-sm bg-transparent"
+                    style={{ borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
+                  />
+                </div>
+                <p className="text-xs" style={{ color: "var(--text-secondary)" }}>These options also apply to repository and bulk scans.</p>
+                <div>
+                  <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>Extra Semgrep rule sets (optional)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {["secure-defaults", "r2c-security-audit", "brakeman", "flawfinder", "gitleaks", "xss", "sql-injection", "jwt"].map((id) => (
+                      <label key={id} className="inline-flex items-center gap-1.5 cursor-pointer select-none px-2.5 py-1.5 rounded border text-xs" style={{ borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}>
+                        <input
+                          type="checkbox"
+                          checked={ruleSets.includes(id)}
+                          onChange={(e) => setRuleSets((prev) => e.target.checked ? [...prev, id] : prev.filter((r) => r !== id))}
+                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-orange-500 focus:ring-orange-500"
+                        />
+                        {id}
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1102,6 +1182,25 @@ export default function SASTPage() {
                   <Plus size={16} /> Connect Repository
                 </button>
               </div>
+            </div>
+
+            <div className="mb-4 p-3 rounded-lg border flex flex-wrap items-center gap-2" style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)" }}>
+              <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Scan options:</span>
+              <span className="text-xs" style={{ color: "var(--text-primary)" }}>
+                {exhaustive ? "Max coverage ✓" : "Standard"}
+                {gitleaksEnabled && " · Gitleaks ✓"}
+                {scanGitHistory && " · Git history ✓"}
+                {ruleSets.length > 0 && ` · ${ruleSets.length} rule set(s)`}
+                {excludePatterns.trim() && " · Excludes set"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveTab("upload")}
+                className="text-xs font-medium px-2 py-1 rounded border transition-colors"
+                style={{ color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}
+              >
+                Edit in Upload tab
+              </button>
             </div>
 
             {repos.length === 0 ? (

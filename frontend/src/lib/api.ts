@@ -36,10 +36,11 @@ async function request(path: string, opts: RequestInit = {}): Promise<any> {
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${API}${path}`, { ...opts, headers });
   if (!res.ok) {
-    // Auto-redirect to login on 401 (token expired/invalid)
-    if (res.status === 401 && typeof window !== "undefined") {
+    const isLoginRequest = path === "/auth/login" && (opts.method === "POST" || opts.method === undefined);
+    const isMfaCompleteLogin = path === "/mfa/complete-login" && opts.method === "POST";
+    // For login/MFA endpoints, 401 means bad credentials — show backend message, don't treat as session expiry
+    if (res.status === 401 && typeof window !== "undefined" && !isLoginRequest && !isMfaCompleteLogin) {
       localStorage.removeItem("appsecdtoken");
-      // Only redirect if not already on login page
       if (!window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }
@@ -589,12 +590,15 @@ export const api = {
 
   // ── SAST ──────────────────────────────────────────────────────
   // Scanning
-  sastUploadScan: async (projectId: string, file: File, aiAnalysis: boolean = false) => {
+  sastUploadScan: async (projectId: string, file: File, aiAnalysis: boolean = false, scanConfig?: Record<string, unknown>) => {
     const token = getToken();
     const formData = new FormData();
     formData.append("file", file);
     formData.append("project_id", projectId);
     formData.append("ai_analysis", String(aiAnalysis));
+    if (scanConfig && Object.keys(scanConfig).length > 0) {
+      formData.append("scan_config", JSON.stringify(scanConfig));
+    }
     const res = await fetch(`${API}/sast/scan/upload`, {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -603,9 +607,9 @@ export const api = {
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || "Upload failed"); }
     return res.json();
   },
-  sastRepoScan: (data: { project_id: string; repository_id: string; branch?: string; ai_analysis?: boolean }) =>
+  sastRepoScan: (data: { project_id: string; repository_id: string; branch?: string; ai_analysis?: boolean; scan_config?: Record<string, unknown> }) =>
     request("/sast/scan/repository", { method: "POST", body: JSON.stringify(data) }),
-  sastBulkRepoScan: (data: { project_id: string; repository_ids?: string[]; ai_analysis?: boolean }) =>
+  sastBulkRepoScan: (data: { project_id: string; repository_ids?: string[]; ai_analysis?: boolean; scan_config?: Record<string, unknown> }) =>
     request("/sast/scan/repositories/bulk", { method: "POST", body: JSON.stringify(data) }),
   sastScanProgress: (scanId: string) =>
     request(`/sast/scan/${scanId}/progress`),

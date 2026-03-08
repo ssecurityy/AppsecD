@@ -27,7 +27,7 @@ EXCLUDE_DIRS = {
     "coverage", ".nyc_output", "eggs",
 }
 
-# Language detection by extension
+# Language detection by extension (aligned with Semgrep registry + common ecosystems)
 LANGUAGE_EXTENSIONS = {
     ".py": "python", ".pyw": "python",
     ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
@@ -42,7 +42,7 @@ LANGUAGE_EXTENSIONS = {
     ".rs": "rust",
     ".swift": "swift",
     ".kt": "kotlin", ".kts": "kotlin",
-    ".scala": "scala",
+    ".scala": "scala", ".sc": "scala",
     ".r": "r", ".R": "r",
     ".sh": "bash", ".bash": "bash",
     ".yaml": "yaml", ".yml": "yaml",
@@ -56,6 +56,16 @@ LANGUAGE_EXTENSIONS = {
     ".ex": "elixir", ".exs": "elixir",
     ".lua": "lua",
     ".pl": "perl", ".pm": "perl",
+    # Extended coverage (2026+)
+    ".sol": "solidity",
+    ".groovy": "groovy", ".gradle": "groovy",
+    ".dart": "dart",
+    ".vb": "vb", ".vbs": "vb",
+    ".vue": "javascript",
+    ".svelte": "javascript",
+    ".cls": "apex", ".trigger": "apex",
+    ".clj": "clojure", ".cljs": "clojure", ".cljc": "clojure",
+    ".ml": "ocaml", ".mli": "ocaml",
 }
 
 

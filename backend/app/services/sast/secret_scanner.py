@@ -251,6 +251,82 @@ def scan_secrets(source_dir: str) -> list[dict]:
     return deduped
 
 
+def _find_gitleaks_bin() -> str | None:
+    """Return path to gitleaks binary if available."""
+    for path in ("/usr/local/bin/gitleaks", "/usr/bin/gitleaks"):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def scan_secrets_gitleaks(source_path: str) -> list[dict]:
+    """Run Gitleaks on a directory (no git; filesystem only) and return SastFinding-compatible dicts.
+    Fast, 150+ rule types; use alongside TruffleHog for best coverage.
+    """
+    gitleaks_bin = _find_gitleaks_bin()
+    if not gitleaks_bin:
+        return []
+    TIMEOUT_SECONDS = 90
+    try:
+        result = subprocess.run(
+            [gitleaks_bin, "detect", "--source", source_path, "--no-git", "--report-format=json", "--report-path=-"],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+            cwd=source_path,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Gitleaks scan failed: %s", exc)
+        return []
+    findings: list[dict] = []
+    try:
+        data = json.loads(result.stdout) if result.stdout else []
+    except json.JSONDecodeError:
+        return findings
+    if isinstance(data, dict) and "findings" in data:
+        data = data["findings"]
+    if not isinstance(data, list):
+        return findings
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        rule_id = item.get("RuleID", "gitleaks")
+        file_path = item.get("File", "")
+        if file_path and source_path:
+            try:
+                file_path = os.path.relpath(file_path, source_path)
+            except ValueError:
+                pass
+        start_line = int(item.get("StartLine", 0) or 0)
+        secret = item.get("Secret", "") or ""
+        if len(secret) > 8:
+            masked = secret[:4] + "****" + secret[-4:]
+        else:
+            masked = "****"
+        fp_raw = f"gitleaks:{rule_id}|{file_path}|{start_line}"
+        fingerprint = hashlib.sha256(fp_raw.encode()).hexdigest()[:32]
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        findings.append({
+            "rule_id": f"gitleaks.{rule_id}",
+            "rule_source": "gitleaks",
+            "severity": "high",
+            "confidence": "high",
+            "title": f"Secret detected by Gitleaks: {rule_id}",
+            "description": item.get("Description", f"Gitleaks rule {rule_id} matched in {file_path}."),
+            "message": f"Gitleaks: {rule_id} in {file_path}",
+            "file_path": file_path,
+            "line_start": start_line,
+            "line_end": start_line,
+            "code_snippet": masked,
+            "fix_suggestion": "Remove the secret from source; use environment variables or a secrets manager.",
+            "fingerprint": fingerprint,
+        })
+    return findings
+
+
 def scan_secrets_trufflehog(source_path: str) -> list[dict]:
     """Run TruffleHog v3 on a filesystem path and return SastFinding-compatible dicts."""
     TRUFFLEHOG_BIN = "/usr/local/bin/trufflehog"

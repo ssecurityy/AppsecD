@@ -219,16 +219,28 @@ def _finding_to_dict(f: SastFinding) -> dict:
 
 # ── Scan Endpoints ─────────────────────────────────────────────────
 
+def _parse_scan_config_form(scan_config_json: str | None) -> dict:
+    """Parse optional scan_config JSON from form (exhaustive, gitleaks_enabled, rule_sets)."""
+    if not scan_config_json or not scan_config_json.strip():
+        return {}
+    try:
+        data = json.loads(scan_config_json)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
 @router.post("/scan/upload")
 async def upload_and_scan(
     background_tasks: BackgroundTasks,
     project_id: str = Form(...),
     ai_analysis: bool = Form(False),
     file: UploadFile = File(...),
+    scan_config: str | None = Form(default=None),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a ZIP file and start SAST scan."""
+    """Upload a ZIP file and start SAST scan. Optional scan_config JSON: exhaustive, gitleaks_enabled, rule_sets."""
     project = (await db.execute(select(Project).where(Project.id == uuid.UUID(project_id)))).scalar_one_or_none()
     if not project:
         raise HTTPException(404, "Project not found")
@@ -254,6 +266,8 @@ async def upload_and_scan(
                 raise HTTPException(400, f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)")
             f.write(chunk)
 
+    scan_cfg = _parse_scan_config_form(scan_config)
+
     # Create scan session
     scan_id = uuid.uuid4()
     session = SastScanSession(
@@ -264,6 +278,7 @@ async def upload_and_scan(
         status="queued",
         source_info={"zip_filename": file.filename, "file_size_bytes": total_size},
         ai_analysis_enabled=ai_analysis,
+        scan_config=scan_cfg or None,
         created_by=current_user.id,
     )
     db.add(session)
@@ -313,12 +328,20 @@ async def _run_zip_scan_background(
         # Extract
         extract_dir = extract_zip(zip_path)
 
+        # Load scan_config from session
+        async with AsyncSessionLocal() as db:
+            session = (await db.execute(
+                select(SastScanSession).where(SastScanSession.id == uuid.UUID(scan_session_id))
+            )).scalar_one_or_none()
+            scan_cfg = (session.scan_config or {}) if session else {}
+
         # Run scan
         await run_sast_scan(
             scan_session_id=scan_session_id,
             project_id=project_id,
             organization_id=organization_id,
             source_path=extract_dir,
+            scan_config=scan_cfg,
             ai_analysis_enabled=ai_analysis_enabled,
             api_key=api_key,
             user_id=user_id,
@@ -347,6 +370,7 @@ class RepoScanRequest(BaseModel):
     repository_id: str
     branch: str | None = None
     ai_analysis: bool = False
+    scan_config: dict | None = None  # exhaustive, gitleaks_enabled, rule_sets
 
 
 @router.post("/scan/repository")
@@ -402,6 +426,7 @@ async def scan_repository(
         ai_analysis_enabled=req.ai_analysis,
         api_key=api_key,
         user_id=str(current_user.id),
+        scan_config=req.scan_config or {},
     )
 
     # Update last scan time
@@ -419,6 +444,7 @@ class BulkRepoScanRequest(BaseModel):
     project_id: str
     repository_ids: list[str] | None = None
     ai_analysis: bool = False
+    scan_config: dict | None = None
 
 
 @router.post("/scan/repositories/bulk")
@@ -445,6 +471,7 @@ async def scan_repositories_bulk(
 
     api_key = await _resolve_api_key(db, project.organization_id) if req.ai_analysis else ""
     launched: list[dict] = []
+    scan_cfg = req.scan_config or {}
     for repo in repos:
         scan_id = uuid.uuid4()
         branch = repo.default_branch or "main"
@@ -456,6 +483,7 @@ async def scan_repositories_bulk(
             status="queued",
             source_info={"repo_url": repo.repo_url, "branch": branch, "repo_name": repo.repo_name},
             ai_analysis_enabled=req.ai_analysis,
+            scan_config=scan_cfg,
             created_by=current_user.id,
         )
         db.add(session)
@@ -471,6 +499,7 @@ async def scan_repositories_bulk(
             ai_analysis_enabled=req.ai_analysis,
             api_key=api_key,
             user_id=str(current_user.id),
+            scan_config=scan_cfg,
         )
         repo.last_scan_at = datetime.utcnow()
         launched.append({"scan_id": str(scan_id), "repository_id": str(repo.id), "repo_name": repo.repo_name, "branch": branch})
@@ -483,6 +512,7 @@ async def _run_repo_scan_background(
     scan_session_id: str, project_id: str, organization_id: str,
     repo_url: str, branch: str, token: str | None,
     ai_analysis_enabled: bool, api_key: str, user_id: str,
+    scan_config: dict | None = None,
 ):
     """Background task: clone repo and run SAST scan."""
     from app.services.sast.code_extractor import clone_repo, cleanup_source
@@ -497,6 +527,9 @@ async def _run_repo_scan_background(
             if session:
                 session.status = "extracting"
                 await db.commit()
+                # Use session.scan_config if not passed (e.g. bulk scan)
+                if scan_config is None:
+                    scan_config = session.scan_config or {}
 
         clone_dir = clone_repo(repo_url, branch=branch, token=token)
 
@@ -505,6 +538,7 @@ async def _run_repo_scan_background(
             project_id=project_id,
             organization_id=organization_id,
             source_path=clone_dir,
+            scan_config=scan_config,
             ai_analysis_enabled=ai_analysis_enabled,
             api_key=api_key,
             user_id=user_id,

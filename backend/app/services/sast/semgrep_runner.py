@@ -1,4 +1,11 @@
-"""Semgrep execution wrapper — runs semgrep scans and parses results."""
+"""Semgrep execution wrapper — runs semgrep scans and parses results.
+
+Rule sources (Semgrep Registry — https://semgrep.dev/explore):
+- OWASP: p/owasp-top-ten (OWASP Top 10); OWASP ASVS: see docs/sast-semgrep-rules.md
+- SANS / MITRE CWE: p/cwe-top-25 (CWE Top 25 = SANS Top 25 style); MITRE CWE coverage in rule metadata
+- Ported tools: Bandit, ESLint, FindSecBugs, Gosec, Brakeman, Flawfinder, Gitleaks, etc.
+- Pro rules (paid): Semgrep AppSec Platform; use --config=auto with Semgrep Cloud for Pro rules
+"""
 import json
 import logging
 import subprocess
@@ -10,14 +17,20 @@ logger = logging.getLogger(__name__)
 # Full path to semgrep binary (virtualenv)
 SEMGREP_BIN = "/opt/navigator/backend/venv/bin/semgrep"
 
-# Default rule packs by scan scope
+# -----------------------------------------------------------------------------
+# Rule packs: OWASP, SANS/MITRE CWE, ported tools, languages, frameworks
+# Registry: https://semgrep.dev/explore | Repo: https://github.com/semgrep/semgrep-rules
+# -----------------------------------------------------------------------------
 RULE_PACKS = {
+    # --- Standards (always included in baseline) ---
+    "default": "p/default",
     "security": "p/security-audit",
     "owasp": "p/owasp-top-ten",
-    "cwe": "p/cwe-top-25",
+    "cwe": "p/cwe-top-25",  # CWE Top 25 (MITRE); aligns with SANS Top 25 focus
     "secrets": "p/secrets",
-    "default": "p/default",
-    # Language-specific
+    "secure-defaults": "p/secure-defaults",
+    "r2c-security-audit": "p/r2c-security-audit",  # Optional: add via rule_sets for extra coverage
+    # --- Languages ---
     "python": "p/python",
     "javascript": "p/javascript",
     "typescript": "p/typescript",
@@ -30,22 +43,39 @@ RULE_PACKS = {
     "rust": "p/rust",
     "kotlin": "p/kotlin",
     "swift": "p/swift",
-    # Framework-specific
+    "scala": "p/scala",
+    "bash": "p/bash",
+    "solidity": "p/solidity",
+    "apex": "p/apex",
+    "elixir": "p/elixir",
+    "clojure": "p/clojure",
+    "ocaml": "p/ocaml",
+    "html": "p/html",
+    "json": "p/json",
+    # --- Frameworks ---
     "react": "p/react",
     "nextjs": "p/nextjs",
     "django": "p/django",
     "flask": "p/flask",
+    "fastapi": "p/fastapi",
     "docker": "p/docker",
     "terraform": "p/terraform",
     "kubernetes": "p/kubernetes",
     "dockerfile": "p/dockerfile",
-    # Ported tools
+    "docker-compose": "p/docker-compose",
+    "nginx": "p/nginx",
+    # --- Ported security tools (Bandit, ESLint, FindSecBugs, Gosec, etc.) ---
     "bandit": "p/bandit",
     "eslint": "p/eslint",
     "gosec": "p/gosec",
     "findsecbugs": "p/findsecbugs",
     "nodejsscan": "p/nodejsscan",
-    # Category-specific
+    "brakeman": "p/brakeman",
+    "flawfinder": "p/flawfinder",
+    "gitleaks": "p/gitleaks",
+    "phpcs-security-audit": "p/phpcs-security-audit",
+    "security-code-scan": "p/security-code-scan",
+    # --- Vulnerability categories ---
     "xss": "p/xss",
     "sql-injection": "p/sql-injection",
     "command-injection": "p/command-injection",
@@ -54,28 +84,36 @@ RULE_PACKS = {
 }
 
 UNSUPPORTED_RULE_PACKS = {
-    "p/express",
-    "p/spring",
+    "p/express",   # Often 404 or deprecated in registry
+    "p/spring",   # Often 404 or deprecated in registry
 }
 
-# Comprehensive language-to-ruleset mapping
+# Language → list of registry rulesets (language + ported tools + frameworks)
 LANGUAGE_RULE_MAP = {
-    "python": ["p/python", "p/bandit", "p/django", "p/flask"],
-    "javascript": ["p/javascript", "p/eslint", "p/react", "p/nextjs", "p/nodejsscan"],
-    "typescript": ["p/typescript", "p/eslint", "p/react", "p/nextjs", "p/nodejsscan"],
+    "python": ["p/python", "p/bandit", "p/django", "p/flask", "p/fastapi", "p/jwt"],
+    "javascript": ["p/javascript", "p/eslint", "p/react", "p/nextjs", "p/nodejsscan", "p/xss"],
+    "typescript": ["p/typescript", "p/eslint", "p/react", "p/nextjs", "p/nodejsscan", "p/xss"],
     "java": ["p/java", "p/findsecbugs"],
     "go": ["p/go", "p/gosec"],
-    "ruby": ["p/ruby"],
-    "php": ["p/php"],
-    "c": ["p/c"],
-    "cpp": ["p/c"],
-    "csharp": ["p/csharp"],
+    "ruby": ["p/ruby", "p/brakeman"],
+    "php": ["p/php", "p/phpcs-security-audit"],
+    "c": ["p/c", "p/flawfinder"],
+    "cpp": ["p/c", "p/flawfinder"],
+    "csharp": ["p/csharp", "p/security-code-scan"],
     "rust": ["p/rust"],
     "kotlin": ["p/kotlin"],
     "swift": ["p/swift"],
+    "scala": ["p/scala"],
     "terraform": ["p/terraform"],
     "dockerfile": ["p/dockerfile", "p/docker"],
-    "yaml": ["p/kubernetes"],
+    "yaml": ["p/kubernetes", "p/docker-compose"],
+    "bash": ["p/bash"],
+    "solidity": ["p/solidity"],
+    "apex": ["p/apex"],
+    "elixir": ["p/elixir"],
+    "clojure": ["p/clojure"],
+    "html": ["p/html"],
+    "json": ["p/json"],
 }
 
 # Semgrep severity mapping

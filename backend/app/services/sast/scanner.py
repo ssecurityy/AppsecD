@@ -149,11 +149,18 @@ async def run_sast_scan(
     semgrep_rules_used = 0
     semgrep_errors = []
 
+    # Exhaustive/max-coverage: add extra rulesets (secure-defaults, r2c-security-audit)
+    rule_sets = list(config.get("rule_sets") or [])
+    if config.get("exhaustive") or config.get("max_coverage"):
+        for extra in ("secure-defaults", "r2c-security-audit"):
+            if extra not in rule_sets:
+                rule_sets.append(extra)
+
     if check_semgrep_installed():
         semgrep_result = run_semgrep(
             source_dir=source_path,
             languages=config.get("languages") or detected_languages,
-            rule_sets=config.get("rule_sets"),
+            rule_sets=rule_sets if rule_sets else None,
             exclude_patterns=config.get("exclude_patterns"),
         )
         semgrep_findings = semgrep_result.get("findings", [])
@@ -281,10 +288,21 @@ async def run_sast_scan(
     except Exception as e:
         logger.warning("TruffleHog scan failed: %s", e)
 
-    # Merge and deduplicate secrets (TruffleHog findings take priority)
+    # Optional: Gitleaks (fast, 150+ rules) when enabled or exhaustive mode
+    gitleaks_findings = []
+    if config.get("gitleaks_enabled") or config.get("exhaustive") or config.get("max_coverage"):
+        try:
+            from .secret_scanner import scan_secrets_gitleaks
+            gitleaks_findings = scan_secrets_gitleaks(source_path)
+            logger.info("Gitleaks scan: %d findings", len(gitleaks_findings))
+        except Exception as e:
+            logger.warning("Gitleaks scan failed: %s", e)
+
+    # Merge and deduplicate secrets (TruffleHog > Gitleaks > regex by priority)
     trufflehog_fps = {f.get("fingerprint") for f in trufflehog_findings if f.get("fingerprint")}
-    deduped_regex = [f for f in secret_findings if f.get("fingerprint") not in trufflehog_fps]
-    secret_findings = trufflehog_findings + deduped_regex
+    gitleaks_fps = {f.get("fingerprint") for f in gitleaks_findings if f.get("fingerprint")}
+    deduped_regex = [f for f in secret_findings if f.get("fingerprint") not in (trufflehog_fps | gitleaks_fps)]
+    secret_findings = trufflehog_findings + gitleaks_findings + deduped_regex
     logger.info("Total secret findings after dedup: %d", len(secret_findings))
 
     # Optional: scan git history for leaked secrets
