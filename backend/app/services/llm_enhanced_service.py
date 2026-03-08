@@ -510,3 +510,44 @@ Respond in JSON only:
         "risk_rating": "High" if critical_high else "Medium",
         "key_statistics": {"total_findings": len(findings), "critical_high": critical_high, "coverage_pct": 0},
     }
+
+
+# ─── SAST finding recommendation (org LLM: Gemini/OpenAI) ───
+
+def sast_recommendation(
+    finding: dict,
+    *,
+    provider: str = "",
+    model: str = "",
+    api_key: str = "",
+) -> str | None:
+    """Generate exact remediation recommendation for a SAST finding using org-configured LLM."""
+    if not api_key or not model:
+        return None
+    title = finding.get("title") or finding.get("message") or "Security finding"
+    description = (finding.get("description") or "")[:1500]
+    file_path = finding.get("file_path") or ""
+    line_start = finding.get("line_start")
+    line_end = finding.get("line_end")
+    rule_id = finding.get("rule_id") or ""
+    code_snippet = (finding.get("code_snippet") or finding.get("snippet") or "")[:2000]
+    fix_suggestion = (finding.get("fix_suggestion") or "")[:500]
+
+    prompt = f"""You are a senior application security engineer. For this static analysis finding, provide a short, actionable remediation recommendation.
+
+Finding: {title}
+Rule: {rule_id}
+File: {file_path}
+Lines: {line_start or "?"}-{line_end or "?"}
+
+Description:
+{description}
+
+Code snippet:
+{code_snippet or "(none)"}
+{f'Existing fix suggestion: ' + fix_suggestion if fix_suggestion else ''}
+
+Respond with a single paragraph: exact steps to fix the issue (what to change, secure pattern to use, or missing implementation). Be specific and concise. Do not include JSON or markdown headers."""
+
+    result = _call_llm(provider, model, api_key, prompt, temperature=0.2)
+    return (result or "").strip() or None

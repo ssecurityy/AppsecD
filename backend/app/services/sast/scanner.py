@@ -110,11 +110,14 @@ async def run_sast_scan(
     })
 
     # ── Phase 1: Language Detection ────────────────────────────────
-    from .code_extractor import detect_languages, list_scannable_files
+    from .code_extractor import detect_languages, list_scannable_files_with_stats
 
     language_stats = detect_languages(source_path)
-    scannable_files = list_scannable_files(source_path)
+    scannable_files, file_stats = list_scannable_files_with_stats(source_path)
     total_files = len(scannable_files)
+    files_skipped = file_stats.get("files_skipped", 0)
+    skip_reasons = file_stats.get("skip_reasons") or {}
+    lines_of_code = language_stats  # line count per language
     detected_languages = list(language_stats.keys())
 
     logger.info("SAST scan %s: %d files, languages: %s", scan_id, total_files, detected_languages)
@@ -515,6 +518,27 @@ async def run_sast_scan(
                 cur["cvss"] = max(cur["cvss"], float(cvss)) if cur["cvss"] is not None else float(cvss)
             cur["in_kev"] = cur["in_kev"] or bool(in_kev)
 
+    # Enrich CVEs from dependency vulns (GHSA-only vulns: resolve GHSA→CVE then fetch EPSS/KEV)
+    if sca_dependencies:
+        from app.services.sast.cve_enrichment import resolve_ghsa_to_cve, enrich_cve_ids
+        all_cves_from_deps: set[str] = set()
+        for dep in sca_dependencies:
+            for vuln in dep.get("vulnerabilities") or []:
+                aliases = vuln.get("aliases", []) if isinstance(vuln, dict) else []
+                for alias in aliases:
+                    if not isinstance(alias, str):
+                        continue
+                    if alias.startswith("CVE-"):
+                        all_cves_from_deps.add(alias)
+                    elif alias.startswith("GHSA-"):
+                        resolved = await resolve_ghsa_to_cve(alias)
+                        all_cves_from_deps.update(resolved)
+        extra_cves = [c for c in all_cves_from_deps if c not in cve_to_enrichment]
+        if extra_cves:
+            extra_enrichment = await enrich_cve_ids(extra_cves)
+            for cve_id, info in extra_enrichment.items():
+                cve_to_enrichment[cve_id] = info
+
     # ── Phase 5: Store Results ─────────────────────────────────────
     _progress_set(scan_id, {
         "status": "completing",
@@ -596,6 +620,27 @@ async def run_sast_scan(
     else:
         cyclonedx_sbom = None
 
+    # Filter out findings that match previously marked false positives (same file/line/fingerprint)
+    from app.services.sast.findings_filter import FingerprintAutoSuppressor
+    for f in all_findings:
+        if not f.get("fingerprint"):
+            f["fingerprint"] = FingerprintAutoSuppressor._compute_semantic_fingerprint(f)
+    known_fp_fingerprints = await FingerprintAutoSuppressor.load_known_fps(project_id)
+    if known_fp_fingerprints:
+        suppressor = FingerprintAutoSuppressor(known_fp_fingerprints)
+        orig_count = len(all_findings)
+        all_findings = [f for f in all_findings if not suppressor.is_auto_suppressed(f)]
+        logger.info("SAST scan %s: filtered %d known false positives", scan_id, orig_count - len(all_findings))
+        # Recompute severity/category counts for persisted findings
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        category_counts = {}
+        for f in all_findings:
+            sev = f.get("severity", "info")
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+            parts = f.get("rule_id", "").split(".")
+            cat = parts[2] if len(parts) > 2 else "other"
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+
     # Save to database
     async with AsyncSessionLocal() as db:
         try:
@@ -609,6 +654,9 @@ async def run_sast_scan(
                 session.language_stats = language_stats
                 session.total_files = total_files
                 session.files_scanned = total_files
+                session.files_skipped = files_skipped
+                session.skip_reasons = skip_reasons
+                session.lines_of_code = lines_of_code
                 session.total_issues = len(all_findings)
                 session.issues_by_severity = severity_counts
                 session.issues_by_category = category_counts
@@ -681,7 +729,7 @@ async def run_sast_scan(
                 )
                 db.add(finding)
 
-            # Store dependency records (with EPSS/CVSS/KEV from enrichment lookup)
+            # Store dependency records (with EPSS/CVSS/KEV from enrichment lookup; GHSA resolved to CVE)
             if sca_dependencies:
                 from app.models.sast_scan import SastDependency
                 import hashlib as _hashlib
@@ -690,14 +738,21 @@ async def run_sast_scan(
                     dep_epss, dep_cvss, dep_in_kev = 0.0, None, False
                     for vuln in dep.get("vulnerabilities") or []:
                         aliases = vuln.get("aliases", []) if isinstance(vuln, dict) else []
+                        cves_to_lookup = []
                         for alias in aliases:
-                            if isinstance(alias, str) and alias.startswith("CVE-"):
-                                info = cve_to_enrichment.get(alias, {})
-                                dep_epss = max(dep_epss, info.get("epss", 0.0) or 0.0)
-                                v = info.get("cvss")
-                                if v is not None:
-                                    dep_cvss = max(dep_cvss, v) if dep_cvss is not None else v
-                                dep_in_kev = dep_in_kev or info.get("in_kev", False)
+                            if not isinstance(alias, str):
+                                continue
+                            if alias.startswith("CVE-"):
+                                cves_to_lookup.append(alias)
+                            elif alias.startswith("GHSA-"):
+                                cves_to_lookup.extend(await resolve_ghsa_to_cve(alias))
+                        for cve_id in cves_to_lookup:
+                            info = cve_to_enrichment.get(cve_id, {})
+                            dep_epss = max(dep_epss, info.get("epss", 0.0) or 0.0)
+                            v = info.get("cvss")
+                            if v is not None:
+                                dep_cvss = max(dep_cvss, v) if dep_cvss is not None else v
+                            dep_in_kev = dep_in_kev or info.get("in_kev", False)
                     if dep_cvss is None and dep.get("max_cvss") is not None:
                         dep_cvss = dep.get("max_cvss")
                     db.add(SastDependency(

@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 
 EPSS_API = "https://api.first.org/data/v1/epss"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+GITHUB_ADVISORY_API = "https://api.github.com/advisories"
 EPSS_TIMEOUT = 15
 KEV_TIMEOUT = 30
+GHSA_TIMEOUT = 10
 CACHE_TTL = 86400  # 24 hours
 
 _kev_set: set[str] | None = None
@@ -142,6 +144,49 @@ async def load_kev_catalog() -> set[str]:
 def check_kev(cve_id: str, kev_set: set[str]) -> bool:
     """Check if a CVE is in the KEV catalog."""
     return cve_id in kev_set
+
+
+async def resolve_ghsa_to_cve(ghsa_id: str) -> list[str]:
+    """Resolve a GitHub Security Advisory ID to CVE ID(s). Cached in Redis."""
+    if not ghsa_id or not isinstance(ghsa_id, str) or not ghsa_id.upper().startswith("GHSA-"):
+        return []
+    ghsa_id = ghsa_id.strip()
+    cached = _cache_get(f"ghsa2cve:{ghsa_id}")
+    if cached is not None and isinstance(cached.get("cves"), list):
+        return cached["cves"]
+    try:
+        async with httpx.AsyncClient(timeout=GHSA_TIMEOUT) as client:
+            resp = await client.get(f"{GITHUB_ADVISORY_API}/{ghsa_id}")
+            if resp.status_code != 200:
+                _cache_set(f"ghsa2cve:{ghsa_id}", {"cves": []})
+                return []
+            data = resp.json()
+        cves = []
+        for ident in data.get("identifiers", []):
+            if isinstance(ident, dict) and ident.get("type") == "CVE" and ident.get("value"):
+                cves.append(ident["value"])
+        _cache_set(f"ghsa2cve:{ghsa_id}", {"cves": cves})
+        return cves
+    except Exception as e:
+        logger.debug("GHSA resolve failed for %s: %s", ghsa_id, e)
+        _cache_set(f"ghsa2cve:{ghsa_id}", {"cves": []})
+        return []
+
+
+async def enrich_cve_ids(cve_ids: list[str]) -> dict[str, dict]:
+    """Fetch EPSS and KEV for a list of CVE IDs. Returns {cve_id: {epss: float, cvss: None, in_kev: bool}}."""
+    if not cve_ids:
+        return {}
+    epss_scores = await get_epss_scores(cve_ids)
+    kev_set = await load_kev_catalog()
+    result = {}
+    for cve_id in cve_ids:
+        result[cve_id] = {
+            "epss": epss_scores.get(cve_id, 0.0),
+            "cvss": None,
+            "in_kev": check_kev(cve_id, kev_set),
+        }
+    return result
 
 
 def _extract_cve_ids_from_findings(findings: list[dict]) -> list[str]:

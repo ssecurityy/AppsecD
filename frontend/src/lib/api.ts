@@ -670,6 +670,8 @@ export const api = {
     request(`/sast/findings/${findingId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
   sastAiExplain: (findingId: string) =>
     request(`/sast/findings/${findingId}/ai-explain`),
+  sastGetRecommendation: (findingId: string, save?: boolean) =>
+    request(`/sast/findings/${findingId}/recommendation${save ? "?save=true" : ""}`),
   sastFindingSource: (findingId: string, params?: { repository_id?: string; branch?: string }) => {
     const qs = new URLSearchParams();
     if (params?.repository_id) qs.set("repository_id", params.repository_id);

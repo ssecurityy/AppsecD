@@ -9,7 +9,7 @@ import toast from "react-hot-toast";
 import Link from "next/link";
 import ProjectSubNav from "@/components/ProjectSubNav";
 import {
-  Shield, Upload, Play, StopCircle, CheckCircle, XCircle, AlertTriangle,
+  Shield, ShieldCheck, Upload, Play, StopCircle, CheckCircle, XCircle, AlertTriangle,
   Loader2, ArrowLeft, ChevronDown, ChevronRight, FileText, Folder, FolderOpen,
   File, Search, Filter, Copy, Code, GitBranch, Github, Clock, Calendar,
   Sparkles, Brain, Download, ExternalLink, Eye, Settings2, RefreshCw,
@@ -72,7 +72,7 @@ const PHASE_LABELS: Record<string, string> = {
   done: "Complete",
 };
 
-type Tab = "upload" | "repos" | "history" | "results" | "cicd";
+type Tab = "upload" | "repos" | "history" | "results" | "cicd" | "policy";
 type ResultsSubTab = "findings" | "secrets" | "dependencies" | "sbom" | "cve" | "breakdown";
 
 /* ---------- helpers ---------- */
@@ -274,6 +274,7 @@ export default function SASTPage() {
   /* ---- upload scan ---- */
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState(true);
+  const [claudeReview, setClaudeReview] = useState(false);
   const [exhaustive, setExhaustive] = useState(false);
   const [gitleaksEnabled, setGitleaksEnabled] = useState(false);
   const [scanGitHistory, setScanGitHistory] = useState(false);
@@ -313,6 +314,8 @@ export default function SASTPage() {
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
   const [aiExplaining, setAiExplaining] = useState<string | null>(null);
   const [aiExplanations, setAiExplanations] = useState<Record<string, string>>({});
+  const [aiRecommendationLoading, setAiRecommendationLoading] = useState<string | null>(null);
+  const [aiRecommendations, setAiRecommendations] = useState<Record<string, string>>({});
   const [creatingPrId, setCreatingPrId] = useState<string | null>(null);
   const [sourceLoadingId, setSourceLoadingId] = useState<string | null>(null);
   const [sourceViewer, setSourceViewer] = useState<any | null>(null);
@@ -337,6 +340,11 @@ export default function SASTPage() {
   /* ---- CI/CD ---- */
   const [webhookConfig, setWebhookConfig] = useState<any>(null);
   const [cicdLoading, setCicdLoading] = useState(false);
+
+  /* ---- policy ---- */
+  const [policies, setPolicies] = useState<any[]>([]);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policySaving, setPolicySaving] = useState(false);
 
   /* ---- init ---- */
   useEffect(() => { hydrate(); }, [hydrate]);
@@ -397,11 +405,22 @@ export default function SASTPage() {
       .finally(() => setCicdLoading(false));
   }, [projectId]);
 
+  const loadPolicies = useCallback(() => {
+    const orgId = project?.organization_id || user?.organization_id;
+    if (!orgId) return;
+    setPolicyLoading(true);
+    api.sastListPolicies(orgId)
+      .then((r: any) => setPolicies(r?.policies || []))
+      .catch(() => toast.error("Failed to load policies"))
+      .finally(() => setPolicyLoading(false));
+  }, [project?.organization_id, user?.organization_id]);
+
   useEffect(() => {
     if (activeTab === "repos") loadRepos();
     if (activeTab === "history") loadHistory();
     if (activeTab === "cicd") loadWebhookConfig();
-  }, [activeTab, loadRepos, loadHistory, loadWebhookConfig]);
+    if (activeTab === "policy") loadPolicies();
+  }, [activeTab, loadRepos, loadHistory, loadWebhookConfig, loadPolicies]);
 
   useEffect(() => {
     if (connectModal) {
@@ -507,6 +526,7 @@ export default function SASTPage() {
     if (exhaustive) cfg.exhaustive = true;
     if (gitleaksEnabled) cfg.gitleaks_enabled = true;
     if (scanGitHistory) cfg.scan_git_history = true;
+    if (claudeReview) cfg.claude_review_enabled = true;
     if (ruleSets.length) cfg.rule_sets = ruleSets;
     const patterns = excludePatterns.split(",").map((s) => s.trim()).filter(Boolean);
     if (patterns.length) cfg.exclude_patterns = patterns;
@@ -770,6 +790,20 @@ export default function SASTPage() {
     }
   };
 
+  const getAiRecommendation = async (findingId: string, save = false) => {
+    setAiRecommendationLoading(findingId);
+    try {
+      const res = await api.sastGetRecommendation(findingId, save);
+      const text = res?.recommendation || "";
+      setAiRecommendations((prev) => ({ ...prev, [findingId]: text }));
+      if (save && text) toast.success("Recommendation saved to finding");
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to get AI recommendation");
+    } finally {
+      setAiRecommendationLoading(null);
+    }
+  };
+
   const createFixPr = async (findingId: string) => {
     setCreatingPrId(findingId);
     try {
@@ -910,6 +944,7 @@ export default function SASTPage() {
     { key: "history", label: "Scan History", icon: Clock },
     { key: "results", label: "Results", icon: Bug },
     { key: "cicd", label: "CI/CD", icon: Webhook },
+    { key: "policy", label: "Policy", icon: ShieldCheck },
   ];
 
   /* ============================================================
@@ -1031,6 +1066,18 @@ export default function SASTPage() {
                   <Sparkles size={16} className="text-orange-400" />
                   <span className="text-sm" style={{ color: "var(--text-primary)" }}>
                     Enable AI Analysis
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none" title="Run Claude security review (requires Admin → AI Usage enabled and API key)">
+                  <input
+                    type="checkbox"
+                    checked={claudeReview}
+                    onChange={(e) => setClaudeReview(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-orange-500 focus:ring-orange-500"
+                  />
+                  <Brain size={16} className="text-purple-400" />
+                  <span className="text-sm" style={{ color: "var(--text-primary)" }}>
+                    Run Claude Review
                   </span>
                 </label>
 
@@ -1780,7 +1827,8 @@ export default function SASTPage() {
                         {scanResults?.scan?.source_info?.repo_name || "Scan Results"}
                       </p>
                       <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-                        {scanResults?.scan?.source_info?.branch ? `Branch: ${scanResults.scan.source_info.branch}` : "Repository branch unavailable"}
+                        {(scanResults?.scan?.branch || scanResults?.scan?.source_info?.branch) ? `Branch: ${scanResults.scan.branch || scanResults.scan.source_info.branch}` : "Repository branch unavailable"}
+                        {(scanResults?.scan?.commit_sha) ? ` | Commit: ${String(scanResults.scan.commit_sha).slice(0, 7)}` : ""}
                         {scanResults?.scan?.source_info?.repo_url ? ` | ${scanResults.scan.source_info.repo_url}` : ""}
                       </p>
                     </div>
@@ -1897,6 +1945,23 @@ export default function SASTPage() {
                     </button>
                   )}
                   <Filter size={16} style={{ color: "var(--text-secondary)" }} />
+                  <select
+                    value={breakdownFilterSource ?? ""}
+                    onChange={(e) => setBreakdownFilterSource(e.target.value ? e.target.value : null)}
+                    className="px-2 py-1 rounded-lg text-xs border bg-transparent focus:outline-none focus:border-orange-500"
+                    style={{ borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
+                    title="Filter by vulnerability type"
+                  >
+                    <option value="">All types</option>
+                    <option value="semgrep">Semgrep</option>
+                    <option value="secrets">Secrets</option>
+                    <option value="sca">SCA / Dependencies</option>
+                    <option value="iac">IaC</option>
+                    <option value="container">Container</option>
+                    <option value="js_deep">JS/TS</option>
+                    <option value="license">License</option>
+                    <option value="claude">Claude Review</option>
+                  </select>
                   <select
                     value={filterSeverity}
                     onChange={(e) => setFilterSeverity(e.target.value)}
@@ -2028,10 +2093,17 @@ export default function SASTPage() {
                                 <p className="text-sm font-medium truncate" style={{ color: "var(--text-primary)" }}>
                                   {finding.title || finding.rule_id || "Untitled Finding"}
                                 </p>
-                                <p className="text-xs mt-0.5 font-mono truncate" style={{ color: "var(--text-secondary)" }}>
-                                  {finding.file_path}
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); toggleFinding(finding.id); }}
+                                  className="text-left w-full mt-0.5 font-mono text-xs truncate block hover:underline cursor-pointer"
+                                  style={{ color: "#38bdf8" }}
+                                  title="View file and line details"
+                                >
+                                  {finding.file_path || "—"}
                                   {finding.line_start ? `:${finding.line_start}` : ""}
-                                </p>
+                                  {finding.line_end && finding.line_end !== finding.line_start ? `-${finding.line_end}` : ""}
+                                </button>
                               </div>
                               {statusBadge(finding.status || "open")}
                             </button>
@@ -2275,6 +2347,45 @@ export default function SASTPage() {
                                       </div>
                                     )}
 
+                                    {/* AI Recommendation (org LLM: Gemini/OpenAI) */}
+                                    {(finding.ai_analysis?.llm_recommendation || aiRecommendations[finding.id]) ? (
+                                      <div>
+                                        <p className="text-xs font-semibold mb-1 uppercase tracking-wider flex items-center gap-1" style={{ color: "#0ea5e9" }}>
+                                          <Sparkles size={12} /> AI Recommendation
+                                        </p>
+                                        <div
+                                          className="text-sm p-3 rounded-lg whitespace-pre-wrap"
+                                          style={{
+                                            backgroundColor: "rgba(14,165,233,0.08)",
+                                            color: "var(--text-primary)",
+                                            border: "1px solid rgba(14,165,233,0.25)",
+                                          }}
+                                        >
+                                          {finding.ai_analysis?.llm_recommendation || aiRecommendations[finding.id]}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                    {!(finding.ai_analysis?.llm_recommendation || aiRecommendations[finding.id]) && (
+                                      <div>
+                                        <p className="text-xs font-semibold mb-1 uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>
+                                          AI Recommendation
+                                        </p>
+                                        <button
+                                          onClick={() => getAiRecommendation(finding.id)}
+                                          disabled={aiRecommendationLoading === finding.id}
+                                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors hover:bg-sky-500/10 disabled:opacity-50"
+                                          style={{ color: "#0ea5e9", borderColor: "rgba(14,165,233,0.4)" }}
+                                        >
+                                          {aiRecommendationLoading === finding.id ? (
+                                            <Loader2 size={12} className="animate-spin" />
+                                          ) : (
+                                            <Sparkles size={12} />
+                                          )}
+                                          Get AI recommendation
+                                        </button>
+                                      </div>
+                                    )}
+
                                     {/* Actions */}
                                     <div className="flex flex-wrap items-center gap-2 pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
                                       <button
@@ -2407,7 +2518,16 @@ export default function SASTPage() {
                                     {(f.rule_id || "").toLowerCase().includes("verified") || (f.message || "").toLowerCase().includes("verified") ? (
                                       <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: "#16a34a22", color: "#16a34a" }}>Verified</span>
                                     ) : null}
-                                    <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{f.file_path}:{f.line_start ?? "—"}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => openFindingSource(f)}
+                                      disabled={sourceLoadingId === f.id}
+                                      className="text-xs hover:underline cursor-pointer text-left disabled:opacity-50"
+                                      style={{ color: "#38bdf8" }}
+                                      title="View file and line in source"
+                                    >
+                                      {f.file_path || "—"}:{f.line_start ?? "—"}
+                                    </button>
                                     <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: (SEVERITY_COLORS[f.severity] || "#6b7280") + "22", color: SEVERITY_COLORS[f.severity] || "#6b7280" }}>{f.severity || "info"}</span>
                                   </li>
                                 ))}
@@ -2574,7 +2694,15 @@ export default function SASTPage() {
                                     )}
                                   </td>
                                   <td className="px-4 py-3 text-xs font-mono" style={{ color: dep.cve_ids ? "#dc2626" : "var(--text-secondary)" }}>
-                                    {dep.cve_ids || "—"}
+                                    {dep.cve_ids ? (dep.cve_ids as string).split(/,\s*/).map((id: string) => id.trim()).filter(Boolean).map((cveId: string) =>
+                                      cveId.startsWith("CVE-") ? (
+                                        <a key={cveId} href={`https://nvd.nist.gov/vuln/detail/${cveId}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline mr-1.5">{cveId}</a>
+                                      ) : cveId.startsWith("GHSA-") ? (
+                                        <a key={cveId} href={`https://github.com/advisories/${cveId}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline mr-1.5">{cveId}</a>
+                                      ) : (
+                                        <span key={cveId} className="mr-1.5">{cveId}</span>
+                                      )
+                                    ) : "—"}
                                   </td>
                                 </tr>
                               ))}
@@ -2967,13 +3095,35 @@ export default function SASTPage() {
                         Scan Metadata
                       </p>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        {(scanResults?.scan?.commit_sha || scanResults?.scan?.branch) && (
+                          <>
+                            {scanResults?.scan?.commit_sha && (
+                              <div>
+                                <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Commit (scanned)</p>
+                                <p className="text-sm font-mono font-semibold truncate" style={{ color: "var(--text-primary)" }} title={scanResults.scan.commit_sha}>
+                                  {String(scanResults.scan.commit_sha).slice(0, 7)}
+                                </p>
+                              </div>
+                            )}
+                            {scanResults?.scan?.branch && (
+                              <div>
+                                <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Branch</p>
+                                <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{scanResults.scan.branch}</p>
+                              </div>
+                            )}
+                          </>
+                        )}
                         <div>
                           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Total Files</p>
-                          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{scanResults?.scan?.total_files || 0}</p>
+                          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{scanResults?.scan?.total_files ?? 0}</p>
                         </div>
                         <div>
                           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Files Scanned</p>
-                          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{scanResults?.scan?.files_scanned || 0}</p>
+                          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{scanResults?.scan?.files_scanned ?? 0}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Files Skipped</p>
+                          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{scanResults?.scan?.files_skipped ?? 0}</p>
                         </div>
                         <div>
                           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Duration</p>
@@ -2986,6 +3136,31 @@ export default function SASTPage() {
                           </p>
                         </div>
                       </div>
+                      {scanResults?.scan?.skip_reasons && typeof scanResults.scan.skip_reasons === "object" && Object.keys(scanResults.scan.skip_reasons).length > 0 && (
+                        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                          <p className="text-xs font-semibold mb-1.5 uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Skip reasons</p>
+                          <ul className="text-xs space-y-0.5" style={{ color: "var(--text-primary)" }}>
+                            {Object.entries(scanResults.scan.skip_reasons).map(([reason, count]: [string, any]) => (
+                              <li key={reason}>{reason}: {String(count)}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {scanResults?.scan?.lines_of_code && typeof scanResults.scan.lines_of_code === "object" && Object.keys(scanResults.scan.lines_of_code).length > 0 && (
+                        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                          <p className="text-xs font-semibold mb-1.5 uppercase tracking-wider" style={{ color: "var(--text-secondary)" }}>Lines of code (by language)</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs" style={{ color: "var(--text-primary)" }}>
+                            {Object.entries(scanResults.scan.lines_of_code)
+                              .sort((a: [string, any], b: [string, any]) => (b[1] || 0) - (a[1] || 0))
+                              .map(([lang, count]: [string, any]) => (
+                                <span key={lang}>{lang}: {(count || 0).toLocaleString()}</span>
+                              ))}
+                            <span className="font-medium">
+                              Total: {Object.values(scanResults.scan.lines_of_code).reduce((a: number, c: any) => a + (Number(c) || 0), 0).toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -3233,6 +3408,9 @@ jobs:
                   Automatically scan pull requests for security vulnerabilities. Claude AI will review code changes
                   and post inline comments on your PRs with findings.
                 </p>
+                <p className="text-xs mb-4 p-2 rounded-lg" style={{ color: "var(--text-secondary)", backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-subtle)" }}>
+                  <strong>GitHub App permissions:</strong> Contents (read), Metadata (read); for PR review and status checks: Pull requests (read &amp; write), Commit statuses (read &amp; write). Webhook: subscribe to Pull requests.
+                </p>
 
                 <div className="space-y-3 mb-4">
                   <div className="flex items-center justify-between p-3 rounded-lg" style={{ backgroundColor: "var(--bg-primary)", border: "1px solid var(--border-subtle)" }}>
@@ -3324,6 +3502,149 @@ jobs:
                   </button>
                 </div>
               </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ====== POLICY TAB ====== */}
+        {activeTab === "policy" && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+            <div
+              className="rounded-xl border p-6"
+              style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}
+            >
+              <h2 className="text-lg font-semibold mb-2 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                <ShieldCheck size={20} className="text-orange-400" />
+                CI/CD Policy
+              </h2>
+              <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>
+                Control how PR security reviews behave: audit (comment only) or block (request changes and fail status check).
+              </p>
+              {policyLoading ? (
+                <div className="flex items-center gap-2 py-8" style={{ color: "var(--text-secondary)" }}>
+                  <Loader2 size={18} className="animate-spin" /> Loading policies…
+                </div>
+              ) : (() => {
+                const orgId = project?.organization_id || user?.organization_id;
+                const defaultPolicy = policies.find((p: any) => p.is_default) || policies[0];
+                if (!orgId) {
+                  return (
+                    <p className="text-sm py-4" style={{ color: "var(--text-secondary)" }}>
+                      Project or organization not loaded.
+                    </p>
+                  );
+                }
+                if (!defaultPolicy) {
+                  return (
+                    <div className="space-y-4">
+                      <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                        No policy set. Create a default policy to control PR behavior (audit vs block).
+                      </p>
+                      <button
+                        onClick={async () => {
+                          setPolicySaving(true);
+                          try {
+                            await api.sastCreatePolicy({
+                              organization_id: orgId,
+                              name: "Default",
+                              description: "Default SAST policy for PR reviews",
+                              pr_action: "block",
+                              is_default: true,
+                            });
+                            toast.success("Default policy created");
+                            loadPolicies();
+                          } catch (e: any) {
+                            toast.error(e?.message || "Failed to create policy");
+                          } finally {
+                            setPolicySaving(false);
+                          }
+                        }}
+                        disabled={policySaving}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50"
+                      >
+                        {policySaving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                        Create default policy
+                      </button>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-6">
+                    <div>
+                      <p className="text-xs font-medium mb-2" style={{ color: "var(--text-secondary)" }}>
+                        Policy: {defaultPolicy.name}
+                        {defaultPolicy.is_default && (
+                          <span className="ml-2 px-2 py-0.5 rounded text-[10px]" style={{ backgroundColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
+                            Default
+                          </span>
+                        )}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-4">
+                        <span className="text-sm" style={{ color: "var(--text-primary)" }}>On PR findings:</span>
+                        <div className="flex rounded-lg border overflow-hidden" style={{ borderColor: "var(--border-subtle)" }}>
+                          <button
+                            onClick={async () => {
+                              setPolicySaving(true);
+                              try {
+                                await api.sastUpdatePolicy(defaultPolicy.id, { pr_action: "audit" });
+                                toast.success("Policy updated: Audit (comment only)");
+                                loadPolicies();
+                              } catch (e: any) {
+                                toast.error(e?.message || "Failed to update");
+                              } finally {
+                                setPolicySaving(false);
+                              }
+                            }}
+                            disabled={policySaving}
+                            className={`px-4 py-2 text-sm font-medium transition-colors ${
+                              defaultPolicy.pr_action === "audit"
+                                ? "text-white"
+                                : "hover:bg-white/5"
+                            }`}
+                            style={{
+                              backgroundColor: defaultPolicy.pr_action === "audit" ? "#ea580c" : undefined,
+                              color: defaultPolicy.pr_action === "audit" ? "white" : "var(--text-secondary)",
+                            }}
+                          >
+                            Audit
+                          </button>
+                          <button
+                            onClick={async () => {
+                              setPolicySaving(true);
+                              try {
+                                await api.sastUpdatePolicy(defaultPolicy.id, { pr_action: "block" });
+                                toast.success("Policy updated: Block (request changes)");
+                                loadPolicies();
+                              } catch (e: any) {
+                                toast.error(e?.message || "Failed to update");
+                              } finally {
+                                setPolicySaving(false);
+                              }
+                            }}
+                            disabled={policySaving}
+                            className={`px-4 py-2 text-sm font-medium transition-colors ${
+                              defaultPolicy.pr_action === "block"
+                                ? "text-white"
+                                : "hover:bg-white/5"
+                            }`}
+                            style={{
+                              backgroundColor: defaultPolicy.pr_action === "block" ? "#ea580c" : undefined,
+                              color: defaultPolicy.pr_action === "block" ? "white" : "var(--text-secondary)",
+                            }}
+                          >
+                            Block
+                          </button>
+                        </div>
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                          {defaultPolicy.pr_action === "audit"
+                            ? "Post comments only; status check passes."
+                            : "Request changes and fail status check when critical/high found."}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </motion.div>
         )}

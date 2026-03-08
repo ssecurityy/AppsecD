@@ -184,17 +184,46 @@ def list_scannable_files(source_dir: str) -> list[str]:
 
     Returns list of relative paths.
     """
-    files = []
+    files, _ = list_scannable_files_with_stats(source_dir)
+    return files
+
+
+def list_scannable_files_with_stats(source_dir: str) -> tuple[list[str], dict]:
+    """List scannable files and return stats (total walked, skipped, reasons).
+
+    Returns (files, {"total_walked": N, "scannable": len(files), "files_skipped": N - scannable, "skip_reasons": {...}}).
+    """
+    files: list[str] = []
+    total_walked = 0
+    skipped_extension = 0
     for root, dirs, filenames in os.walk(source_dir):
         dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS and not d.endswith(".egg-info")]
         for fname in filenames:
+            total_walked += 1
+            if total_walked > MAX_FILES * 2:
+                break
             ext = os.path.splitext(fname)[1].lower()
             if ext in LANGUAGE_EXTENSIONS:
                 rel = os.path.relpath(os.path.join(root, fname), source_dir)
                 files.append(rel)
                 if len(files) >= MAX_FILES:
-                    return files
-    return files
+                    break
+            else:
+                skipped_extension += 1
+        if len(files) >= MAX_FILES:
+            break
+    files_skipped = max(0, total_walked - len(files))
+    skip_reasons = {}
+    if skipped_extension:
+        skip_reasons["unsupported_extension"] = skipped_extension
+    if files_skipped != skipped_extension:
+        skip_reasons["max_files_cap"] = files_skipped - skipped_extension
+    return files, {
+        "total_walked": total_walked,
+        "scannable": len(files),
+        "files_skipped": files_skipped,
+        "skip_reasons": skip_reasons,
+    }
 
 
 def cleanup_source(source_dir: str) -> None:

@@ -150,6 +150,7 @@ def _public_frontend_origin() -> str:
 
 def _session_to_dict(s: SastScanSession) -> dict:
     """Serialize SastScanSession to dict."""
+    src = s.source_info or {}
     return {
         "id": str(s.id),
         "project_id": str(s.project_id),
@@ -157,9 +158,14 @@ def _session_to_dict(s: SastScanSession) -> dict:
         "scan_type": s.scan_type,
         "status": s.status,
         "source_info": s.source_info,
+        "commit_sha": src.get("commit_sha") or src.get("head_sha"),
+        "branch": src.get("branch") or src.get("head_branch"),
         "language_stats": s.language_stats,
         "total_files": s.total_files,
         "files_scanned": s.files_scanned,
+        "files_skipped": getattr(s, "files_skipped", 0) or 0,
+        "skip_reasons": getattr(s, "skip_reasons", None),
+        "lines_of_code": getattr(s, "lines_of_code", None),
         "total_issues": s.total_issues,
         "issues_by_severity": s.issues_by_severity,
         "issues_by_category": s.issues_by_category,
@@ -585,10 +591,11 @@ async def get_scan_results(
     severity: str | None = None,
     status: str | None = None,
     file_path: str | None = None,
+    rule_source: str | None = None,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get scan results with findings."""
+    """Get scan results with findings. rule_source filters by type: semgrep, secrets, sca, iac, container, js_deep, license, claude."""
     session = (await db.execute(
         select(SastScanSession).where(SastScanSession.id == uuid.UUID(scan_id))
     )).scalar_one_or_none()
@@ -605,6 +612,13 @@ async def get_scan_results(
         q = q.where(SastFinding.status == status)
     if file_path:
         q = q.where(SastFinding.file_path.ilike(f"%{file_path}%"))
+    if rule_source:
+        if rule_source == "secrets":
+            q = q.where(SastFinding.rule_source.in_(["secret_scan", "trufflehog", "gitleaks"]))
+        elif rule_source == "semgrep":
+            q = q.where((SastFinding.rule_source.is_(None)) | (SastFinding.rule_source == "semgrep"))
+        else:
+            q = q.where(SastFinding.rule_source == rule_source)
     q = q.order_by(
         # Critical first
         case(
@@ -1542,6 +1556,52 @@ async def ai_explain_finding(
     return result
 
 
+@router.get("/findings/{finding_id}/recommendation")
+async def get_finding_recommendation(
+    finding_id: str,
+    save: bool = False,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get LLM (org-configured Gemini/OpenAI) remediation recommendation for a SAST finding."""
+    from app.services.org_settings_service import get_llm_config
+    from app.services.llm_enhanced_service import sast_recommendation
+
+    finding = (await db.execute(
+        select(SastFinding).where(SastFinding.id == uuid.UUID(finding_id))
+    )).scalar_one_or_none()
+    if not finding:
+        raise HTTPException(404, "Finding not found")
+    if not await user_can_read_project(db, current_user, str(finding.project_id)):
+        raise HTTPException(403, "Access denied")
+
+    session = (await db.execute(
+        select(SastScanSession).where(SastScanSession.id == finding.scan_session_id)
+    )).scalar_one_or_none()
+    if not session:
+        raise HTTPException(404, "Scan session not found")
+
+    provider, model, api_key = await get_llm_config(db, session.organization_id)
+    if not api_key or not model:
+        raise HTTPException(
+            400,
+            "No LLM configured. Set provider and API key in Organization settings (AI / LLM).",
+        )
+
+    fd = _finding_to_dict(finding)
+    recommendation = sast_recommendation(fd, provider=provider, model=model, api_key=api_key)
+    if not recommendation:
+        raise HTTPException(502, "LLM did not return a recommendation")
+
+    if save and recommendation:
+        ai = (finding.ai_analysis or {}) if isinstance(finding.ai_analysis, dict) else {}
+        ai["llm_recommendation"] = recommendation
+        finding.ai_analysis = ai
+        await db.commit()
+
+    return {"recommendation": recommendation}
+
+
 class CreateFixPrRequest(BaseModel):
     repository_id: str | None = None
     base_branch: str | None = None
@@ -1953,6 +2013,11 @@ async def list_policies(
         "severity_threshold": p.severity_threshold,
         "max_issues_allowed": p.max_issues_allowed,
         "fail_on_secrets": p.fail_on_secrets,
+        "pr_action": getattr(p, "pr_action", "block"),
+        "fail_on_sca_critical": getattr(p, "fail_on_sca_critical", True),
+        "fail_on_kev": getattr(p, "fail_on_kev", True),
+        "fail_on_iac_critical": getattr(p, "fail_on_iac_critical", True),
+        "fail_on_container_critical": getattr(p, "fail_on_container_critical", True),
         "compliance_standards": p.compliance_standards,
         "is_active": p.is_active,
         "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -1966,6 +2031,7 @@ class CreatePolicyRequest(BaseModel):
     severity_threshold: str = "critical"
     max_issues_allowed: int = -1
     fail_on_secrets: bool = True
+    pr_action: str = "block"  # "audit" | "block"
     compliance_standards: list[str] | None = None
     is_default: bool = False
 
@@ -1987,6 +2053,7 @@ async def create_policy(
         severity_threshold=req.severity_threshold,
         max_issues_allowed=req.max_issues_allowed,
         fail_on_secrets=req.fail_on_secrets,
+        pr_action=(req.pr_action if req.pr_action in ("audit", "block") else "block"),
         compliance_standards=req.compliance_standards,
         is_default=req.is_default,
     )
@@ -2003,6 +2070,7 @@ class UpdatePolicyRequest(BaseModel):
     severity_threshold: str | None = None
     max_issues_allowed: int | None = None
     fail_on_secrets: bool | None = None
+    pr_action: str | None = None  # "audit" | "block"
     required_fix_categories: list | None = None
     compliance_standards: list | None = None
     exclude_rules: list | None = None
@@ -2036,6 +2104,8 @@ async def update_policy(
         policy.max_issues_allowed = req.max_issues_allowed
     if req.fail_on_secrets is not None:
         policy.fail_on_secrets = req.fail_on_secrets
+    if req.pr_action is not None and req.pr_action in ("audit", "block"):
+        policy.pr_action = req.pr_action
     if req.required_fix_categories is not None:
         policy.required_fix_categories = req.required_fix_categories
     if req.compliance_standards is not None:
@@ -2664,15 +2734,27 @@ async def get_cve_summary(
     )).scalars().all()
 
     from app.services.sast.sca_scanner import _extract_cvss_score
+    from app.services.sast.cve_enrichment import resolve_ghsa_to_cve, enrich_cve_ids
     all_cves = []
+    ghsa_enrichment_cache: dict[str, dict] = {}
     for d in deps:
         for v in (d.vulnerabilities or []):
             v_dict = v if isinstance(v, dict) else {}
             cve_id = None
+            ghsa_id = None
             for alias in v_dict.get("aliases", []):
                 if isinstance(alias, str) and alias.startswith("CVE-"):
                     cve_id = alias
                     break
+                if isinstance(alias, str) and alias.startswith("GHSA-"):
+                    ghsa_id = alias
+            if not cve_id and ghsa_id:
+                resolved = await resolve_ghsa_to_cve(ghsa_id)
+                if resolved:
+                    cve_id = resolved[0]
+                    if cve_id not in ghsa_enrichment_cache:
+                        extra = await enrich_cve_ids([cve_id])
+                        ghsa_enrichment_cache[cve_id] = extra.get(cve_id, {})
             if not cve_id:
                 cve_id = v_dict.get("id", "UNKNOWN")
             cvss = _extract_cvss_score(v_dict)
@@ -2682,6 +2764,10 @@ async def get_cve_summary(
                 cvss = float(cvss)
             epss = d.epss_score or 0
             in_kev = bool(d.in_kev)
+            if cve_id and cve_id in ghsa_enrichment_cache:
+                info = ghsa_enrichment_cache[cve_id]
+                epss = max(epss, info.get("epss", 0.0) or 0.0)
+                in_kev = in_kev or info.get("in_kev", False)
             all_cves.append({
                 "cve_id": cve_id,
                 "package": f"{d.name}@{d.version}",
@@ -3049,6 +3135,20 @@ async def _run_pr_review_background(
             )).scalars().all()
             finding_dicts = [_finding_to_dict(f) for f in findings]
 
+        # Resolve policy: audit = comment only; block = REQUEST_CHANGES
+        block_on_high = True
+        async with AsyncSessionLocal() as db:
+            policy = (await db.execute(
+                select(SastPolicy).where(
+                    SastPolicy.organization_id == uuid.UUID(organization_id),
+                    SastPolicy.is_default == True,
+                    SastPolicy.is_active == True,
+                )
+            )).scalar_one_or_none()
+            if policy:
+                pr_action = getattr(policy, "pr_action", "block")
+                block_on_high = pr_action == "block"
+
         # Post PR review and commit status via GitHub API
         pr_service = PRReviewService(access_token=access_token)
         repo_owner = pr_info["repo_owner"]
@@ -3058,7 +3158,7 @@ async def _run_pr_review_background(
 
         # Post commit status: pending -> success/failure
         if finding_dicts:
-            action = PRReviewService.determine_review_action(finding_dicts)
+            action = PRReviewService.determine_review_action(finding_dicts, block_on_high=block_on_high)
             await pr_service.post_pr_review(
                 owner=repo_owner,
                 repo=repo_name,

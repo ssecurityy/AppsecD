@@ -26,6 +26,9 @@ class SastScanSession(Base):
     language_stats = Column(JSONB, nullable=True)  # {python: 1200, javascript: 3400, ...}
     total_files = Column(Integer, default=0)
     files_scanned = Column(Integer, default=0)
+    files_skipped = Column(Integer, default=0)
+    skip_reasons = Column(JSONB, nullable=True)  # {"excluded_dir": N, "unsupported_extension": N}
+    lines_of_code = Column(JSONB, nullable=True)  # {language: line_count, ...}
     total_issues = Column(Integer, default=0)
     issues_by_severity = Column(JSONB, nullable=True)  # {critical: 2, high: 5, ...}
     issues_by_category = Column(JSONB, nullable=True)  # {injection: 3, xss: 2, ...}
@@ -249,6 +252,9 @@ class SastPolicy(Base):
     blocked_licenses = Column(JSONB, nullable=True)
     fail_on_iac_critical = Column(Boolean, server_default="true")
     fail_on_container_critical = Column(Boolean, server_default="true")
+
+    # PR review: "audit" = comment only, success status; "block" = REQUEST_CHANGES and fail status
+    pr_action = Column(String(20), default="block", server_default="block", nullable=False)
 
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
