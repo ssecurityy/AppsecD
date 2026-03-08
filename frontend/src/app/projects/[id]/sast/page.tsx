@@ -326,6 +326,8 @@ export default function SASTPage() {
   /* ---- results sub-tabs ---- */
   const [resultsSubTab, setResultsSubTab] = useState<ResultsSubTab>("findings");
   const [dependencies, setDependencies] = useState<any[]>([]);
+  const [depPagination, setDepPagination] = useState<{ total: number; page: number; per_page: number; total_pages: number }>({ total: 0, page: 1, per_page: 20, total_pages: 1 });
+  const [depFilters, setDepFilters] = useState<{ name: string; ecosystem: string; vulnerable: string }>({ name: "", ecosystem: "", vulnerable: "" });
   const [licenses, setLicenses] = useState<any>(null);
   const [cveSummary, setCveSummary] = useState<any>(null);
   const [secDataLoading, setSecDataLoading] = useState(false);
@@ -448,8 +450,19 @@ export default function SASTPage() {
     setSecDataLoading(true);
     try {
       if (tab === "dependencies") {
-        const res = await api.sastDependencies(sid);
-        setDependencies(res?.dependencies || res || []);
+        const page = depPagination.page;
+        const perPage = depPagination.per_page;
+        const name = depFilters.name.trim() || undefined;
+        const ecosystem = depFilters.ecosystem.trim() || undefined;
+        const vulnerable = depFilters.vulnerable === "yes" ? true : depFilters.vulnerable === "no" ? false : undefined;
+        const res = await api.sastDependencies(sid, { page, per_page: perPage, name, ecosystem, vulnerable });
+        setDependencies(res?.dependencies || []);
+        setDepPagination(prev => ({
+          total: res?.total ?? 0,
+          page: res?.page ?? 1,
+          per_page: res?.per_page ?? 20,
+          total_pages: res?.total_pages ?? 1,
+        }));
       } else if (tab === "sbom") {
         const res = await api.sastLicenses(sid);
         setLicenses(res);
@@ -462,10 +475,13 @@ export default function SASTPage() {
     } finally {
       setSecDataLoading(false);
     }
-  }, []);
+  }, [depPagination.page, depPagination.per_page, depFilters.name, depFilters.ecosystem, depFilters.vulnerable]);
 
   useEffect(() => {
     if (selectedScanId && resultsSubTab !== "findings" && resultsSubTab !== "breakdown") {
+      if (resultsSubTab === "dependencies") {
+        setDepPagination((p) => ({ ...p, page: 1 }));
+      }
       loadSecurityData(resultsSubTab, selectedScanId);
     }
   }, [resultsSubTab, selectedScanId, loadSecurityData]);
@@ -2306,7 +2322,7 @@ export default function SASTPage() {
                       <div className="flex items-center justify-center py-16">
                         <Loader2 size={28} className="animate-spin text-orange-400" />
                       </div>
-                    ) : dependencies.length === 0 ? (
+                    ) : depPagination.total === 0 ? (
                       <div
                         className="rounded-xl border p-10 text-center"
                         style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}
@@ -2321,12 +2337,12 @@ export default function SASTPage() {
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
                             <p className="text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Total Dependencies</p>
-                            <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>{dependencies.length}</p>
+                            <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>{depPagination.total}</p>
                           </div>
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#dc262633" }}>
                             <p className="text-xs font-medium mb-1" style={{ color: "#dc2626" }}>Vulnerable</p>
                             <p className="text-2xl font-bold" style={{ color: "#dc2626" }}>
-                              {dependencies.filter((d: any) => d.is_vulnerable).length}
+                              {depFilters.vulnerable === "yes" ? depPagination.total : dependencies.filter((d: any) => d.is_vulnerable).length}
                             </p>
                           </div>
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#ca8a0433" }}>
@@ -2338,8 +2354,77 @@ export default function SASTPage() {
                           <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#16a34a33" }}>
                             <p className="text-xs font-medium mb-1" style={{ color: "#16a34a" }}>Secure</p>
                             <p className="text-2xl font-bold" style={{ color: "#16a34a" }}>
-                              {dependencies.filter((d: any) => !d.is_vulnerable).length}
+                              {depFilters.vulnerable === "no" ? depPagination.total : dependencies.filter((d: any) => !d.is_vulnerable).length}
                             </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3 py-2" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                          <input
+                            type="text"
+                            placeholder="Filter by name..."
+                            value={depFilters.name}
+                            onChange={(e) => setDepFilters((f) => ({ ...f, name: e.target.value }))}
+                            onKeyDown={(e) => e.key === "Enter" && selectedScanId && loadSecurityData("dependencies", selectedScanId)}
+                            className="px-3 py-1.5 rounded-lg border text-sm w-48"
+                            style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
+                          />
+                          <select
+                            value={depFilters.ecosystem}
+                            onChange={(e) => setDepFilters((f) => ({ ...f, ecosystem: e.target.value }))}
+                            className="px-3 py-1.5 rounded-lg border text-sm"
+                            style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
+                          >
+                            <option value="">All ecosystems</option>
+                            <option value="npm">npm</option>
+                            <option value="pypi">pypi</option>
+                            <option value="go">go</option>
+                            <option value="maven">maven</option>
+                            <option value="cargo">cargo</option>
+                            <option value="nuget">nuget</option>
+                            <option value="rubygems">rubygems</option>
+                            <option value="packagist">packagist</option>
+                          </select>
+                          <select
+                            value={depFilters.vulnerable}
+                            onChange={(e) => setDepFilters((f) => ({ ...f, vulnerable: e.target.value }))}
+                            className="px-3 py-1.5 rounded-lg border text-sm"
+                            style={{ backgroundColor: "var(--bg-primary)", borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
+                          >
+                            <option value="">All</option>
+                            <option value="yes">Vulnerable only</option>
+                            <option value="no">Secure only</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => selectedScanId && loadSecurityData("dependencies", selectedScanId)}
+                            className="px-3 py-1.5 rounded-lg text-sm font-medium"
+                            style={{ backgroundColor: "var(--orange)", color: "#fff" }}
+                          >
+                            Apply filters
+                          </button>
+                          <span className="text-xs ml-auto" style={{ color: "var(--text-secondary)" }}>
+                            Page {depPagination.page} of {depPagination.total_pages || 1} ({depPagination.total} total)
+                          </span>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              disabled={depPagination.page <= 1}
+                              onClick={() => { setDepPagination((p) => ({ ...p, page: p.page - 1 })); }}
+                              className="px-2 py-1 rounded text-sm disabled:opacity-50"
+                              style={{ backgroundColor: "var(--bg-card)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}
+                            >
+                              Prev
+                            </button>
+                            <button
+                              type="button"
+                              disabled={depPagination.page >= depPagination.total_pages}
+                              onClick={() => { setDepPagination((p) => ({ ...p, page: p.page + 1 })); }}
+                              className="px-2 py-1 rounded text-sm disabled:opacity-50"
+                              style={{ backgroundColor: "var(--bg-card)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}
+                            >
+                              Next
+                            </button>
                           </div>
                         </div>
 

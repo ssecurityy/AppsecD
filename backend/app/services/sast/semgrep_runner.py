@@ -300,7 +300,19 @@ def run_semgrep(source_dir: str,
             if finding:
                 findings.append(finding)
 
-        errors = [str(err.get("message", err))[:500] for err in output.get("errors", [])]
+        raw_errors = [str(err.get("message", err))[:500] for err in output.get("errors", [])]
+
+        def _is_semgrep_parser_noise(e: str) -> bool:
+            if not e:
+                return True
+            low = e.lower()
+            if "syntax error" in low and "metavariable-pattern" in low:
+                return True
+            if "when parsing a snippet as bash" in low and "${{" in e:
+                return True
+            return False
+
+        errors = [e for e in raw_errors if not _is_semgrep_parser_noise(e)]
         stats = {
             "total_results": len(output.get("results", [])),
             "total_errors": len(output.get("errors", [])),

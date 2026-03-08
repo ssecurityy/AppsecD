@@ -24,8 +24,8 @@ async def _get_org_flags(organization_id: str) -> dict:
                 flags = {
                     "sast_sca_enabled": getattr(org, "sast_sca_enabled", True),
                     "sast_iac_scanning_enabled": getattr(org, "sast_iac_scanning_enabled", True),
-                    "sast_claude_review_enabled": getattr(org, "sast_claude_review_enabled", False),
-                    "sast_pr_review_enabled": getattr(org, "sast_pr_review_enabled", False),
+                    "sast_claude_review_enabled": getattr(org, "sast_claude_review_enabled", True),
+                    "sast_pr_review_enabled": getattr(org, "sast_pr_review_enabled", True),
                     "sast_blocked_licenses": getattr(org, "sast_blocked_licenses", None),
                     "sast_custom_instructions": getattr(org, "sast_custom_instructions", ""),
                 }
@@ -381,6 +381,7 @@ async def run_sast_scan(
     claude_org_enabled = org_flags.get("sast_claude_review_enabled", False)
     claude_review_enabled = config.get("claude_review_enabled", ai_analysis_enabled) and claude_org_enabled
     if claude_review_enabled and api_key:
+        logger.info("Claude security review running for scan %s (org enabled=%s, api_key=set)", scan_id, claude_org_enabled)
         _progress_set(scan_id, {
             "status": "scanning",
             "phase": "claude_reviewing",
@@ -420,6 +421,13 @@ async def run_sast_scan(
                         len(claude_review_findings), claude_review_cost)
         except Exception as e:
             logger.warning("Claude security review failed: %s", e)
+    else:
+        if not api_key:
+            logger.info("Claude review skipped for scan %s: no API key (set ANTHROPIC_API_KEY or org claude_dast_api_key)", scan_id)
+        elif not claude_org_enabled:
+            logger.info("Claude review skipped for scan %s: org sast_claude_review_enabled is false (super_admin can enable in SAST admin)", scan_id)
+        elif not config.get("claude_review_enabled", ai_analysis_enabled):
+            logger.info("Claude review skipped for scan %s: not requested (enable AI analysis or claude_review in scan config)", scan_id)
 
     # ── Phase 4: AI Analysis (optional) ────────────────────────────
     all_findings = (
@@ -591,12 +599,20 @@ async def run_sast_scan(
                 session.scan_duration_seconds = duration
                 session.policy_result = policy_result
                 session.completed_at = datetime.utcnow()
-                # Only persist errors that are not registry 404/invalid config (those are handled in semgrep_runner)
-                meaningful_errors = [
-                    e for e in semgrep_errors[:10]
-                    if e and "404" not in e and "invalid configuration" not in e.lower()
-                    and "failed to download configuration" not in e.lower()
-                ]
+                # Only persist errors that are not registry/parser noise (404, invalid config, Semgrep rule parse quirks)
+                def _is_meaningful_error(e: str) -> bool:
+                    if not e:
+                        return False
+                    low = e.lower()
+                    if "404" in e or "invalid configuration" in low or "failed to download configuration" in low:
+                        return False
+                    # Semgrep rule syntax errors when parsing GitHub Actions ${{ }} as Bash (metavariable-pattern)
+                    if "syntax error" in low and "metavariable-pattern" in low:
+                        return False
+                    if "when parsing a snippet as bash" in low and "${{" in e:
+                        return False
+                    return True
+                meaningful_errors = [e for e in semgrep_errors[:10] if _is_meaningful_error(e)]
                 if meaningful_errors:
                     session.error_message = "; ".join(meaningful_errors[:5])
 

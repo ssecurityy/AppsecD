@@ -2349,10 +2349,15 @@ async def admin_update_sast_settings(
 @router.get("/scan/{scan_id}/dependencies")
 async def get_scan_dependencies(
     scan_id: str,
+    page: int = 1,
+    per_page: int = 20,
+    name: str | None = None,
+    ecosystem: str | None = None,
+    vulnerable: bool | None = None,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List dependencies with vulnerability status for a scan."""
+    """List dependencies with vulnerability status for a scan. Paginated and filterable."""
     from app.models.sast_scan import SastDependency
 
     session = (await db.execute(
@@ -2362,6 +2367,9 @@ async def get_scan_dependencies(
         raise HTTPException(404, "Scan not found")
     await _check_sast_enabled(db, session.organization_id)
     await _check_feature_flag(db, session.organization_id, "sast_sca_enabled", "SCA (Software Composition Analysis)")
+
+    per_page = max(1, min(100, per_page))
+    page = max(1, page)
 
     deps = (await db.execute(
         select(SastDependency)
@@ -2390,6 +2398,7 @@ async def get_scan_dependencies(
                         if "fixed" in evt:
                             latest_version = evt["fixed"]
                             break
+        is_vuln = bool(vulns)
         dep_list.append({
             "id": str(d.id),
             "name": d.name,
@@ -2399,7 +2408,7 @@ async def get_scan_dependencies(
             "is_direct": d.is_direct,
             "license": d.license_id or None,
             "license_risk": d.license_risk,
-            "is_vulnerable": bool(vulns),
+            "is_vulnerable": is_vuln,
             "cve_ids": ", ".join(cve_ids[:5]) if cve_ids else None,
             "latest_version": latest_version,
             "epss_score": d.epss_score,
@@ -2408,10 +2417,30 @@ async def get_scan_dependencies(
             "status": d.status,
         })
 
+    # Filters
+    if name and name.strip():
+        q = name.strip().lower()
+        dep_list = [x for x in dep_list if q in (x.get("name") or "").lower()]
+    if ecosystem and ecosystem.strip():
+        eco = ecosystem.strip().lower()
+        dep_list = [x for x in dep_list if (x.get("ecosystem") or "").lower() == eco]
+    if vulnerable is not None:
+        dep_list = [x for x in dep_list if x.get("is_vulnerable") is vulnerable]
+
+    total = len(dep_list)
+    total_pages = (total + per_page - 1) // per_page if total else 1
+    page = min(page, max(1, total_pages))
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_deps = dep_list[start:end]
+
     return {
         "scan_id": scan_id,
-        "total": len(deps),
-        "dependencies": dep_list,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+        "dependencies": page_deps,
     }
 
 

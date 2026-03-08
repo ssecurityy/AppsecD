@@ -714,8 +714,16 @@ export const api = {
   // ── SAST Code Security Platform ──────────────────────────────
   sastReport: (scanId: string) =>
     request(`/sast/scan/${scanId}/report`),
-  sastDependencies: (scanId: string) =>
-    request(`/sast/scan/${scanId}/dependencies`),
+  sastDependencies: (scanId: string, params?: { page?: number; per_page?: number; name?: string; ecosystem?: string; vulnerable?: boolean }) => {
+    const sp = new URLSearchParams();
+    if (params?.page != null) sp.set("page", String(params.page));
+    if (params?.per_page != null) sp.set("per_page", String(params.per_page));
+    if (params?.name != null && params.name !== "") sp.set("name", params.name);
+    if (params?.ecosystem != null && params.ecosystem !== "") sp.set("ecosystem", params.ecosystem);
+    if (params?.vulnerable != null) sp.set("vulnerable", String(params.vulnerable));
+    const q = sp.toString();
+    return request(`/sast/scan/${scanId}/dependencies${q ? `?${q}` : ""}`);
+  },
   sastLicenses: (scanId: string) =>
     request(`/sast/scan/${scanId}/licenses`),
   sastSbomCyclonedx: (scanId: string) =>
