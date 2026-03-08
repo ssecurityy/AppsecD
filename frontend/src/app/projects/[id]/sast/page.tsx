@@ -15,7 +15,7 @@ import {
   Sparkles, Brain, Download, ExternalLink, Eye, Settings2, RefreshCw,
   Terminal, BookOpen, Hash, Layers, ChevronUp, X, Plus, Trash2, Link2,
   FileCode, Bug, Info, BarChart3, Activity, Webhook, Package, Scale,
-  Container, ShieldAlert, FileJson, Database, TrendingUp, Zap,
+  Container, ShieldAlert, FileJson, Database, TrendingUp, Zap, KeyRound,
 } from "lucide-react";
 
 /* ---------- constants ---------- */
@@ -73,7 +73,7 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 type Tab = "upload" | "repos" | "history" | "results" | "cicd";
-type ResultsSubTab = "findings" | "dependencies" | "sbom" | "cve" | "breakdown";
+type ResultsSubTab = "findings" | "secrets" | "dependencies" | "sbom" | "cve" | "breakdown";
 
 /* ---------- helpers ---------- */
 function formatBytes(bytes: number): string {
@@ -320,6 +320,7 @@ export default function SASTPage() {
   const [filterConfidence, setFilterConfidence] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterFilePath, setFilterFilePath] = useState("");
+  const [breakdownFilterSource, setBreakdownFilterSource] = useState<string | null>(null);
   const [selectedTreePath, setSelectedTreePath] = useState<string | null>(null);
   const [expandedTreePaths, setExpandedTreePaths] = useState<Set<string>>(new Set(["/"]) );
 
@@ -478,7 +479,7 @@ export default function SASTPage() {
   }, [depPagination.page, depPagination.per_page, depFilters.name, depFilters.ecosystem, depFilters.vulnerable]);
 
   useEffect(() => {
-    if (selectedScanId && resultsSubTab !== "findings" && resultsSubTab !== "breakdown") {
+    if (selectedScanId && resultsSubTab !== "findings" && resultsSubTab !== "secrets" && resultsSubTab !== "breakdown") {
       if (resultsSubTab === "dependencies") {
         setDepPagination((p) => ({ ...p, page: 1 }));
       }
@@ -855,28 +856,37 @@ export default function SASTPage() {
   };
 
   const fileTree = useMemo(() => {
-    if (!findings.length) return null;
-    return buildFileTree(findings);
-  }, [findings]);
+    if (!findingsForDisplay.length) return null;
+    return buildFileTree(findingsForDisplay);
+  }, [findingsForDisplay]);
 
-  /* ---- filtered findings for tree selection ---- */
+  /* ---- filtered findings for tree selection (uses findingsForDisplay so breakdown filter applies) ---- */
   const displayedFindings = useMemo(() => {
-    if (!selectedTreePath || selectedTreePath === "/") return findings;
-    return findings.filter((f) => {
+    if (!selectedTreePath || selectedTreePath === "/") return findingsForDisplay;
+    return findingsForDisplay.filter((f: any) => {
       const fp = "/" + (f.file_path || "").replace(/\\/g, "/").replace(/^\//, "");
       return fp === selectedTreePath || fp.startsWith(selectedTreePath + "/");
     });
-  }, [findings, selectedTreePath]);
+  }, [findingsForDisplay, selectedTreePath]);
+
+  /* ---- breakdown filter: filter findings by scanner/source ---- */
+  const findingsForDisplay = useMemo(() => {
+    if (!breakdownFilterSource) return findings;
+    const secretSources = ["secret_scan", "trufflehog", "gitleaks"];
+    if (breakdownFilterSource === "secrets") return findings.filter((f: any) => secretSources.includes(f.rule_source || ""));
+    if (breakdownFilterSource === "semgrep") return findings.filter((f: any) => !f.rule_source || f.rule_source === "semgrep");
+    return findings.filter((f: any) => (f.rule_source || "") === breakdownFilterSource);
+  }, [findings, breakdownFilterSource]);
 
   /* ---- summary counts ---- */
   const severityCounts = useMemo(() => {
     const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    for (const f of findings) {
+    for (const f of findingsForDisplay) {
       const s = (f.severity || "info").toLowerCase();
       if (counts[s] !== undefined) counts[s]++;
     }
     return counts;
-  }, [findings]);
+  }, [findingsForDisplay]);
 
   const threatLevel = useMemo(() => getThreatLevel(severityCounts), [severityCounts]);
 
@@ -1715,7 +1725,8 @@ export default function SASTPage() {
                   style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}
                 >
                   {([
-                    { key: "findings" as ResultsSubTab, label: "Findings", icon: Bug, count: findings.length },
+                    { key: "findings" as ResultsSubTab, label: "Findings", icon: Bug, count: findingsForDisplay.length },
+                    { key: "secrets" as ResultsSubTab, label: "Secrets", icon: KeyRound, count: findings.filter((f: any) => ["secret_scan", "trufflehog", "gitleaks"].includes(f.rule_source || "")).length },
                     { key: "dependencies" as ResultsSubTab, label: "Dependencies", icon: Package, count: scanResults?.scan?.sca_issues || 0 },
                     { key: "sbom" as ResultsSubTab, label: "SBOM & Licenses", icon: Scale },
                     { key: "cve" as ResultsSubTab, label: "CVE Intelligence", icon: ShieldAlert },
@@ -1814,7 +1825,7 @@ export default function SASTPage() {
                   </div>
                   <div className="mt-4 grid gap-2">
                     {SEVERITY_ORDER.map((sev) => {
-                      const total = findings.length || 1;
+                      const total = findingsForDisplay.length || 1;
                       const count = severityCounts[sev] || 0;
                       const pct = Math.round((count / total) * 100);
                       return (
@@ -1841,7 +1852,7 @@ export default function SASTPage() {
                       Total Issues
                     </p>
                     <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
-                      {findings.length}
+                      {findingsForDisplay.length}
                     </p>
                   </div>
                   {SEVERITY_ORDER.map((sev) => (
@@ -1868,6 +1879,16 @@ export default function SASTPage() {
                   className="flex flex-wrap items-center gap-3 mb-4 p-3 rounded-xl border"
                   style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}
                 >
+                  {breakdownFilterSource && (
+                    <button
+                      type="button"
+                      onClick={() => setBreakdownFilterSource(null)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium"
+                      style={{ backgroundColor: "var(--bg-primary)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)" }}
+                    >
+                      Source: {breakdownFilterSource} <X size={12} />
+                    </button>
+                  )}
                   <Filter size={16} style={{ color: "var(--text-secondary)" }} />
                   <select
                     value={filterSeverity}
@@ -1943,7 +1964,7 @@ export default function SASTPage() {
                         backgroundColor: !selectedTreePath ? "rgba(234,88,12,0.1)" : undefined,
                       }}
                     >
-                      All Files ({findings.length})
+                      All Files ({findingsForDisplay.length})
                     </button>
                     {fileTree && fileTree.children.map((child) => (
                       <FileTreeNode
@@ -2314,6 +2335,83 @@ export default function SASTPage() {
                 </div>
                 </>
                 )}
+
+                {/* === SECRETS SUB-TAB === */}
+                {resultsSubTab === "secrets" && (() => {
+                  const SECRET_SOURCES = ["secret_scan", "trufflehog", "gitleaks"];
+                  const secretFindings = findings.filter((f: any) => SECRET_SOURCES.includes(f.rule_source || ""));
+                  const secretTypes: Record<string, string> = {
+                    "api_key": "API Key", "apikey": "API Key", "password": "Password", "secret": "Token",
+                    "token": "Token", "private_key": "Private Key", "privatekey": "Private Key",
+                    "aws": "AWS Key", "generic": "Secret",
+                  };
+                  const inferSecretType = (ruleId: string) => {
+                    const lower = (ruleId || "").toLowerCase();
+                    for (const [k, label] of Object.entries(secretTypes))
+                      if (lower.includes(k)) return label;
+                    return "Secret";
+                  };
+                  const highCrit = secretFindings.filter((f: any) => ["critical", "high"].includes((f.severity || "").toLowerCase()));
+                  const filesAffected = new Set(secretFindings.map((f: any) => f.file_path)).size;
+                  const byType: Record<string, any[]> = {};
+                  secretFindings.forEach((f: any) => {
+                    const t = inferSecretType(f.rule_id || "");
+                    if (!byType[t]) byType[t] = [];
+                    byType[t].push(f);
+                  });
+                  return (
+                    <div className="space-y-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+                          <p className="text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Total Secrets</p>
+                          <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>{secretFindings.length}</p>
+                        </div>
+                        <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#dc262633" }}>
+                          <p className="text-xs font-medium mb-1" style={{ color: "#dc2626" }}>High / Critical</p>
+                          <p className="text-2xl font-bold" style={{ color: "#dc2626" }}>{highCrit.length}</p>
+                        </div>
+                        <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+                          <p className="text-xs font-medium mb-1" style={{ color: "var(--text-secondary)" }}>Files Affected</p>
+                          <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>{filesAffected}</p>
+                        </div>
+                        <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#16a34a33" }}>
+                          <p className="text-xs font-medium mb-1" style={{ color: "#16a34a" }}>Verified</p>
+                          <p className="text-2xl font-bold" style={{ color: "#16a34a" }}>{secretFindings.filter((f: any) => (f.rule_id || "").toLowerCase().includes("verified") || (f.message || "").toLowerCase().includes("verified")).length}</p>
+                        </div>
+                      </div>
+                      {secretFindings.length === 0 ? (
+                        <div className="rounded-xl border p-10 text-center" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+                          <KeyRound size={36} className="mx-auto mb-3" style={{ color: "var(--text-secondary)" }} />
+                          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>No secrets detected in this scan.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-6">
+                          {Object.entries(byType).map(([typeLabel, items]) => (
+                            <div key={typeLabel} className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+                              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                                <KeyRound size={16} /> {typeLabel} ({items.length})
+                              </h3>
+                              <ul className="space-y-2">
+                                {items.map((f: any, idx: number) => (
+                                  <li key={f.id || `${f.file_path}-${f.line_start}-${idx}`} className="flex flex-wrap items-center gap-2 p-3 rounded-lg" style={{ backgroundColor: "var(--bg-primary)" }}>
+                                    <span className="text-xs font-mono truncate max-w-[180px]" style={{ color: "var(--text-secondary)" }} title={f.code_snippet || f.message}>
+                                      {((f.code_snippet || f.message || "").slice(0, 40) || "—").replace(/./g, "•")}
+                                    </span>
+                                    {(f.rule_id || "").toLowerCase().includes("verified") || (f.message || "").toLowerCase().includes("verified") ? (
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: "#16a34a22", color: "#16a34a" }}>Verified</span>
+                                    ) : null}
+                                    <span className="text-xs" style={{ color: "var(--text-secondary)" }}>{f.file_path}:{f.line_start ?? "—"}</span>
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ backgroundColor: (SEVERITY_COLORS[f.severity] || "#6b7280") + "22", color: SEVERITY_COLORS[f.severity] || "#6b7280" }}>{f.severity || "info"}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* === DEPENDENCIES SUB-TAB === */}
                 {resultsSubTab === "dependencies" && (
@@ -2718,20 +2816,29 @@ export default function SASTPage() {
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                       {[
-                        { label: "Semgrep Findings", value: findings.filter((f: any) => f.scanner === "semgrep" || !f.scanner).length, icon: Code, color: "#3b82f6" },
-                        { label: "Secret Issues", value: scanResults?.scan?.secrets_found || 0, icon: ShieldAlert, color: "#dc2626" },
-                        { label: "SCA / Dependency", value: scanResults?.scan?.sca_issues || 0, icon: Package, color: "#ea580c" },
-                        { label: "IaC Misconfigs", value: scanResults?.scan?.iac_issues || 0, icon: FileJson, color: "#8b5cf6" },
-                        { label: "Container Issues", value: scanResults?.scan?.container_issues || 0, icon: Container, color: "#06b6d4" },
-                        { label: "JS/TS Deep", value: scanResults?.scan?.js_deep_issues || 0, icon: Zap, color: "#f59e0b" },
-                        { label: "License Violations", value: scanResults?.scan?.license_issues || 0, icon: Scale, color: "#ef4444" },
-                        { label: "Claude Review", value: scanResults?.scan?.claude_review_findings_count || 0, icon: Brain, color: "#a78bfa" },
+                        { label: "Semgrep", source: "semgrep" as string | null, value: findings.filter((f: any) => !f.rule_source || f.rule_source === "semgrep").length, icon: Code, color: "#3b82f6" },
+                        { label: "Secrets", source: "secrets", value: findings.filter((f: any) => ["secret_scan", "trufflehog", "gitleaks"].includes(f.rule_source || "")).length, icon: KeyRound, color: "#dc2626" },
+                        { label: "SCA", source: "sca", value: scanResults?.scan?.sca_issues ?? findings.filter((f: any) => f.rule_source === "sca").length, icon: Package, color: "#ea580c" },
+                        { label: "IaC", source: "iac", value: scanResults?.scan?.iac_issues ?? findings.filter((f: any) => f.rule_source === "iac").length, icon: FileJson, color: "#8b5cf6" },
+                        { label: "Container", source: "container", value: scanResults?.scan?.container_issues ?? findings.filter((f: any) => f.rule_source === "container").length, icon: Container, color: "#06b6d4" },
+                        { label: "JS/TS", source: "js_deep", value: scanResults?.scan?.js_deep_issues ?? findings.filter((f: any) => f.rule_source === "js_deep").length, icon: Zap, color: "#f59e0b" },
+                        { label: "Licenses", source: "license", value: scanResults?.scan?.license_issues ?? findings.filter((f: any) => (f.rule_source || "").toLowerCase().includes("license")).length, icon: Scale, color: "#ef4444" },
+                        { label: "Claude Review", source: null, value: scanResults?.scan?.claude_review_findings_count || 0, icon: Brain, color: "#a78bfa" },
                       ].map((card) => {
                         const Icon = card.icon;
+                        const isClaude = card.label === "Claude Review";
+                        const clickable = !isClaude && card.source;
                         return (
-                          <div
+                          <button
                             key={card.label}
-                            className="rounded-xl border p-4"
+                            type="button"
+                            onClick={() => {
+                              if (clickable && card.source) {
+                                setBreakdownFilterSource(card.source);
+                                setResultsSubTab("findings");
+                              }
+                            }}
+                            className={`rounded-xl border p-4 text-left transition-all ${clickable ? "cursor-pointer hover:opacity-90 hover:border-opacity-60" : "cursor-default"}`}
                             style={{ backgroundColor: "var(--bg-card)", borderColor: card.color + "33" }}
                           >
                             <div className="flex items-center gap-2 mb-2">
@@ -2741,7 +2848,8 @@ export default function SASTPage() {
                             <p className="text-2xl font-bold" style={{ color: card.value > 0 ? card.color : "var(--text-secondary)" }}>
                               {card.value}
                             </p>
-                          </div>
+                            {clickable && <p className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>Click to filter</p>}
+                          </button>
                         );
                       })}
                     </div>
@@ -2773,38 +2881,40 @@ export default function SASTPage() {
                       </div>
                     )}
 
-                    {!scanResults?.scan?.claude_review_enabled && selectedScanId && (
+                    {!scanResults?.scan?.claude_review_enabled && (
                       <div className="rounded-xl border p-4" style={{ backgroundColor: "var(--bg-card)", borderColor: "#a78bfa33" }}>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Brain size={16} style={{ color: "#a78bfa" }} />
-                            <div>
-                              <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Claude AI Security Review</p>
-                              <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>
-                                Run semantic AI analysis to find vulnerabilities beyond pattern matching
-                              </p>
-                            </div>
+                        <div className="flex items-center gap-2">
+                          <Brain size={16} style={{ color: "#a78bfa" }} />
+                          <div>
+                            <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Claude AI Security Review</p>
+                            <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>
+                              Enable Claude Review in Admin → AI Usage to run semantic AI analysis on findings.
+                            </p>
                           </div>
-                          <button
-                            onClick={async () => {
-                              if (!selectedScanId) return;
-                              setClaudeReviewLoading(true);
-                              try {
-                                await api.sastTriggerClaudeReview(selectedScanId);
-                                toast.success("Claude review triggered. Findings will appear when complete.");
-                              } catch (e: any) {
-                                toast.error(e?.message || "Failed to trigger Claude review");
-                              } finally {
-                                setClaudeReviewLoading(false);
-                              }
-                            }}
-                            disabled={claudeReviewLoading}
-                            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 transition-all disabled:opacity-50"
-                          >
-                            {claudeReviewLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                            Run Claude Review
-                          </button>
                         </div>
+                        {selectedScanId && (
+                          <div className="mt-3 flex items-center gap-2">
+                            <button
+                              onClick={async () => {
+                                if (!selectedScanId) return;
+                                setClaudeReviewLoading(true);
+                                try {
+                                  await api.sastTriggerClaudeReview(selectedScanId);
+                                  toast.success("Claude review triggered. Findings will appear when complete.");
+                                } catch (e: any) {
+                                  toast.error(e?.message || "Failed to trigger Claude review");
+                                } finally {
+                                  setClaudeReviewLoading(false);
+                                }
+                              }}
+                              disabled={claudeReviewLoading}
+                              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 transition-all disabled:opacity-50"
+                            >
+                              {claudeReviewLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                              Run Claude Review
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
 

@@ -548,7 +548,7 @@ export default function AdminAIUsagePage() {
                         {org.total_scans || 0} scans &middot; {org.total_issues || 0} issues found
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <span className="text-xs" style={{ color: "var(--text-secondary)" }}>SAST Enabled</span>
                         <input
@@ -589,6 +589,90 @@ export default function AdminAIUsagePage() {
                             }
                           }}
                           className="w-4 h-4 accent-purple-500"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>Claude Review</span>
+                        <input
+                          type="checkbox"
+                          checked={sastOrgSettings[org.name]?.claude_review ?? org.sast_claude_review_enabled ?? true}
+                          onChange={async (e) => {
+                            const v = e.target.checked;
+                            setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], claude_review: v } }));
+                            try {
+                              const orgId = org.id || (orgs || []).find((o: any) => o.name === org.name)?.id;
+                              if (orgId) {
+                                await api.sastAdminUpdateOrgSettings(orgId, { sast_claude_review_enabled: v });
+                                toast.success("Claude Review " + (v ? "enabled" : "disabled"));
+                              }
+                            } catch {
+                              toast.error("Failed to update");
+                            }
+                          }}
+                          className="w-4 h-4 accent-purple-500"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>PR Review</span>
+                        <input
+                          type="checkbox"
+                          checked={sastOrgSettings[org.name]?.pr_review ?? org.sast_pr_review_enabled ?? true}
+                          onChange={async (e) => {
+                            const v = e.target.checked;
+                            setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], pr_review: v } }));
+                            try {
+                              const orgId = org.id || (orgs || []).find((o: any) => o.name === org.name)?.id;
+                              if (orgId) {
+                                await api.sastAdminUpdateOrgSettings(orgId, { sast_pr_review_enabled: v });
+                                toast.success("PR Review " + (v ? "enabled" : "disabled"));
+                              }
+                            } catch {
+                              toast.error("Failed to update");
+                            }
+                          }}
+                          className="w-4 h-4 accent-blue-500"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>SCA</span>
+                        <input
+                          type="checkbox"
+                          checked={sastOrgSettings[org.name]?.sca ?? org.sast_sca_enabled ?? true}
+                          onChange={async (e) => {
+                            const v = e.target.checked;
+                            setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], sca: v } }));
+                            try {
+                              const orgId = org.id || (orgs || []).find((o: any) => o.name === org.name)?.id;
+                              if (orgId) {
+                                await api.sastAdminUpdateOrgSettings(orgId, { sast_sca_enabled: v });
+                                toast.success("SCA " + (v ? "enabled" : "disabled"));
+                              }
+                            } catch {
+                              toast.error("Failed to update");
+                            }
+                          }}
+                          className="w-4 h-4 accent-amber-500"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>IaC</span>
+                        <input
+                          type="checkbox"
+                          checked={sastOrgSettings[org.name]?.iac ?? org.sast_iac_scanning_enabled ?? true}
+                          onChange={async (e) => {
+                            const v = e.target.checked;
+                            setSastOrgSettings((prev: any) => ({ ...prev, [org.name]: { ...prev[org.name], iac: v } }));
+                            try {
+                              const orgId = org.id || (orgs || []).find((o: any) => o.name === org.name)?.id;
+                              if (orgId) {
+                                await api.sastAdminUpdateOrgSettings(orgId, { sast_iac_scanning_enabled: v });
+                                toast.success("IaC " + (v ? "enabled" : "disabled"));
+                              }
+                            } catch {
+                              toast.error("Failed to update");
+                            }
+                          }}
+                          className="w-4 h-4 accent-emerald-500"
                         />
                       </label>
                     </div>

@@ -16,6 +16,9 @@ from .settings import router as settings_router
 from .security_intel import router as security_intel_router
 from .dast import router as dast_router
 from .sast import router as sast_router
+from .notifications import router as notifications_router
+from .search import router as search_router
+from .dashboard import router as dashboard_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -35,3 +38,6 @@ api_router.include_router(payloads_router)
 api_router.include_router(security_intel_router)
 api_router.include_router(dast_router)
 api_router.include_router(sast_router)
+api_router.include_router(notifications_router)
+api_router.include_router(search_router)
+api_router.include_router(dashboard_router)

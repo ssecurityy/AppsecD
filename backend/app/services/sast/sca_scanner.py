@@ -192,6 +192,10 @@ async def scan_dependencies(source_path: str) -> dict:
         dep_key = f"{dep.ecosystem}:{dep.name}:{dep.version}"
         dep_vulns = vuln_map.get(dep_key, [])
 
+        # Max CVSS across vulns for this dep (for SastDependency enrichment)
+        dep_cvss_list = [_extract_cvss_score(v) for v in dep_vulns if _extract_cvss_score(v) is not None]
+        max_cvss = max(dep_cvss_list) if dep_cvss_list else None
+
         # Build dependency record
         dep_dict: dict[str, Any] = {
             "name": dep.name,
@@ -202,6 +206,7 @@ async def scan_dependencies(source_path: str) -> dict:
             "license_id": dep.license_id,
             "vulnerabilities": dep_vulns,
             "is_outdated": False,
+            "max_cvss": max_cvss,
         }
         dependencies.append(dep_dict)
 
@@ -210,6 +215,7 @@ async def scan_dependencies(source_path: str) -> dict:
             vuln_id = vuln.get("id", "UNKNOWN")
             severity = _extract_severity(vuln)
             cwe_id = _extract_cwe(vuln)
+            cvss_score = _extract_cvss_score(vuln)
             aliases = vuln.get("aliases", [])
             summary = vuln.get("summary", "")
             details = vuln.get("details", "")
@@ -287,6 +293,7 @@ async def scan_dependencies(source_path: str) -> dict:
                 "owasp_category": _OWASP_CATEGORY,
                 "references": refs,
                 "fingerprint": fingerprint,
+                "cvss_score": cvss_score,
             })
             vulnerable_names.add(dep_key)
 
@@ -1113,6 +1120,21 @@ def _extract_severity(vuln: dict) -> str:
                 return mapped
 
     return "medium"
+
+
+def _extract_cvss_score(vuln: dict) -> float | None:
+    """Extract numeric CVSS score from an OSV vulnerability (for enrichment)."""
+    for sev in vuln.get("severity", []):
+        if sev.get("type") in ("CVSS_V3", "CVSS_V4"):
+            score = _cvss_score_from_vector(sev.get("score", ""))
+            if score is not None:
+                return score
+    db_specific = vuln.get("database_specific", {})
+    if isinstance(db_specific, dict):
+        cvss_obj = db_specific.get("cvss", {})
+        if isinstance(cvss_obj, dict) and isinstance(cvss_obj.get("score"), (int, float)):
+            return float(cvss_obj["score"])
+    return None
 
 
 def _cvss_score_from_vector(vector: str) -> float | None:

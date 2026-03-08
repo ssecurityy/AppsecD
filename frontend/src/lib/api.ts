@@ -754,4 +754,36 @@ export const api = {
     request("/sast/admin/usage"),
   sastAdminUpdateOrgSettings: (orgId: string, data: any) =>
     request(`/sast/admin/settings/${orgId}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  // Scan compare / trends / regression (4A)
+  scanCompare: (projectId: string, scanA: string, scanB: string) =>
+    request(`/sast/project/${projectId}/scan-compare?scan_a=${encodeURIComponent(scanA)}&scan_b=${encodeURIComponent(scanB)}`),
+  projectTrends: (projectId: string, days?: number) =>
+    request(`/sast/project/${projectId}/trends${days != null ? `?days=${days}` : ""}`),
+  regressionCheck: (projectId: string, scanId: string) =>
+    request(`/sast/project/${projectId}/regression-check?scan_id=${encodeURIComponent(scanId)}`),
+
+  // Notifications (4E)
+  getNotifications: (page?: number) =>
+    request(`/notifications${page != null ? `?page=${page}` : ""}`),
+  getUnreadNotificationCount: () =>
+    request("/notifications/unread-count"),
+  markNotificationRead: (id: string) =>
+    request(`/notifications/${id}/read`, { method: "PATCH" }),
+  markAllNotificationsRead: () =>
+    request("/notifications/mark-all-read", { method: "PATCH" }),
+  deleteNotification: (id: string) =>
+    request(`/notifications/${id}`, { method: "DELETE" }),
+
+  // Global search (4F)
+  globalSearch: (q: string, type?: string, limit?: number) => {
+    const params = new URLSearchParams({ q });
+    if (type) params.set("type", type);
+    if (limit != null) params.set("limit", String(limit));
+    return request(`/search?${params.toString()}`);
+  },
+
+  // Executive dashboard (4G)
+  getExecutiveDashboard: () =>
+    request("/dashboard/executive"),
 };

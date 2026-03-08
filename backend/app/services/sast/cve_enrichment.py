@@ -145,13 +145,17 @@ def check_kev(cve_id: str, kev_set: set[str]) -> bool:
 
 
 def _extract_cve_ids_from_findings(findings: list[dict]) -> list[str]:
-    """Extract all CVE IDs from a list of SCA findings."""
+    """Extract all CVE IDs from a list of SCA findings (rule_id, references, description)."""
     cve_ids = set()
     for f in findings:
         rule_id = f.get("rule_id", "")
         match = re.search(r"CVE-\d{4}-\d+", rule_id)
         if match:
             cve_ids.add(match.group())
+        desc = f.get("description", "")
+        if isinstance(desc, str):
+            for m in re.finditer(r"CVE-\d{4}-\d+", desc):
+                cve_ids.add(m.group())
         refs = f.get("references", [])
         if isinstance(refs, list):
             for ref in refs:
@@ -187,11 +191,18 @@ async def enrich_findings(findings: list[dict]) -> list[dict]:
         cve_id = cve_match.group()
         epss = epss_scores.get(cve_id, 0.0)
         in_kev = check_kev(cve_id, kev_set)
+        cvss = f.get("cvss_score")
+        if cvss is not None and not isinstance(cvss, (int, float)):
+            try:
+                cvss = float(cvss)
+            except (TypeError, ValueError):
+                cvss = None
 
         enrichment = {
             "cve_id": cve_id,
             "epss_score": epss,
             "in_kev": in_kev,
+            "cvss_score": float(cvss) if cvss is not None else None,
         }
 
         refs = f.get("references") or []

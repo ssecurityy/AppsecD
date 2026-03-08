@@ -281,6 +281,43 @@ class SastDependency(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class SastSuppressionRule(Base):
+    """Org or project-level suppression rule (fingerprint, rule_id, file_pattern, cwe)."""
+    __tablename__ = "sast_suppression_rules"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    rule_type = Column(String(30), nullable=False)
+    pattern = Column(String(500), nullable=False)
+    reason = Column(String(500), nullable=True)
+    justification = Column(Text, nullable=True)
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, server_default="true", nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SastDataflowPath(Base):
+    """Taint/dataflow path from source to sink for a finding (Claude AI–powered)."""
+    __tablename__ = "sast_dataflow_paths"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scan_session_id = Column(UUID(as_uuid=True), ForeignKey("sast_scan_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    finding_id = Column(UUID(as_uuid=True), ForeignKey("sast_findings.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_file = Column(String(500), nullable=True)
+    source_line = Column(Integer, nullable=True)
+    source_type = Column(String(100), nullable=True)
+    sink_file = Column(String(500), nullable=True)
+    sink_line = Column(Integer, nullable=True)
+    sink_type = Column(String(100), nullable=True)
+    path_nodes = Column(JSONB, nullable=True)
+    confidence = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class SastSBOM(Base):
     """Stored SBOM from a scan session."""
     __tablename__ = "sast_sboms"

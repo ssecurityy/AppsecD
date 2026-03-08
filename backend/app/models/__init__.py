@@ -18,6 +18,8 @@ from .crawl_session import CrawlSession
 from .claude_scan_session import ClaudeScanSession
 from .claude_crawl_result import ClaudeCrawlResult
 from .claude_usage import ClaudeUsageTracking
+from .notification import Notification
+from .sast_scan import SastSuppressionRule, SastDataflowPath
 
 __all__ = [
     "User", "Project", "Organization", "Category", "TestCase", "ProjectTestResult",
@@ -33,4 +35,7 @@ __all__ = [
     "ClaudeScanSession",
     "ClaudeCrawlResult",
     "ClaudeUsageTracking",
+    "Notification",
+    "SastSuppressionRule",
+    "SastDataflowPath",
 ]

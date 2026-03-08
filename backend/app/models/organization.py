@@ -52,3 +52,16 @@ class Organization(Base):
     sast_sla_policy = Column(JSONB, nullable=True,
                              server_default='{"critical": 1, "high": 3, "medium": 7, "low": 30, "info": 90}')
     sast_custom_instructions = Column(Text, nullable=True)
+
+    # SAML SSO (031 migration)
+    saml_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
+    saml_entity_id = Column(Text, nullable=True)
+    saml_sso_url = Column(Text, nullable=True)
+    saml_certificate = Column(Text, nullable=True)
+    saml_attribute_mapping = Column(JSONB, nullable=True)
+
+    # OAuth2/OIDC (031 migration)
+    oidc_client_id = Column(String(255), nullable=True)
+    oidc_client_secret = Column(Text, nullable=True)
+    oidc_issuer_url = Column(String(500), nullable=True)
+    oidc_scopes = Column(String(500), nullable=True)

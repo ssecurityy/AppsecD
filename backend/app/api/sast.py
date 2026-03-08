@@ -2687,6 +2687,77 @@ async def get_cve_summary(
     }
 
 
+# ── Scan Compare / Trends / Regression (4A) ────────────────────────────
+
+@router.get("/project/{project_id}/scan-compare")
+async def scan_compare(
+    project_id: str,
+    scan_a: str,
+    scan_b: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compare two scans: new_findings, fixed_findings, unchanged, severity_delta."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.sast.trend_analytics import TrendAnalyzer
+    result = await TrendAnalyzer.compare_scans(scan_a, scan_b)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return {
+        "new_findings": result.get("new", []),
+        "fixed_findings": result.get("fixed", []),
+        "unchanged": result.get("unchanged", []),
+        "severity_delta": result.get("new_by_severity", {}),
+        "new_count": result.get("new_count", 0),
+        "fixed_count": result.get("fixed_count", 0),
+        "unchanged_count": result.get("unchanged_count", 0),
+    }
+
+
+@router.get("/project/{project_id}/trends")
+async def project_trends(
+    project_id: str,
+    days: int = 90,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trend data: snapshots, MTTR, fix_rate, issues_per_kloc."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.sast.trend_analytics import TrendAnalyzer
+    data = await TrendAnalyzer.get_project_trends(project_id, days=days)
+    mttr = await TrendAnalyzer.calculate_mttr(project_id)
+    fix_rate = await TrendAnalyzer.calculate_fix_rate(project_id)
+    return {
+        "snapshots": data.get("data_points", []),
+        "summary": data.get("summary", {}),
+        "mttr": mttr,
+        "fix_rate": fix_rate,
+        "issues_per_kloc": data.get("summary", {}).get("avg_issues_per_kloc"),
+    }
+
+
+@router.get("/project/{project_id}/regression-check")
+async def regression_check(
+    project_id: str,
+    scan_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if the given scan has regression vs previous: has_regression, new_critical, details."""
+    if not await user_can_read_project(db, current_user, project_id):
+        raise HTTPException(403, "Access denied")
+    from app.services.sast.trend_analytics import TrendAnalyzer
+    result = await TrendAnalyzer.detect_regression(project_id, scan_id)
+    return {
+        "has_regression": result.get("is_regression", False),
+        "new_critical": result.get("delta_summary", {}).get("new_by_severity", {}).get("critical", 0),
+        "details": result.get("alerts", []),
+        "delta_summary": result.get("delta_summary", {}),
+    }
+
+
 # ── Claude Security Review ───────────────────────────────────────────
 
 @router.post("/scan/{scan_id}/claude-review")

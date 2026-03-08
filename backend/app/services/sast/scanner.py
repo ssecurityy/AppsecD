@@ -494,6 +494,27 @@ async def run_sast_scan(
         except Exception as e:
             logger.warning("CVE enrichment failed: %s", e)
 
+    # Build CVE enrichment lookup from enriched SCA findings (for SastDependency epss/cvss/in_kev)
+    cve_to_enrichment: dict[str, dict] = {}
+    for f in all_findings:
+        if f.get("rule_source") != "sca":
+            continue
+        for ref in f.get("references") or []:
+            if not isinstance(ref, dict) or "cve_id" not in ref:
+                continue
+            cve_id = ref.get("cve_id")
+            epss = ref.get("epss_score")
+            cvss = ref.get("cvss_score")
+            in_kev = ref.get("in_kev", False)
+            if cve_id not in cve_to_enrichment:
+                cve_to_enrichment[cve_id] = {"epss": 0.0, "cvss": None, "in_kev": False}
+            cur = cve_to_enrichment[cve_id]
+            if epss is not None:
+                cur["epss"] = max(cur["epss"], float(epss))
+            if cvss is not None:
+                cur["cvss"] = max(cur["cvss"], float(cvss)) if cur["cvss"] is not None else float(cvss)
+            cur["in_kev"] = cur["in_kev"] or bool(in_kev)
+
     # ── Phase 5: Store Results ─────────────────────────────────────
     _progress_set(scan_id, {
         "status": "completing",
@@ -660,12 +681,25 @@ async def run_sast_scan(
                 )
                 db.add(finding)
 
-            # Store dependency records
+            # Store dependency records (with EPSS/CVSS/KEV from enrichment lookup)
             if sca_dependencies:
                 from app.models.sast_scan import SastDependency
                 import hashlib as _hashlib
                 for dep in sca_dependencies:
                     fp_raw = f"{dep.get('ecosystem')}:{dep.get('name')}:{dep.get('version')}"
+                    dep_epss, dep_cvss, dep_in_kev = 0.0, None, False
+                    for vuln in dep.get("vulnerabilities") or []:
+                        aliases = vuln.get("aliases", []) if isinstance(vuln, dict) else []
+                        for alias in aliases:
+                            if isinstance(alias, str) and alias.startswith("CVE-"):
+                                info = cve_to_enrichment.get(alias, {})
+                                dep_epss = max(dep_epss, info.get("epss", 0.0) or 0.0)
+                                v = info.get("cvss")
+                                if v is not None:
+                                    dep_cvss = max(dep_cvss, v) if dep_cvss is not None else v
+                                dep_in_kev = dep_in_kev or info.get("in_kev", False)
+                    if dep_cvss is None and dep.get("max_cvss") is not None:
+                        dep_cvss = dep.get("max_cvss")
                     db.add(SastDependency(
                         scan_session_id=uuid.UUID(scan_session_id),
                         project_id=uuid.UUID(project_id),
@@ -678,6 +712,9 @@ async def run_sast_scan(
                         license_risk=dep.get("license_risk"),
                         vulnerabilities=dep.get("vulnerabilities"),
                         fingerprint=_hashlib.sha256(fp_raw.encode()).hexdigest()[:32],
+                        epss_score=dep_epss if dep_epss > 0 else None,
+                        cvss_score=float(dep_cvss) if dep_cvss is not None else None,
+                        in_kev=dep_in_kev,
                     ))
 
             # Store SBOM

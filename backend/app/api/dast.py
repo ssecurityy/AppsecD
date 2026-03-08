@@ -1962,6 +1962,47 @@ async def _run_claude_scan_background(
             )
             db.add(session_record)
             await db.commit()
+
+            # Insert ClaudeUsageTracking so admin usage shows cost (1C)
+            if org_id and cost_data.get("total_cost_usd"):
+                try:
+                    from app.models.claude_usage import ClaudeUsageTracking
+                    cost_breakdown = cost_data.get("cost_per_model", {})
+                    if isinstance(cost_breakdown, dict) and cost_breakdown:
+                        for model_name, model_data in cost_breakdown.items():
+                            if not model_name or not isinstance(model_data, dict):
+                                continue
+                            db.add(ClaudeUsageTracking(
+                                organization_id=uuid.UUID(org_id),
+                                project_id=project_uuid,
+                                scan_id=scan_id,
+                                user_id=user_id,
+                                model=model_name[:64] if isinstance(model_name, str) else "claude-dast",
+                                input_tokens=int(model_data.get("input_tokens", 0)),
+                                output_tokens=int(model_data.get("output_tokens", 0)),
+                                cached_input_tokens=int(model_data.get("cached_input_tokens", 0)),
+                                cost_usd=float(model_data.get("cost_usd", model_data.get("cost", 0))),
+                                scan_type="dast",
+                                phase=scan_mode or None,
+                            ))
+                    else:
+                        db.add(ClaudeUsageTracking(
+                            organization_id=uuid.UUID(org_id),
+                            project_id=project_uuid,
+                            scan_id=scan_id,
+                            user_id=user_id,
+                            model="claude-dast-scan",
+                            input_tokens=int(cost_data.get("total_input_tokens", 0)),
+                            output_tokens=int(cost_data.get("total_output_tokens", 0)),
+                            cached_input_tokens=int(cost_data.get("total_cached_tokens", 0)),
+                            cost_usd=float(cost_data.get("total_cost_usd", 0)),
+                            scan_type="dast",
+                            phase=scan_mode or None,
+                        ))
+                    await db.commit()
+                except Exception as trk_e:
+                    logger.warning("ClaudeUsageTracking insert failed: %s", trk_e)
+                    await db.rollback()
         except Exception as e:
             logger.warning("Claude scan session persist failed: %s", e)
             await db.rollback()
@@ -2910,6 +2951,8 @@ async def claude_admin_usage(
 ):
     """Super admin: organization-wide Claude usage stats."""
     from app.models.claude_usage import ClaudeUsageTracking
+    from app.models.claude_scan_session import ClaudeScanSession
+    from app.models.project import Project
     from sqlalchemy import func
 
     if user.role != "super_admin":
@@ -2945,17 +2988,47 @@ async def claude_admin_usage(
             "total_cost_usd": round(cost, 4),
         })
 
-    # By model breakdown
-    model_q = await db.execute(
-        select(
-            ClaudeUsageTracking.model,
-            func.count(ClaudeUsageTracking.id).label("calls"),
-            func.sum(ClaudeUsageTracking.cost_usd).label("cost"),
+    # Fallback: if no tracking rows, aggregate from ClaudeScanSession for historical data
+    if not usage_rows:
+        session_q = await db.execute(
+            select(
+                Project.organization_id,
+                func.count(ClaudeScanSession.id).label("total_calls"),
+                func.sum(ClaudeScanSession.total_input_tokens).label("total_input"),
+                func.sum(ClaudeScanSession.total_output_tokens).label("total_output"),
+                func.sum(ClaudeScanSession.total_cost_usd).label("total_cost"),
+            )
+            .select_from(ClaudeScanSession)
+            .join(Project, Project.id == ClaudeScanSession.project_id)
+            .where(ClaudeScanSession.completed_at >= thirty_days_ago)
+            .where(ClaudeScanSession.status == "completed")
+            .group_by(Project.organization_id)
         )
-        .where(ClaudeUsageTracking.created_at >= thirty_days_ago)
-        .group_by(ClaudeUsageTracking.model)
-    )
-    by_model = {row.model: {"calls": row.calls, "cost": round(float(row.cost or 0), 4)} for row in model_q.all()}
+        by_org = []
+        total_cost = 0.0
+        for row in session_q.all():
+            cost = float(row.total_cost or 0)
+            total_cost += cost
+            by_org.append({
+                "organization_id": str(row.organization_id),
+                "total_calls": row.total_calls or 0,
+                "total_input_tokens": row.total_input or 0,
+                "total_output_tokens": row.total_output or 0,
+                "total_cost_usd": round(cost, 4),
+            })
+        by_model = {}  # no per-model breakdown from session fallback
+    else:
+        # By model breakdown (only when we have tracking rows)
+        model_q = await db.execute(
+            select(
+                ClaudeUsageTracking.model,
+                func.count(ClaudeUsageTracking.id).label("calls"),
+                func.sum(ClaudeUsageTracking.cost_usd).label("cost"),
+            )
+            .where(ClaudeUsageTracking.created_at >= thirty_days_ago)
+            .group_by(ClaudeUsageTracking.model)
+        )
+        by_model = {row.model: {"calls": row.calls, "cost": round(float(row.cost or 0), 4)} for row in model_q.all()}
 
     return {
         "period": "last_30_days",

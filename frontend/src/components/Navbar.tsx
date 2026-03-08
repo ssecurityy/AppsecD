@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon, Shield, Cpu } from "lucide-react";
+import { useEffect, useState, useRef } from "react";
+import { LogOut, Zap, Home, FolderOpen, BookOpen, FileText, Settings, ShieldCheck, Users, Crown, Building2, Sun, Moon, Shield, Cpu, ChevronDown, Bell } from "lucide-react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore, isAdmin, isSuperAdmin } from "@/lib/store";
@@ -47,17 +47,37 @@ export default function Navbar() {
   const nav = [
     { href: "/dashboard", icon: Home, label: "Dashboard" },
     { href: "/projects", icon: FolderOpen, label: "Projects" },
-    { href: "/settings/security", icon: Shield, label: "Security" },
+    ...(isAdmin(user?.role) ? [{ href: "/dashboard/security-intel", icon: Cpu, label: "Intel" }] : []),
     { href: "/payloads", icon: BookOpen, label: "Wordlists" },
-    ...(isAdmin(user?.role) ? [
-      { href: "/dashboard/security-intel", icon: Cpu, label: "Intel" },
-      { href: "/admin/users", icon: Users, label: "Users" },
-      { href: "/admin/organizations", icon: Building2, label: "Orgs" },
-      { href: "/admin/audit", icon: FileText, label: "Audit" },
-      { href: "/admin/settings", icon: Settings, label: "Settings" },
-      { href: "/admin/ai-usage", icon: Cpu, label: "AI Usage" },
-    ] : []),
   ];
+
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifItems, setNotifItems] = useState<any[]>([]);
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+  useEffect(() => {
+    if (!user) return;
+    const load = () => {
+      api.getUnreadNotificationCount().then((r: any) => setUnreadCount(r?.count ?? 0)).catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [user]);
+  const openNotifPanel = () => {
+    if (!notifOpen) api.getNotifications(1).then((r: any) => setNotifItems(r?.items ?? [])).catch(() => {});
+    setNotifOpen((o) => !o);
+  };
 
   return (
     <nav className="h-14 border-b flex items-center px-5 gap-1 sticky top-0 z-50 backdrop-blur-xl"
@@ -178,6 +198,38 @@ export default function Navbar() {
 
         {user && (
           <>
+            {/* Notifications bell (5E) */}
+            <div className="relative" ref={notifRef}>
+              <button onClick={openNotifPanel} className="relative p-1.5 rounded-lg hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }} title="Notifications">
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-1 rounded-full text-[10px] font-bold flex items-center justify-center bg-red-500 text-white">
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                )}
+              </button>
+              {notifOpen && (
+                <div className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-y-auto rounded-xl border shadow-xl py-1 z-[100]" style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
+                  <div className="px-3 py-2 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+                    <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Notifications</span>
+                    {unreadCount > 0 && (
+                      <button onClick={() => api.markAllNotificationsRead().then(() => setUnreadCount(0))} className="ml-2 text-[10px]" style={{ color: "var(--text-muted)" }}>Mark all read</button>
+                    )}
+                  </div>
+                  {notifItems.length === 0 ? (
+                    <p className="px-3 py-4 text-xs" style={{ color: "var(--text-muted)" }}>No notifications</p>
+                  ) : (
+                    notifItems.slice(0, 10).map((n: any) => (
+                      <div key={n.id} className="px-3 py-2 border-b last:border-0" style={{ borderColor: "var(--border-subtle)" }}>
+                        <p className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{n.title}</p>
+                        <p className="text-[10px] truncate mt-0.5" style={{ color: "var(--text-muted)" }}>{n.message}</p>
+                        {!n.is_read && <button onClick={() => api.markNotificationRead(n.id).then(() => setUnreadCount((c) => Math.max(0, c - 1))) } className="text-[10px] mt-1" style={{ color: "var(--text-muted)" }}>Mark read</button>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
             {/* Badges */}
             {user.badges?.length > 0 && (
               <div className="hidden lg:flex items-center gap-1">
@@ -201,33 +253,87 @@ export default function Navbar() {
               <span className="text-indigo-400 text-xs font-semibold tabular-nums">{user.xp_points}</span>
             </div>
 
-            {/* User */}
-            <div className="flex items-center gap-2">
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
-                isSuperAdmin(user.role)
-                  ? "bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/30 text-amber-400"
-                  : user.role === "admin"
-                    ? "bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/20 text-emerald-400"
-                    : "bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/20 text-indigo-400"
-              }`}>
-                {isSuperAdmin(user.role) ? <Crown className="w-3.5 h-3.5" /> : (user.full_name || "U")[0].toUpperCase()}
-              </div>
-              <div className="hidden md:block">
-                <div className="text-xs font-medium leading-none flex items-center gap-1 max-w-[120px]" style={{ color: "var(--text-primary)" }}>
-                  <span className="truncate">{user.full_name}</span>
-                  {isSuperAdmin(user.role) && <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded">SA</span>}
+            {/* Profile dropdown */}
+            <div className="relative" ref={profileRef}>
+              <button
+                onClick={() => setProfileOpen((o) => !o)}
+                className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-[var(--bg-hover)] transition-colors"
+                style={{ color: "var(--text-primary)" }}
+              >
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
+                  isSuperAdmin(user.role)
+                    ? "bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/30 text-amber-400"
+                    : user.role === "admin"
+                      ? "bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/20 text-emerald-400"
+                      : "bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/20 text-indigo-400"
+                }`}>
+                  {isSuperAdmin(user.role) ? <Crown className="w-3.5 h-3.5" /> : (user.full_name || "U")[0].toUpperCase()}
                 </div>
-                <div className="text-[10px] leading-none mt-0.5" style={{ color: "var(--text-muted)" }}>
-                  Lv.{user.level} · {user.role === "super_admin" ? "Super Admin" : user.role}
+                <div className="hidden md:block text-left">
+                  <div className="text-xs font-medium leading-none flex items-center gap-1 max-w-[120px]" style={{ color: "var(--text-primary)" }}>
+                    <span className="truncate">{user.full_name}</span>
+                    {isSuperAdmin(user.role) && <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 rounded">SA</span>}
+                  </div>
+                  <div className="text-[10px] leading-none mt-0.5" style={{ color: "var(--text-muted)" }}>
+                    Lv.{user.level} · {user.role === "super_admin" ? "Super Admin" : user.role}
+                  </div>
                 </div>
-              </div>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${profileOpen ? "rotate-180" : ""}`} style={{ color: "var(--text-muted)" }} />
+              </button>
+              {profileOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 w-64 rounded-xl border shadow-xl py-1 z-[100]"
+                  style={{ backgroundColor: "var(--bg-card)", borderColor: "var(--border-subtle)" }}
+                >
+                  <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+                    <p className="text-sm font-semibold truncate" style={{ color: "var(--text-primary)" }}>{user.full_name}</p>
+                    <p className="text-xs truncate mt-0.5" style={{ color: "var(--text-muted)" }}>{(user as any).email || "—"}</p>
+                    <p className="text-[10px] truncate mt-0.5" style={{ color: "var(--text-muted)" }}>{(user as any).organization_name || "—"}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{
+                        backgroundColor: isSuperAdmin(user.role) ? "#f59e0b22" : user.role === "admin" ? "#10b98122" : "#6366f122",
+                        color: isSuperAdmin(user.role) ? "#f59e0b" : user.role === "admin" ? "#10b981" : "#6366f1",
+                      }}>
+                        {user.role === "super_admin" ? "Super Admin" : user.role}
+                      </span>
+                      <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>Lv.{user.level} · {user.xp_points} XP</span>
+                    </div>
+                  </div>
+                  <div className="py-1">
+                    <Link href="/dashboard/executive" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                      <Shield className="w-3.5 h-3.5" /> Executive Dashboard
+                    </Link>
+                    <Link href="/settings/security" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                      <Shield className="w-3.5 h-3.5" /> Security Settings
+                    </Link>
+                    {isAdmin(user.role) && (
+                      <>
+                        <Link href="/admin/organizations" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                          <Building2 className="w-3.5 h-3.5" /> Organization
+                        </Link>
+                        <Link href="/admin/users" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                          <Users className="w-3.5 h-3.5" /> Users
+                        </Link>
+                        <Link href="/admin/settings" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                          <Settings className="w-3.5 h-3.5" /> Platform Settings
+                        </Link>
+                        <Link href="/admin/ai-usage" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                          <Cpu className="w-3.5 h-3.5" /> AI Usage
+                        </Link>
+                        <Link href="/admin/audit" onClick={() => setProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--bg-hover)]" style={{ color: "var(--text-primary)" }}>
+                          <FileText className="w-3.5 h-3.5" /> Audit Logs
+                        </Link>
+                      </>
+                    )}
+                  </div>
+                  <div className="border-t py-1" style={{ borderColor: "var(--border-subtle)" }}>
+                    <button onClick={() => { setProfileOpen(false); logout(); }} className="flex items-center gap-2 px-4 py-2 text-xs w-full hover:bg-red-500/10 text-red-400">
+                      <LogOut className="w-3.5 h-3.5" /> Sign Out
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-
-            {/* Logout */}
-            <button onClick={logout}
-              className="p-1.5 rounded-lg text-[#64748b] hover:text-red-400 hover:bg-red-500/5 transition-all">
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
           </>
         )}
       </div>
